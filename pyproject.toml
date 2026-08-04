@@ -41,7 +41,7 @@ dastcore = "dastcore.cli:app"
 include = ["dastcore*"]
 
 [tool.setuptools.package-data]
-dastcore = ["rules/*.yaml", "report/templates/*.j2"]
+dastcore = ["rules/*.yaml", "ai_rules/*.yaml", "report/templates/*.j2"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

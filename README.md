@@ -9,6 +9,7 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámi
 
 ## Qué hace
 
+- **AI / LLM hacking** (`dastcore ai`): prueba chatbots y endpoints de completion contra el **OWASP LLM Top 10** — prompt injection, jailbreak, fuga de system prompt, divulgación de secretos y manejo inseguro de la salida — con confirmación de bajo ruido (técnica del *canary* + oráculo diferencial).
 - **Crawler dual**: HTTP estático + headless (Playwright) para SPAs, endpoints XHR/fetch y DOM-XSS.
 - **Descubrimiento de API por esquema**: OpenAPI/Swagger 2.0/3.x + introspección GraphQL.
 - **OAST**: confirmación out-of-band de vulnerabilidades ciegas (blind SSRF/RCE/XXE/SSTI/CRLF, **Log4Shell/JNDI**) → cero falsos positivos en esa clase.
@@ -35,6 +36,7 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámi
 | Exposición de ficheros sensibles (`.env`, `.git`, claves) | detector activo | CWE-538 / WSTG-CONF-04 |
 | GraphQL introspection habilitada | detector activo | CWE-200 / WSTG-APIT-01 |
 | Cabeceras/cookies inseguras, CSP/HSTS ausentes, directory listing, stack traces, divulgación de tecnología | pasivos | varios |
+| **LLM: prompt injection, jailbreak, fuga de system prompt, divulgación de secretos, output inseguro** | `dastcore ai` | OWASP LLM01/02/05/07 |
 - **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.
 - **Motor async con concurrencia**: escaneo paralelo acotado (`--concurrency`), rate limiting (`--rps`), backoff ante HTTP 429, y presupuesto global (`--max-requests` / `--time-budget`) para escaneos seguros y acotados.
 - **Salidas**: JSON, SARIF 2.1.0 (CI/CD) y HTML autocontenido.
@@ -51,6 +53,19 @@ py -m venv .venv
 
 # Escaneo completo con SARIF para CI/CD (falla el build con exit 2 si hay high/critical)
 .venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --profile full -f sarif -o out.sarif --fail-on high
+```
+
+Probar un chatbot / LLM (OWASP LLM Top 10):
+
+```powershell
+# Endpoint simple {"message": "..."} -> {"reply": "..."}
+.venv\Scripts\dastcore ai https://tu-bot.example/chat --i-have-authorization
+
+# Formato OpenAI-style (plantilla de body + dot-path a la respuesta)
+.venv\Scripts\dastcore ai https://api.example/v1/chat/completions --i-have-authorization `
+  --auth-bearer "sk-..." `
+  --ai-template '{"model":"gpt-4o","messages":[{"role":"user","content":"{{prompt}}"}]}' `
+  --ai-response-path choices.0.message.content
 ```
 
 Documentación: [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · [`examples/github-action.yml`](examples/github-action.yml) (CI/CD).
