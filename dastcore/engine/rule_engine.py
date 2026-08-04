@@ -38,9 +38,12 @@ class Rule(BaseModel):
         return any(check.type == "oob" for check in self.oracle.checks)
 
 
+_OAST_PLACEHOLDERS = ("{{oast_url}}", "{{oast_domain}}", "{{oast_token}}")
+
+
 def oob_payload_templates(rule: Rule) -> list[str]:
     """Payload templates carrying an OAST placeholder, to be substituted per probe."""
-    return [payload for payload in rule.payloads if "{{oast_url}}" in payload or "{{oast_domain}}" in payload]
+    return [payload for payload in rule.payloads if any(p in payload for p in _OAST_PLACEHOLDERS)]
 
 
 def load_rule(path: Path) -> Rule:
@@ -90,5 +93,10 @@ def build_mutated_request(point: InjectionPoint, payload_value: str) -> HttpRequ
         json_body = dict(request.json_body) if isinstance(request.json_body, dict) else {}
         json_body[point.name] = payload_value
         return request.model_copy(update={"json_body": json_body})
+
+    if point.location == "header":
+        headers = dict(request.headers)
+        headers[point.name] = payload_value
+        return request.model_copy(update={"headers": headers})
 
     raise ValueError(f"Unsupported injection location for mutation: {point.location}")

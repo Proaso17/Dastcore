@@ -18,8 +18,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+import httpx
+
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+from dastcore.detectors.active_checks import check_cors_reflection
 from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
 from dastcore.engine.oast import OastProvider, substitute_oast
@@ -48,6 +51,7 @@ class Scanner:
         oast: OastProvider | None = None,
         *,
         concurrency: int = 1,
+        active_checks: bool = True,
         oob_poll_attempts: int = 4,
         oob_poll_delay: float = 0.5,
     ) -> None:
@@ -55,6 +59,7 @@ class Scanner:
         self._rules = rules
         self._oast = oast
         self._concurrency = max(1, concurrency)
+        self._active_checks = active_checks
         self._oob_poll_attempts = oob_poll_attempts
         self._oob_poll_delay = oob_poll_delay
 
@@ -70,6 +75,10 @@ class Scanner:
                 json=request.json_body,
             )
         except (OutOfScopeError, BudgetExceededError):
+            return None
+        except (httpx.InvalidURL, httpx.LocalProtocolError):
+            # A mutated payload produced a request httpx refuses to send (e.g. illegal
+            # header value). Skip it rather than aborting the whole scan.
             return None
 
     def _oast_active(self) -> bool:
@@ -89,6 +98,10 @@ class Scanner:
                 finding = await self._try_rule(rule, point, base_response)
                 if finding is not None:
                     findings.append(finding)
+
+        # Active per-request check that needs a crafted header rather than a fuzzed param.
+        if self._active_checks and request.method == "GET":
+            findings.extend(await check_cors_reflection(self._http, request))
 
         return findings
 

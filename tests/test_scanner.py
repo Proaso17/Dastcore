@@ -61,7 +61,7 @@ async def test_non_reproducible_hit_is_suppressed() -> None:
         _response(text="clean again"),  # confirmation attempt: does NOT match
     ]
     client = _FakeHttpClient(responses)
-    scanner = Scanner(client, [_flaky_rule()])
+    scanner = Scanner(client, [_flaky_rule()], active_checks=False)
 
     findings = await scanner.scan_request(_request())
 
@@ -76,7 +76,7 @@ async def test_reproducible_hit_is_reported() -> None:
         _response(text="contains FLAKY_MARKER again"),
     ]
     client = _FakeHttpClient(responses)
-    scanner = Scanner(client, [_flaky_rule()])
+    scanner = Scanner(client, [_flaky_rule()], active_checks=False)
 
     findings = await scanner.scan_request(_request())
 
@@ -92,7 +92,7 @@ async def test_no_finding_when_oracle_never_matches() -> None:
         _response(text="still clean"),  # never matches -> no confirm attempt needed
     ]
     client = _FakeHttpClient(responses)
-    scanner = Scanner(client, [_flaky_rule()])
+    scanner = Scanner(client, [_flaky_rule()], active_checks=False)
 
     findings = await scanner.scan_request(_request())
 
@@ -105,7 +105,7 @@ async def test_rule_skipped_when_injection_location_not_applicable() -> None:
     rule = rule.model_copy(update={"inject_into": ["json"]})  # request only has a query param
     responses = [_response(text="clean base")]
     client = _FakeHttpClient(responses)
-    scanner = Scanner(client, [rule])
+    scanner = Scanner(client, [rule], active_checks=False)
 
     findings = await scanner.scan_request(_request())
 

@@ -8,10 +8,20 @@ from dastcore.validation.oracles import OracleCheck, OracleSpec
 def test_load_rules_loads_all_shipped_rule_files() -> None:
     rules = load_rules()
     ids = {rule.id for rule in rules}
-    in_band = {"sqli-injection", "xss-reflected", "open-redirect", "path-traversal-lfi"}
-    oob = {"ssrf-oob", "cmdi-oob", "ssti-oob", "xxe-oob", "crlf-oob"}
+    in_band = {"sqli-injection", "xss-reflected", "open-redirect", "path-traversal-lfi", "ssti-inband", "nosqli-error"}
+    oob = {"ssrf-oob", "cmdi-oob", "ssti-oob", "xxe-oob", "crlf-oob", "log4shell-jndi"}
+    header = {"host-header-injection", "log4shell-jndi"}
     assert in_band <= ids
     assert oob <= ids
+    assert all("header" in {r.id: r for r in rules}[rid].inject_into for rid in header)
+
+
+def test_build_mutated_request_header() -> None:
+    request = HttpRequest(method="GET", url="http://x/reset", headers={"User-Agent": "orig"})
+    point = InjectionPoint(location="header", name="Host", base_value="x", request_template=request)
+    mutated = build_mutated_request(point, "evil.test")
+    assert mutated.headers == {"User-Agent": "orig", "Host": "evil.test"}
+    assert request.headers == {"User-Agent": "orig"}  # original untouched
 
 
 def test_oob_rules_are_flagged_and_in_band_rules_are_not() -> None:

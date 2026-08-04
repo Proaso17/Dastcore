@@ -1,0 +1,18 @@
+id: host-header-injection
+name: Host Header Injection
+family: host_header
+severity: medium
+cwe: CWE-644
+owasp: WSTG-INPV-17
+inject_into: [header]
+payloads:
+  - "dastcore-host-probe.invalid"
+oracle:
+  type: any_of
+  checks:
+    - type: reflected
+confirm_reproducible: true
+remediation: >-
+  No construyas URLs, enlaces de reseteo de contraseña ni claves de caché a partir
+  de la cabecera Host. Usa un allowlist de hosts esperados o un valor de dominio
+  canónico configurado en el servidor.

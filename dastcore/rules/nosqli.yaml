@@ -1,0 +1,29 @@
+id: nosqli-error
+name: NoSQL Injection (error-based)
+family: nosqli
+severity: high
+cwe: CWE-943
+owasp: WSTG-INPV-05
+inject_into: [query, body, json]
+payloads:
+  - "'"
+  - '{"$ne": null}'
+  - "[$ne]="
+  - "', $where: '1==1"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns:
+        - "MongoError"
+        - "unknown top level operator"
+        - "\\$where"
+        - "CastError"
+        - "BSONError"
+        - "MongoNetworkError"
+confirm_reproducible: true
+remediation: >-
+  Trata el input del usuario como datos, no como operadores de consulta. Valida y
+  castea tipos, rechaza claves que empiecen por '$', y usa consultas parametrizadas
+  del driver en vez de construir filtros a partir de input crudo.

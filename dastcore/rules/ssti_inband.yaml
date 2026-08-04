@@ -1,0 +1,25 @@
+id: ssti-inband
+name: Server-Side Template Injection (in-band)
+family: ssti
+severity: high
+cwe: CWE-1336
+owasp: WSTG-INPV-18
+inject_into: [query, body, json]
+payloads:
+  # A distinctive product (1337*1337 = 1787569) is far less likely to appear by
+  # chance than 7*7=49, so a match strongly implies the template engine evaluated it.
+  - "{{1337*1337}}"
+  - "${1337*1337}"
+  - "#{1337*1337}"
+  - "<%= 1337*1337 %>"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns: ["1787569"]
+confirm_reproducible: true
+remediation: >-
+  No renderices input del usuario como plantilla. Usa un motor logic-less o un
+  sandbox, y pasa los datos del usuario estrictamente como variables de contexto,
+  nunca como código de plantilla.

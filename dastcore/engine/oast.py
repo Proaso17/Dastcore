@@ -49,7 +49,11 @@ class OastHandle(BaseModel):
 
 def substitute_oast(template: str, handle: OastHandle) -> str:
     """Replace OAST placeholders in a payload template with a concrete handle."""
-    return template.replace("{{oast_url}}", handle.url).replace("{{oast_domain}}", handle.domain)
+    return (
+        template.replace("{{oast_url}}", handle.url)
+        .replace("{{oast_domain}}", handle.domain)
+        .replace("{{oast_token}}", handle.token)
+    )
 
 
 class OastProvider(abc.ABC):

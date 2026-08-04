@@ -11,8 +11,30 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámi
 
 - **Crawler dual**: HTTP estático + headless (Playwright) para SPAs, endpoints XHR/fetch y DOM-XSS.
 - **Descubrimiento de API por esquema**: OpenAPI/Swagger 2.0/3.x + introspección GraphQL.
-- **OAST**: confirmación out-of-band de vulnerabilidades ciegas (blind SSRF/RCE/XXE/SSTI/CRLF) → cero falsos positivos en esa clase.
+- **OAST**: confirmación out-of-band de vulnerabilidades ciegas (blind SSRF/RCE/XXE/SSTI/CRLF, **Log4Shell/JNDI**) → cero falsos positivos en esa clase.
 - **Autorización multi-sesión**: BOLA/IDOR, BFLA y endpoints sin autenticación con varias identidades/roles.
+
+### Clases de vulnerabilidad cubiertas
+
+| Clase | Cómo | CWE / OWASP |
+|---|---|---|
+| SQL Injection (error + blind time-based) | regla YAML | CWE-89 / WSTG-INPV-05 |
+| NoSQL Injection (error-based) | regla YAML | CWE-943 / WSTG-INPV-05 |
+| XSS reflejado (múltiples contextos) + DOM-based | regla YAML + headless | CWE-79 / WSTG-INPV-01 |
+| SSTI (in-band `7*7` + blind OAST) | regla YAML | CWE-1336 / WSTG-INPV-18 |
+| Command injection (blind, OAST) | regla YAML | CWE-78 / WSTG-INPV-12 |
+| **Log4Shell / JNDI** (blind, OAST, incl. headers) | regla YAML | CWE-502 |
+| SSRF (blind, OAST) | regla YAML | CWE-918 / WSTG-INPV-19 |
+| XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |
+| CRLF / HTTP header injection (OAST) | regla YAML | CWE-93 / WSTG-INPV-16 |
+| Path traversal / LFI | regla YAML | CWE-22 / WSTG-ATHZ-01 |
+| Open redirect | regla YAML | CWE-601 / WSTG-CLNT-04 |
+| **Host header injection** | regla YAML (headers) | CWE-644 / WSTG-INPV-17 |
+| CORS mal configurado (wildcard+creds **y origin reflejado**) | pasivo + activo | CWE-942 / WSTG-CLNT-07 |
+| BOLA/IDOR, BFLA, missing-auth | detector multi-sesión | CWE-639/285/306 / API1/5/2 |
+| Exposición de ficheros sensibles (`.env`, `.git`, claves) | detector activo | CWE-538 / WSTG-CONF-04 |
+| GraphQL introspection habilitada | detector activo | CWE-200 / WSTG-APIT-01 |
+| Cabeceras/cookies inseguras, CSP/HSTS ausentes, directory listing, stack traces, divulgación de tecnología | pasivos | varios |
 - **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.
 - **Motor async con concurrencia**: escaneo paralelo acotado (`--concurrency`), rate limiting (`--rps`), backoff ante HTTP 429, y presupuesto global (`--max-requests` / `--time-budget`) para escaneos seguros y acotados.
 - **Salidas**: JSON, SARIF 2.1.0 (CI/CD) y HTML autocontenido.

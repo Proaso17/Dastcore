@@ -7,6 +7,10 @@ owasp: WSTG-INPV-01
 inject_into: [query, body, json]
 payloads:
   - "<script>alert(1)</script>"
+  - "\"><svg onload=alert(1)>"          # attribute breakout -> new tag
+  - "'-alert(1)-'"                        # JS string context breakout
+  - "<img src=x onerror=alert(1)>"       # event-handler context
+  - "javascript:alert(1)"                # href/src sink context
 oracle:
   type: any_of
   checks:

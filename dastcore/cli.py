@@ -38,6 +38,7 @@ from dastcore.config import (
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import Finding, HttpRequest
 from dastcore.core.session import SessionManager
+from dastcore.detectors.active_checks import check_graphql_introspection, probe_sensitive_files
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
@@ -354,14 +355,20 @@ async def _run_scan(
                 for req in await fetch_and_parse_openapi(client, openapi_url, target):
                     discovered.setdefault(req.signature(), req)
 
+            extra_findings: list[Finding] = []
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")
                 for req in await discover_graphql(client, graphql_url):
                     discovered.setdefault(req.signature(), req)
+                extra_findings.extend(await check_graphql_introspection(client, graphql_url))
+
+            progress.status("Probando ficheros sensibles…")
+            extra_findings.extend(await probe_sensitive_files(client, target))
 
             scanner = Scanner(client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency)
             all_requests = list(discovered.values())
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
+            active_passive.extend(extra_findings)
     finally:
         if oast is not None:
             await oast.stop()

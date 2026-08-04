@@ -5,11 +5,14 @@ broken so the scanner has known, reproducible ground truth to detect.
 """
 from __future__ import annotations
 
+import re
 import secrets
 import sqlite3
 import urllib.request
 
-from flask import Flask, Response, jsonify, redirect, request
+from flask import Flask, Response, jsonify, redirect, render_template_string, request
+
+_JNDI = re.compile(r"\$\{jndi:(?:ldap|ldaps|rmi|dns)://([^/}]+)(/[^}]*)?\}", re.IGNORECASE)
 
 USERS = {
     "alice": {"user_id": 1, "password": "alice123", "role": "user"},
@@ -83,6 +86,11 @@ def create_app() -> Flask:
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             "<url><loc>/file?name=readme.txt</loc></url>"
             "<url><loc>/go?url=/</loc></url>"
+            "<url><loc>/render?name=guest</loc></url>"
+            "<url><loc>/api/nosql?filter=all</loc></url>"
+            "<url><loc>/reset</loc></url>"
+            "<url><loc>/api/cors</loc></url>"
+            "<url><loc>/api/log?msg=hello</loc></url>"
             "</urlset>"
         )
         return Response(body, mimetype="application/xml")
@@ -395,6 +403,72 @@ document.addEventListener('DOMContentLoaded', function(){
         if "me" in query:
             return jsonify({"data": {"me": {"id": 1, "name": "alice"}}})
         return jsonify({"data": None})
+
+    # --- Extra vulnerability classes (common + obscure) -----------------------------
+    @app.get("/render")
+    def render() -> Response:
+        """SSTI (in-band): user input concatenated into a rendered template, so
+        '{{7*7}}' is evaluated server-side to '49'."""
+        name = request.args.get("name", "guest")
+        try:
+            return Response(render_template_string("<p>Hello " + name + "</p>"), mimetype="text/html")
+        except Exception as exc:  # noqa: BLE001 - surface template errors for the demo
+            return Response(f"template error: {exc}", status=500, mimetype="text/plain")
+
+    @app.get("/api/nosql")
+    def nosql() -> Response:
+        """NoSQL injection (error-based): malformed operators surface a driver error."""
+        query = request.args.get("filter", "")
+        if any(ch in query for ch in ("'", '"', "{", "$")):
+            return Response(
+                f"MongoError: unknown top level operator near '{query}'", status=500, mimetype="text/plain"
+            )
+        return jsonify({"results": []})
+
+    @app.get("/api/log")
+    def log_line() -> Response:
+        """Log4Shell / JNDI injection (blind): a 'logging' framework resolves JNDI
+        lookups found in the User-Agent (or a `msg` param), reaching out-of-band."""
+        candidate = request.headers.get("User-Agent", "") + " " + request.args.get("msg", "")
+        match = _JNDI.search(candidate)
+        if match:
+            host, path = match.group(1), match.group(2) or "/"
+            try:
+                urllib.request.urlopen(f"http://{host}{path}", timeout=3).read()  # noqa: S310
+            except Exception:
+                pass
+        return jsonify({"logged": True})
+
+    @app.get("/reset")
+    def password_reset() -> Response:
+        """Host header injection: a password-reset link is built from the untrusted Host header."""
+        host = request.headers.get("Host", "")
+        return Response(
+            f"<p>Reset link: http://{host}/reset/confirm?token=abc123</p>", mimetype="text/html"
+        )
+
+    @app.get("/api/cors")
+    def cors_data() -> Response:
+        """CORS misconfiguration: reflects any Origin and allows credentials."""
+        origin = request.headers.get("Origin")
+        resp = jsonify({"data": "sensitive account data"})
+        if origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+        return resp
+
+    @app.get("/.env")
+    def dotenv() -> Response:
+        """Sensitive file exposure: environment secrets served over HTTP."""
+        return Response("DB_PASSWORD=s3cr3t\nSTRIPE_API_KEY=sk_live_hunter2\n", mimetype="text/plain")
+
+    @app.get("/.git/config")
+    def git_config() -> Response:
+        """Sensitive file exposure: an exposed .git directory."""
+        return Response(
+            '[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = git@github.com:acme/private.git\n',
+            mimetype="text/plain",
+        )
 
     return app
 

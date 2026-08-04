@@ -45,6 +45,13 @@ async def test_all_planted_vulnerabilities_are_detected(vuln_app_url: str) -> No
     lfi = _by_rule_prefix(findings, "path-traversal-lfi:")
     assert any(f.injection_point.name == "name" and "/file" in f.request.url for f in lfi), lfi
 
+    # Additional classes discovered via the sitemap and scanned end to end.
+    rule_ids = {f.rule_id for f in findings}
+    assert "ssti-inband" in rule_ids, rule_ids           # SSTI at /render
+    assert "nosqli-error" in rule_ids, rule_ids          # NoSQLi at /api/nosql
+    assert "host-header-injection" in rule_ids, rule_ids  # Host header at /reset
+    assert "active-cors-reflected-origin" in rule_ids, rule_ids  # CORS at /api/cors
+
     # every finding carries reproducible evidence, remediation, CWE and an OWASP/WSTG reference
     for finding in findings:
         assert finding.evidence, finding.id

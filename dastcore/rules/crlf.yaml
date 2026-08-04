@@ -4,11 +4,12 @@ family: crlf
 severity: medium
 cwe: CWE-93
 owasp: WSTG-INPV-16
-inject_into: [query, header]
+inject_into: [query]
 payloads:
-  # Injected CRLF that smuggles a Location header, causing a server-side redirect/fetch.
+  # URL-encoded CRLF that smuggles a Location header when the server reflects the
+  # param into a response header. (Raw CR/LF in request headers is blocked client-side.)
   - "%0d%0aLocation:%20http://{{oast_domain}}/"
-  - "\r\nLocation: http://{{oast_domain}}/"
+  - "%0d%0aX-Injected:%20http://{{oast_domain}}/{{oast_token}}"
 oracle:
   type: any_of
   checks:
