@@ -1,0 +1,31 @@
+id: sqli-injection
+name: SQL Injection
+family: sqli
+severity: high
+cwe: CWE-89
+owasp: WSTG-INPV-05
+inject_into: [query, body, json]
+payloads:
+  - "'"
+  - "1' OR '1'='1"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns:
+        - "SQL syntax"
+        - "SQLite3::error"
+        - "sqlite3\\.OperationalError"
+        - "ORA-\\d{5}"
+        - "mysql_fetch"
+        - "PostgreSQL.{0,20}ERROR"
+        - "unrecognized token"
+    - type: time_based
+      payload: "1) OR SLEEP({{delay}})-- -"
+      delay: 3
+      threshold_ms: 2500
+confirm_reproducible: true
+remediation: >-
+  Use parameterized queries / prepared statements for every database call.
+  Never build SQL by interpolating user input into a query string.

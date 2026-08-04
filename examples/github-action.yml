@@ -1,0 +1,50 @@
+# Example GitHub Actions workflow: run dastcore against a staging environment
+# and upload the results to GitHub code scanning (Security tab) as SARIF.
+#
+# Copy to .github/workflows/dastcore.yml in your repo and adjust STAGING_URL.
+# Only ever point this at an environment you are authorized to test.
+name: dastcore DAST
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1" # weekly, Mondays 03:00 UTC
+
+permissions:
+  security-events: write # required to upload SARIF to code scanning
+  contents: read
+
+jobs:
+  dast:
+    runs-on: ubuntu-latest
+    env:
+      STAGING_URL: https://staging.example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dastcore
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[headless,oast]"
+          python -m playwright install --with-deps chromium
+
+      - name: Run dastcore scan
+        # --fail-on none: don't fail the job here; the SARIF upload + code scanning
+        # alerts are the gate. Use --fail-on high to break the build instead.
+        run: |
+          dastcore scan "$STAGING_URL" \
+            --i-have-authorization \
+            --profile full \
+            --format sarif \
+            --output dastcore.sarif \
+            --fail-on none
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: dastcore.sarif

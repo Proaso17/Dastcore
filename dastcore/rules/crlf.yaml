@@ -1,0 +1,20 @@
+id: crlf-oob
+name: CRLF / HTTP header injection (blind, OAST-confirmed)
+family: crlf
+severity: medium
+cwe: CWE-93
+owasp: WSTG-INPV-16
+inject_into: [query, header]
+payloads:
+  # Injected CRLF that smuggles a Location header, causing a server-side redirect/fetch.
+  - "%0d%0aLocation:%20http://{{oast_domain}}/"
+  - "\r\nLocation: http://{{oast_domain}}/"
+oracle:
+  type: any_of
+  checks:
+    - type: oob
+confirm_reproducible: false
+remediation: >-
+  Strip or reject CR/LF (and their encoded forms) from any user input placed
+  into HTTP headers or response metadata. Use framework APIs that encode header
+  values rather than concatenating them.

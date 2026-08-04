@@ -1,0 +1,24 @@
+id: path-traversal-lfi
+name: Path Traversal / Local File Inclusion
+family: lfi
+severity: high
+cwe: CWE-22
+owasp: WSTG-ATHZ-01
+inject_into: [query, body, json]
+payloads:
+  - "../../../../etc/passwd"
+  - "../../../../../../etc/passwd"
+  - "pyproject.toml"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns:
+        - "root:.*:0:0:"
+        - "\\[build-system\\]"
+confirm_reproducible: true
+remediation: >-
+  Never build filesystem paths directly from user input. Resolve against a
+  fixed base directory, canonicalize, and reject any path that escapes it —
+  or better, use an indirect file-id -> path mapping instead of raw paths.

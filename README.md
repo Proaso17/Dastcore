@@ -1,0 +1,379 @@
+# dastcore
+
+Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámico de `sastcore`.
+
+> ⚠️ **Uso responsable.** `dastcore` es una herramienta de pentesting activa e intrusiva.
+> No la ejecutes contra sistemas para los que no tengas autorización explícita.
+> Cada escaneo requiere el flag `--i-have-authorization` y una configuración de scope.
+> Lee [SECURITY.md](SECURITY.md) antes de usarlo.
+
+## Qué hace
+
+- **Crawler dual**: HTTP estático + headless (Playwright) para SPAs, endpoints XHR/fetch y DOM-XSS.
+- **Descubrimiento de API por esquema**: OpenAPI/Swagger 2.0/3.x + introspección GraphQL.
+- **OAST**: confirmación out-of-band de vulnerabilidades ciegas (blind SSRF/RCE/XXE/SSTI/CRLF) → cero falsos positivos en esa clase.
+- **Autorización multi-sesión**: BOLA/IDOR, BFLA y endpoints sin autenticación con varias identidades/roles.
+- **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.
+- **Motor async con concurrencia**: escaneo paralelo acotado (`--concurrency`), rate limiting (`--rps`), backoff ante HTTP 429, y presupuesto global (`--max-requests` / `--time-budget`) para escaneos seguros y acotados.
+- **Salidas**: JSON, SARIF 2.1.0 (CI/CD) y HTML autocontenido.
+
+## Quickstart
+
+```powershell
+py -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\python -m playwright install chromium   # para --engine headless|both
+
+# Escaneo rápido (estático), reporte a stdout
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --profile quick
+
+# Escaneo completo con SARIF para CI/CD (falla el build con exit 2 si hay high/critical)
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --profile full -f sarif -o out.sarif --fail-on high
+```
+
+Documentación: [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · [`examples/github-action.yml`](examples/github-action.yml) (CI/CD).
+
+## Estado del proyecto
+
+- [x] Fase 0 — Bootstrap (config, scope, CLI con gate legal)
+- [x] Fase 0.5 — Target vulnerable local para tests
+- [x] Fase 1 — Motor de red y descubrimiento HTTP
+- [x] Fase 2 — Motor de reglas y escaneo activo básico
+- [x] Fase 3 — Autenticación y sesiones
+- [x] Fase 4 — Reportes (JSON/SARIF/HTML)
+- [x] Fase 5 — Crawler headless (SPA)
+- [x] Fase 6 — OAST y vulnerabilidades ciegas
+- [x] Fase 7 — API y autorización (BOLA/BFLA)
+- [x] Fase 8 — Pulido y empaquetado
+
+## Instalación
+
+Requiere Python 3.11+.
+
+```powershell
+py -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+
+# Para el motor headless (Fase 5), instala el navegador Chromium una vez:
+.venv\Scripts\python -m playwright install chromium
+```
+
+## Cómo probar la Fase 0
+
+La Fase 0 entrega: modelos de configuración (`ScanConfig`), el enforcement de scope
+(`core/scope.py`) y el CLI con banner legal + gate de autorización.
+
+```powershell
+# Ver el banner legal y la versión
+.venv\Scripts\dastcore version
+
+# Sin --i-have-authorization, el CLI aborta (exit code 1)
+.venv\Scripts\dastcore scan http://localhost:5000
+
+# Con el flag, valida el target/scope y confirma (el motor de escaneo real llega en Fase 1+)
+.venv\Scripts\dastcore scan http://localhost:5000 --i-have-authorization
+
+# Ampliar scope explícitamente a otro dominio, o denegar una ruta dentro del scope
+.venv\Scripts\dastcore scan http://localhost:5000 --i-have-authorization --allow-domain api.localhost --deny-domain internal.localhost
+```
+
+Tests unitarios de scope y CLI:
+
+```powershell
+.venv\Scripts\pytest tests/test_scope.py tests/test_cli.py -v
+```
+
+## Cómo probar la Fase 0.5
+
+La Fase 0.5 entrega un target Flask deliberadamente vulnerable
+(`tests/targets/vuln_app/app.py`), levantado automáticamente por
+`tests/conftest.py` en un puerto libre para toda la sesión de tests.
+
+Vulnerabilidades plantadas:
+
+| Endpoint | Vulnerabilidad |
+|---|---|
+| `GET /search?q=` | SQL Injection (error-based + reflejada) |
+| `GET /greet?name=` | XSS reflejado |
+| `GET /go?url=` | Open redirect |
+| `GET /file?name=` | Path traversal / LFI |
+| `GET /api/orders/<id>` | IDOR / BOLA (autenticado, sin chequeo de ownership) |
+
+```powershell
+.venv\Scripts\pytest tests/test_vuln_app_fixture.py -v
+```
+
+También puedes levantarlo a mano para explorarlo manualmente:
+
+```powershell
+.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000, debug=False)"
+```
+
+## Cómo probar la Fase 1
+
+La Fase 1 entrega el motor de red y el descubrimiento HTTP:
+
+- `dastcore/core/models.py` — `HttpRequest`/`HttpResponse` (con timing) e `InjectionPoint`.
+- `dastcore/core/http_client.py` — `HttpClient` async sobre `httpx`, con:
+  - **scope enforcement a nivel de motor**: toda request pasa por `ScopeChecker` antes de salir; fuera de scope → `OutOfScopeError`, nunca se envía.
+  - **rate limiting** (token bucket, `requests_per_second`/`max_concurrency` configurables).
+  - **reintentos** con backoff ante errores de conexión/timeout.
+  - **timing** (`elapsed_ms`) en cada respuesta.
+- `dastcore/discovery/crawler_http.py` — `HttpCrawler`: crawl BFS estático que sigue `<a href>` y extrae `<form>` (método, action, inputs), respetando scope, con deduplicación por "firma" (método + path + nombres de parámetros, ignorando valores).
+- `dastcore/engine/injection_points.py` — `extract_injection_points`: dado un `HttpRequest`, deriva los `InjectionPoint` (query, body, json) que la Fase 2 mutará.
+- El target vulnerable (`tests/targets/vuln_app/app.py`) ahora sirve una página `/` con links y formularios reales para que el crawler tenga algo que descubrir.
+
+```powershell
+.venv\Scripts\pytest tests/test_http_client.py tests/test_crawler_http.py tests/test_injection_points.py -v
+```
+
+Para verlo funcionar de punta a punta contra el target local:
+
+```powershell
+.venv\Scripts\python -c "
+import asyncio
+from dastcore.config import ScopeConfig
+from dastcore.core.http_client import HttpClient
+from dastcore.discovery.crawler_http import HttpCrawler
+from dastcore.engine.injection_points import extract_injection_points
+
+async def main():
+    scope = ScopeConfig(allow_domains=['127.0.0.1'])
+    async with HttpClient(scope) as client:
+        discovered = await HttpCrawler(client).crawl('http://127.0.0.1:5000/')
+    for req in discovered:
+        print(req.method, req.url, req.params, req.data)
+        for p in extract_injection_points(req):
+            print('   ', p.location, p.name, repr(p.base_value))
+
+asyncio.run(main())
+"
+```
+
+(ejecuta primero el target en otra terminal: `.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000)"`)
+
+## Cómo probar la Fase 2
+
+La Fase 2 entrega el motor de reglas declarativas y el escaneo activo básico:
+
+- `dastcore/core/models.py` — se amplía con `Payload`, `Evidence` y `Finding`.
+- `dastcore/validation/oracles.py` — oráculos `reflected`, `response_match`, `differential`, `time_based`, combinables vía `OracleSpec` (`any_of`/`all_of`). Sin oráculo que confirme, no hay `Finding`.
+- `dastcore/engine/rule_engine.py` — carga y valida reglas `*.yaml` (pydantic), y muta un `InjectionPoint` con un payload dado. **Añadir un detector nuevo = escribir un YAML**, no tocar código.
+- `dastcore/engine/scanner.py` — orquestador: por cada request descubierta corre los detectores pasivos y, por cada punto de inyección aplicable, prueba cada regla. Si `confirm_reproducible: true` (default), repite la petición mutada y solo reporta si el oráculo vuelve a confirmar — así se descarta ruido (timing flaky, respuestas no deterministas).
+- `dastcore/detectors/passive.py` — cabeceras de seguridad ausentes, cookies sin `HttpOnly`/`Secure`/`SameSite`, CORS mal configurado (wildcard + credentials), y filtración de stack traces/errores verbosos.
+- `dastcore/rules/{sqli,xss,open_redirect,lfi}.yaml` — las 4 reglas del MVP.
+- El CLI `scan` ahora ejecuta el pipeline real (crawl → escaneo pasivo+activo) y muestra una tabla de hallazgos + JSON (a stdout o a `--output archivo.json`).
+
+```powershell
+.venv\Scripts\pytest tests/test_oracles.py tests/test_rule_engine.py tests/test_passive.py tests/test_scanner.py tests/test_scan_pipeline.py -v
+```
+
+`tests/test_scan_pipeline.py` es el test de aceptación de la fase: corre crawl+scan reales contra el target vulnerable y verifica que se detectan **las 4 vulns plantadas** (SQLi en `/search`, XSS en `/greet`, Open Redirect en `/go`, LFI en `/file`) con **cero hallazgos activos** en los parámetros limpios de `/login` (`username`/`password`), y que cada `Finding` trae evidencia + remediación + CWE + referencia OWASP.
+
+Para verlo funcionar de punta a punta vía CLI (arranca el target primero en otra terminal: `.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000)"`):
+
+```powershell
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --rps 50 --output findings.json
+```
+
+Esto imprime una tabla con severidad/nombre/ubicación de cada hallazgo y escribe el JSON completo (con request/response de evidencia) en `findings.json`.
+
+## Cómo probar la Fase 3
+
+La Fase 3 entrega autenticación y gestión de sesiones, propagadas de forma transparente al crawler y al scanner:
+
+- `dastcore/core/session.py` — `SessionManager` con soporte para:
+  - **cookie / header / bearer estáticos** (material de auth fijo desde config).
+  - **form-login**: POST de credenciales a una URL; la cookie de sesión resultante se persiste en el cookie jar de httpx (y opcionalmente se extrae un token del JSON de respuesta).
+  - **OAuth2 client-credentials**: intercambia `client_id`/`client_secret` por un bearer token.
+  - **detección de sesión caída + re-login automático**: si una respuesta trae la señal de "deslogueado" (por defecto `401`, o un patrón configurable en el body), el cliente re-loguea y reintenta la petición una vez. El re-login está serializado y protegido por *epoch*, de modo que una ráfaga de peticiones concurrentes que ven la misma expiración dispara **un solo** re-login, no uno por petición.
+- El `HttpClient` inyecta el material de sesión en cada petición y aplica el re-login; el crawler y el scanner operan autenticados **sin cambios** (ambos usan el mismo `HttpClient`).
+- El target vulnerable gana un área autenticada (`/auth/form-login`, `/account`, `/dashboard`, `/dashboard/lookup` [SQLi tras login], `/oauth/token`, `/api/profile`) con validez de sesión del lado servidor para poder simular expiración y ejercitar el re-login.
+
+```powershell
+.venv\Scripts\pytest tests/test_session.py -v
+```
+
+Ejemplo de escaneo **autenticado por form-login** vía CLI (arranca el target primero: `.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000)"`):
+
+```powershell
+.venv\Scripts\dastcore scan http://127.0.0.1:5000/dashboard --i-have-authorization --rps 50 `
+  --login-url http://127.0.0.1:5000/auth/form-login `
+  --login-field username=carol --login-field password=carol-pw
+```
+
+Con auth, el scanner atraviesa el login y encuentra la SQLi de `/dashboard/lookup` (inalcanzable sin autenticar). Otros modos:
+
+```powershell
+# Bearer estático
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --auth-bearer "eyJ..."
+
+# Cookie estática (repetible)
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --auth-cookie "sid=abc123"
+
+# OAuth2 client-credentials
+.venv\Scripts\dastcore scan http://127.0.0.1:5000/api --i-have-authorization `
+  --oauth-token-url http://127.0.0.1:5000/oauth/token `
+  --oauth-client-id svc-client --oauth-client-secret svc-secret
+```
+
+## Cómo probar la Fase 4
+
+La Fase 4 entrega los reportes y la integración CI/CD:
+
+- `dastcore/report/json.py` — reporte JSON (array de findings serializados).
+- `dastcore/report/sarif.py` — **SARIF 2.1.0** válido: cada `rule_id` colapsa en un `reportingDescriptor` bajo el driver (con `helpUri` al CWE, `security-severity` para GitHub code scanning), y cada finding es un `result` con `ruleId`, `level` (`error`/`warning`/`note`), `message`, `locations` y evidencia en `properties`.
+- `dastcore/report/html.py` + `templates/report.html.j2` — reporte **HTML autocontenido** (CSS inline, sin assets externos, tema claro/oscuro), con resumen por severidad, CWE/OWASP, request/response de evidencia y remediación. Autoescaping **ON**: los payloads capturados (XSS/SQLi) se renderizan inertes, nunca como markup vivo.
+- `dastcore/severity.py` — fuente única de verdad para el orden de severidad, el mapeo a `level` SARIF y el gate de exit code.
+- CLI:
+  - `--format json|sarif|html` (`-f`) y `--output/-o archivo` (por defecto stdout).
+  - `--fail-on info|low|medium|high|critical|none` (por defecto `high`): si hay algún hallazgo con severidad `>=` al umbral, el proceso **sale con código 2** (distinto del 1 de errores operativos), ideal para romper un pipeline CI/CD. `none` desactiva el gate.
+
+```powershell
+.venv\Scripts\pytest tests/test_report.py tests/test_cli.py -v
+```
+
+Generar reportes contra el target local (arranca primero el target: `.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000)"`):
+
+```powershell
+# SARIF para subir a GitHub code scanning
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --rps 50 -f sarif -o dastcore.sarif
+
+# HTML autocontenido para compartir
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --rps 50 -f html -o report.html
+
+# CI/CD: falla el build (exit 2) si hay hallazgos high o critical
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --rps 50 --fail-on high
+```
+
+## Cómo probar la Fase 5
+
+La Fase 5 entrega el crawler headless (Playwright/Chromium) para SPAs, más DOM-XSS:
+
+- `dastcore/discovery/crawler_headless.py` — `HeadlessEngine`: renderiza JavaScript y descubre lo que un crawl estático no puede ver —contenido de SPA, **links y forms generados por JS**, y las **llamadas XHR/fetch** que la página hace en runtime—. Reutiliza la sesión autenticada sembrando el contexto del navegador con las cookies y cabeceras del scanner, y aplica scope a cada URL capturada. Devuelve el mismo modelo `HttpRequest` que el crawler estático, así que el scanner activo consume ambos igual.
+- `dastcore/detectors/dom_xss.py` — DOM-XSS por **ejecución**: inyecta un payload marcador en el **fragmento** de la URL (`#…`). Como el fragmento nunca se envía al servidor, si el payload ejecuta solo puede ser porque JS del cliente leyó una fuente DOM (`location.hash`, …) y la volcó en un sink (`innerHTML`, `document.write`, `eval`). Ejecución (no reflejo) es el oráculo → cero falsos positivos.
+- CLI: `--engine http|headless|both`. Con `headless`/`both`, tras el crawl se prueba DOM-XSS en las páginas renderizadas y los endpoints descubiertos se escanean con las reglas normales.
+
+Requiere Chromium instalado (`python -m playwright install chromium`); si falta, estos tests **se saltan** en vez de fallar.
+
+```powershell
+.venv\Scripts\pytest tests/test_headless.py -v
+```
+
+Escaneo de una SPA (arranca el target primero: `.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000)"`):
+
+```powershell
+# 'both' combina crawl estático + headless, y añade la detección DOM-XSS
+.venv\Scripts\dastcore scan http://127.0.0.1:5000/spa --i-have-authorization --rps 50 --engine both
+```
+
+Contra la SPA del target, `both` descubre `/spa/item` (link creado por JS, invisible al crawl estático), confirma su XSS reflejado con el scanner normal, y detecta el DOM-XSS de `/spa` (punto de inyección `fragment`).
+
+## Cómo probar la Fase 6
+
+La Fase 6 entrega OAST (out-of-band) y la confirmación de vulnerabilidades **ciegas**:
+
+- `dastcore/engine/oast.py` — abstracción `OastProvider` con dos implementaciones:
+  - `LocalOastServer` — **colaborador HTTP self-hosted** (por defecto para localhost/CI). Correlación por un token único en el path del callback.
+  - `InteractshClient` — cliente para un servidor **Interactsh** (público o self-hosted); correlación por subdominio único, con canal de polling cifrado RSA-OAEP + AES-CFB.
+- Reglas OOB: `ssrf.yaml`, `cmdi.yaml`, `xxe.yaml`, `ssti.yaml`, `crlf.yaml`, con payloads que embeben `{{oast_url}}`/`{{oast_domain}}` y un oráculo `type: oob`.
+- Scanner: las reglas OOB toman una ruta separada — cada payload lleva un callback único; tras enviar las peticiones, el scanner **hace polling** al proveedor y solo reporta si llega la interacción correlacionada. **Sin callback, no hay hallazgo** → cero falsos positivos en esta clase.
+- CLI: `--oast off|local|interactsh` (+ `--oast-server` para Interactsh).
+
+```powershell
+.venv\Scripts\pytest tests/test_oast.py -v
+```
+
+Los tests cubren el flujo completo de **blind SSRF** contra el target local (positivo y negativo cero-FP) y, offline, el descifrado RSA+AES del cliente Interactsh (la parte crítica, sin tocar red).
+
+Escaneo de SSRF ciego vía CLI con colaborador local (arranca el target primero: `.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000)"`):
+
+```powershell
+.venv\Scripts\dastcore scan "http://127.0.0.1:5000/fetch?url=http://seed/" --i-have-authorization --rps 50 --oast local
+
+# Contra un target remoto real, usa Interactsh (el colaborador debe ser alcanzable por el target):
+.venv\Scripts\dastcore scan https://staging.example.com --i-have-authorization --oast interactsh --oast-server oast.fun
+```
+
+> Nota: `--oast local` levanta el colaborador en `127.0.0.1`, así que solo sirve si el target puede alcanzarlo (localhost o una IP que hospedes tú). Para targets remotos, usa `interactsh`.
+
+## Cómo probar la Fase 7
+
+La Fase 7 entrega el descubrimiento de API por esquema y la detección de **autorización rota** (el valor diferencial):
+
+- `dastcore/discovery/openapi.py` — ingiere OpenAPI 3.x y Swagger 2.0 → genera `HttpRequest`s concretos rellenando parámetros de path/query y bodies desde el esquema (example/default/enum/tipo). Alcanza endpoints que ningún crawler encontraría siguiendo links.
+- `dastcore/discovery/graphql.py` — corre la query de introspección y convierte cada campo de query/mutation en un request de sondeo.
+- `dastcore/detectors/authz.py` — checks diferenciales **multi-sesión**:
+  - **BOLA/IDOR**: un endpoint con id de objeto devuelve el **mismo objeto** a dos usuarios distintos → falta autorización a nivel de objeto.
+  - **BFLA**: una identidad de rol inferior invoca con éxito una función privilegiada (admin/management) que sí exige autenticación.
+  - **Missing authentication**: un endpoint sensible responde con éxito **sin credenciales**.
+  - Cada check exige una diferencia real de acceso para dispararse → falsos positivos cercanos a cero (y no se doble-reporta: un endpoint sin auth es missing-auth, no también BFLA).
+- Config: `ScanConfig.identities` (lista de `{name, role, auth}`). CLI: `--roles-file <json>`, `--openapi <url>`, `--graphql <url>`.
+
+```powershell
+.venv\Scripts\pytest tests/test_openapi.py tests/test_graphql.py tests/test_authz.py -v
+```
+
+Ejemplo E2E: `roles.json` con tres identidades (alice/bob rol user, admin rol admin), cada una con su `auth` (form-login, bearer, etc.):
+
+```json
+[
+  {"name":"alice","role":"user","auth":{"type":"form","form":{"login_url":"http://127.0.0.1:5000/login","credentials":{"username":"alice","password":"alice123"}}}},
+  {"name":"bob","role":"user","auth":{"type":"form","form":{"login_url":"http://127.0.0.1:5000/login","credentials":{"username":"bob","password":"bob123"}}}},
+  {"name":"admin","role":"admin","auth":{"type":"form","form":{"login_url":"http://127.0.0.1:5000/login","credentials":{"username":"admin","password":"admin123"}}}}
+]
+```
+
+```powershell
+.venv\Scripts\dastcore scan http://127.0.0.1:5000/ --i-have-authorization --rps 50 `
+  --openapi http://127.0.0.1:5000/openapi.json --roles-file roles.json
+```
+
+Contra el target local esto reporta **BOLA** en `/api/orders/{id}`, **BFLA** en `/admin/stats`, y **missing authentication** en `/api/internal/config`.
+
+## Cómo probar la Fase 8
+
+La Fase 8 entrega el pulido y empaquetado:
+
+- **Perfiles de escaneo**: `--profile quick|full|api` fijan defaults sensatos (motor, `max-pages`, oast). Cualquier flag explícito **siempre gana** (resuelto por la fuente del parámetro, no por comparación de valores).
+- **Reanudación**: `--resume <archivo>` persiste el progreso por request (firmas completadas + hallazgos) tras cada petición; si el escaneo se interrumpe, se reanuda saltando lo ya hecho.
+- **Resumen `rich`**: panel final con conteo por severidad, total y duración.
+- **`Dockerfile`** (con Chromium + extras) y **`.dockerignore`**.
+- **GitHub Action** de ejemplo en [`examples/github-action.yml`](examples/github-action.yml): escanea staging y sube el SARIF a *code scanning*.
+- Docs: [RULES.md](RULES.md), [SECURITY.md](SECURITY.md).
+
+```powershell
+.venv\Scripts\pytest tests/test_cli_phase8.py -v
+
+# Docker
+docker build -t dastcore .
+docker run --rm dastcore scan https://staging.example.com --i-have-authorization --profile full -f sarif
+```
+
+## Pulido operativo
+
+Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
+
+- **Config file unificado**: `--config scan.yaml` (o JSON) con `target`, `scope`, `auth`, `identities`, `engine`, `oast`, presupuestos, etc. Los flags explícitos de la CLI siempre ganan sobre el archivo; el archivo gana sobre el perfil. El `target` puede venir del archivo (argumento opcional).
+  ```yaml
+  target: https://staging.example.com
+  allow_domains: [staging.example.com, api.staging.example.com]
+  engine: both
+  oast: interactsh
+  fail_on: high
+  auth:
+    type: form
+    form: { login_url: "https://staging.example.com/login", credentials: { user: admin, pass: "..." } }
+  ```
+  ```powershell
+  .venv\Scripts\dastcore scan --config scan.yaml --i-have-authorization
+  ```
+- **Verbosidad**: `--verbose/-v` (log DEBUG de cada petición HTTP) y `--quiet/-q` (silencia la salida decorativa; emite solo el reporte, ideal para pipelines: `dastcore scan ... -q -f sarif > out.sarif`).
+- **Descubrimiento por `robots.txt` + `sitemap.xml`**: el crawler siembra la cola con rutas de `Disallow`/`Allow` y `<loc>` del sitemap (a menudo endpoints "ocultos"). Desactivable en la API con `use_robots=False`.
+- **Más detectores pasivos**: divulgación de tecnología/versión (Server/X-Powered-By), CSP ausente, y directory listing habilitado.
+
+## Correr toda la suite
+
+```powershell
+.venv\Scripts\pytest -v
+```

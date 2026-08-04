@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dastcore report{% if target %} — {{ target }}{% endif %}</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #1a2130; --panel-2: #141a26; --text: #e6e9ef;
+    --muted: #9aa4b2; --border: #2a3446; --accent: #4da3ff;
+    --critical: #ff4d6d; --high: #ff784e; --medium: #ffc247; --low: #4da3ff; --info: #8b95a5;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f7fa; --panel: #ffffff; --panel-2: #eef1f6; --text: #1a2130;
+      --muted: #5b6472; --border: #d5dbe6; --accent: #1f6feb;
+      --critical: #d1243b; --high: #c1440e; --medium: #9a6b00; --low: #1f6feb; --info: #5b6472;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px 20px 64px; }
+  header h1 { margin: 0 0 4px; font-size: 24px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  .summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 28px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; min-width: 92px; }
+  .stat .n { font-size: 22px; font-weight: 700; }
+  .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px;
+    font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: #fff; }
+  .b-critical { background: var(--critical); } .b-high { background: var(--high); }
+  .b-medium { background: var(--medium); color: #23180a; } .b-low { background: var(--low); }
+  .b-info { background: var(--info); }
+  .dot-critical { color: var(--critical); } .dot-high { color: var(--high); }
+  .dot-medium { color: var(--medium); } .dot-low { color: var(--low); } .dot-info { color: var(--info); }
+  .finding { background: var(--panel); border: 1px solid var(--border); border-left-width: 4px;
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+  .finding.sev-critical { border-left-color: var(--critical); }
+  .finding.sev-high { border-left-color: var(--high); }
+  .finding.sev-medium { border-left-color: var(--medium); }
+  .finding.sev-low { border-left-color: var(--low); }
+  .finding.sev-info { border-left-color: var(--info); }
+  .finding h3 { margin: 0 0 8px; font-size: 17px; display: flex; align-items: center; gap: 10px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 13px; margin: 10px 0; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-word; }
+  .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--muted); margin: 14px 0 4px; }
+  pre { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; overflow-x: auto; font-size: 12.5px; margin: 0;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+  .evidence { list-style: none; padding: 0; margin: 4px 0 0; }
+  .evidence li { font-size: 13px; padding: 6px 10px; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
+  .evidence .etype { font-weight: 700; color: var(--accent); }
+  .remediation { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    background: var(--panel-2); font-size: 13.5px; margin-top: 6px; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 0; }
+  code { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 12.5px; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 32px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>dastcore — Dynamic Security Report</h1>
+    <div class="meta">
+      {% if target %}Target: <code>{{ target }}</code> · {% endif %}
+      Generated {{ generated_at }} · dastcore v{{ version }}
+    </div>
+  </header>
+
+  <section class="summary">
+    <div class="stat"><div class="n">{{ total }}</div><div class="l">Total</div></div>
+    {% for sev in severity_order %}
+    <div class="stat">
+      <div class="n dot-{{ sev }}">{{ counts[sev] }}</div>
+      <div class="l">{{ sev }}</div>
+    </div>
+    {% endfor %}
+  </section>
+
+  {% if findings %}
+    {% for f in findings %}
+    <article class="finding sev-{{ f.severity }}">
+      <h3>
+        <span class="badge b-{{ f.severity }}">{{ f.severity }}</span>
+        {{ f.name }}
+      </h3>
+      <dl class="kv">
+        <dt>Rule</dt><dd><code>{{ f.rule_id }}</code></dd>
+        <dt>CWE</dt><dd>{{ f.cwe }}</dd>
+        <dt>OWASP</dt><dd>{{ f.owasp }}</dd>
+        <dt>Injection point</dt>
+        <dd><code>{{ f.injection_point.location }}</code> parameter <code>{{ f.injection_point.name }}</code></dd>
+        <dt>Finding id</dt><dd><code>{{ f.id }}</code></dd>
+      </dl>
+
+      <div class="section-label">Evidence</div>
+      <ul class="evidence">
+        {% for ev in f.evidence %}
+        <li><span class="etype">{{ ev.type }}</span> ({{ ev.confidence }}) — {{ ev.data }}</li>
+        {% else %}
+        <li>No evidence recorded.</li>
+        {% endfor %}
+      </ul>
+
+      <div class="section-label">Request</div>
+      <pre>{{ f.request.method }} {{ f.request.url }}
+{%- if f.request.params %}
+params: {{ f.request.params }}
+{%- endif %}
+{%- if f.request.data %}
+body: {{ f.request.data }}
+{%- endif %}
+{%- if f.request.json_body %}
+json: {{ f.request.json_body }}
+{%- endif %}</pre>
+
+      <div class="section-label">Response</div>
+      <pre>HTTP {{ f.response.status_code }} · {{ "%.0f"|format(f.response.elapsed_ms) }} ms
+{{ f.response.text | truncate(800, true, "…") }}</pre>
+
+      <div class="section-label">Remediation</div>
+      <div class="remediation">{{ f.remediation }}</div>
+    </article>
+    {% endfor %}
+  {% else %}
+    <div class="empty">No findings. Nothing at or above the reporting bar was confirmed.</div>
+  {% endif %}
+
+  <footer>
+    Generated by dastcore · Only scan systems you are authorized to test.
+  </footer>
+</div>
+</body>
+</html>

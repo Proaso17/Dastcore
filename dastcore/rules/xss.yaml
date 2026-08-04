@@ -1,0 +1,18 @@
+id: xss-reflected
+name: Reflected Cross-Site Scripting (XSS)
+family: xss
+severity: high
+cwe: CWE-79
+owasp: WSTG-INPV-01
+inject_into: [query, body, json]
+payloads:
+  - "<script>alert(1)</script>"
+oracle:
+  type: any_of
+  checks:
+    - type: reflected
+confirm_reproducible: true
+remediation: >-
+  HTML-encode all user input before rendering it into HTML (contextual output
+  encoding). Prefer a templating engine with autoescaping enabled, and add a
+  Content-Security-Policy as defense in depth.

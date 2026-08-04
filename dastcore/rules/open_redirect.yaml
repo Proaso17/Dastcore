@@ -1,0 +1,21 @@
+id: open-redirect
+name: Open Redirect
+family: open_redirect
+severity: medium
+cwe: CWE-601
+owasp: WSTG-CLNT-04
+inject_into: [query]
+payloads:
+  - "https://dastcore-redirect-probe.invalid/"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: headers
+      patterns:
+        - "dastcore-redirect-probe\\.invalid"
+confirm_reproducible: true
+remediation: >-
+  Never redirect to a raw user-controlled URL. Validate the destination
+  against an allowlist of known-safe paths/hosts, or use an indirect
+  lookup (e.g. a short id mapped server-side to the real target).

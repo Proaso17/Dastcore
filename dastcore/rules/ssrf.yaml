@@ -1,0 +1,19 @@
+id: ssrf-oob
+name: Server-Side Request Forgery (blind, OAST-confirmed)
+family: ssrf
+severity: high
+cwe: CWE-918
+owasp: WSTG-INPV-19
+inject_into: [query, body, json]
+payloads:
+  - "{{oast_url}}"
+  - "http://{{oast_domain}}/"
+oracle:
+  type: any_of
+  checks:
+    - type: oob
+confirm_reproducible: false
+remediation: >-
+  Do not fetch user-supplied URLs. Validate against a strict allowlist of hosts
+  and schemes, resolve and pin the destination, and block requests to internal
+  ranges and cloud metadata endpoints (169.254.169.254).
