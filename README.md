@@ -1,6 +1,13 @@
 # dastcore
 
-Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámico de `sastcore`.
+[![CI](https://github.com/Proaso17/Dastcore/actions/workflows/ci.yml/badge.svg)](https://github.com/Proaso17/Dastcore/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![OWASP LLM Top 10](https://img.shields.io/badge/OWASP-LLM%20Top%2010-red.svg)](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
+
+Escáner de seguridad de aplicaciones **dinámico** (caja negra) para **web, APIs y chatbots/LLMs**. Gemelo dinámico de `sastcore`.
+
+<p align="center"><img src="docs/demo.svg" alt="dastcore demo" width="760"></p>
 
 > ⚠️ **Uso responsable.** `dastcore` es una herramienta de pentesting activa e intrusiva.
 > No la ejecutes contra sistemas para los que no tengas autorización explícita.

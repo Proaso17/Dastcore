@@ -5,6 +5,7 @@ No real network/target involved here — these tests exist to pin down the
 is much easier to prove deterministically with scripted fake responses than
 against a real server.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +30,7 @@ class _FakeHttpClient:
 
 
 def _response(**overrides) -> HttpResponse:
-    defaults = dict(status_code=200, headers={}, text="clean", elapsed_ms=1.0, url="http://x/test")
+    defaults = {"status_code": 200, "headers": {}, "text": "clean", "elapsed_ms": 1.0, "url": "http://x/test"}
     defaults.update(overrides)
     return HttpResponse(**defaults)
 
@@ -44,7 +45,9 @@ def _flaky_rule() -> Rule:
         owasp="TEST-0",
         inject_into=["query"],
         payloads=["x"],
-        oracle=OracleSpec(type="any_of", checks=[OracleCheck(type="response_match", part="body", patterns=["FLAKY_MARKER"])]),
+        oracle=OracleSpec(
+            type="any_of", checks=[OracleCheck(type="response_match", part="body", patterns=["FLAKY_MARKER"])]
+        ),
         confirm_reproducible=True,
         remediation="n/a",
     )

@@ -3,6 +3,7 @@
 A new injection detector is meant to be addable by writing a YAML file here
 — nothing in this module is family-specific (no "if family == sqli" branches).
 """
+
 from __future__ import annotations
 
 from pathlib import Path

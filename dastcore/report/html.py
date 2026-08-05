@@ -5,6 +5,7 @@ XSS/SQLi payloads that triggered them), the report must render them as inert
 text, never as live markup. The output is a single file with inlined CSS and no
 external assets, safe to email or archive.
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -25,7 +26,7 @@ _env = Environment(
 
 
 def _severity_counts(findings: list[Finding]) -> dict[str, int]:
-    counts = {severity: 0 for severity in SEVERITY_ORDER}
+    counts: dict[str, int] = dict.fromkeys(SEVERITY_ORDER, 0)
     for finding in findings:
         counts[finding.severity] += 1
     return counts
@@ -63,5 +64,5 @@ def render_html(
         target=target,
         title=title,
         version=__version__,
-        generated_at=_dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        generated_at=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )

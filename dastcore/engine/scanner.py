@@ -11,6 +11,7 @@ separate path: each payload embeds a unique OAST callback; after all requests
 are sent, the scanner polls the OAST provider and only reports a finding when a
 correlated interaction actually arrived. No callback, no finding.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -198,7 +199,9 @@ class Scanner:
                     if response is None:
                         continue
                     probes.append(
-                        _OobProbe(token=handle.token, rule=rule, point=point, request=mutated_request, response=response)
+                        _OobProbe(
+                            token=handle.token, rule=rule, point=point, request=mutated_request, response=response
+                        )
                     )
         return probes
 

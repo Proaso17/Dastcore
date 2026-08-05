@@ -5,6 +5,7 @@ produced it into `Evidence` — or nothing. This is the low-noise guarantee of
 the whole project: a rule's payloads only ever produce a `Finding` if one of
 its oracle checks actually fires here. No oracle match, no report.
 """
+
 from __future__ import annotations
 
 import re

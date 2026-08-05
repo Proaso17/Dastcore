@@ -1,4 +1,5 @@
 """Phase 7: GraphQL introspection."""
+
 from __future__ import annotations
 
 from dastcore.config import ScopeConfig

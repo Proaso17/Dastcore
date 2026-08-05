@@ -1,4 +1,5 @@
 """The bundled `dastcore demo` target and command (zero-setup onboarding)."""
+
 from __future__ import annotations
 
 import httpx

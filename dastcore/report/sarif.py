@@ -5,6 +5,7 @@ scanning (e.g. GitHub). Findings that share a `rule_id` collapse into a single
 `reportingDescriptor` (rule) under the tool driver; each finding becomes one
 `result` referencing that rule by id, carrying its own location and evidence.
 """
+
 from __future__ import annotations
 
 import json
@@ -68,9 +69,7 @@ def _build_result(finding: Finding) -> dict:
                     "artifactLocation": {"uri": finding.request.url},
                     "region": {"startLine": 1},
                 },
-                "logicalLocations": [
-                    {"name": f"{point.location}:{point.name}", "kind": "parameter"}
-                ],
+                "logicalLocations": [{"name": f"{point.location}:{point.name}", "kind": "parameter"}],
             }
         ],
         "partialFingerprints": {"dastcoreFindingId": finding.id},

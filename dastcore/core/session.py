@@ -11,6 +11,7 @@ on a dropped-session signal, asks the session to re-login and retries once.
 Re-login is serialized and epoch-guarded so a burst of concurrent requests that
 all see the same expiry triggers exactly one re-login, not one per request.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,9 +45,7 @@ class SessionManager:
         self._lock = asyncio.Lock()
         # Static material is "established" the moment we have any of it; dynamic flows
         # only become established once their first login succeeds.
-        self._established = auth.type in ("cookie", "header", "bearer") and bool(
-            self.cookies or self.headers
-        )
+        self._established = auth.type in ("cookie", "header", "bearer") and bool(self.cookies or self.headers)
 
     @property
     def epoch(self) -> int:
@@ -81,7 +80,7 @@ class SessionManager:
         return False
 
     async def ensure_logged_in(
-        self, client: "HttpClient", *, seen_epoch: int | None = None, initial: bool = False
+        self, client: HttpClient, *, seen_epoch: int | None = None, initial: bool = False
     ) -> bool:
         """(Re)establish the session. Returns whether usable auth material now exists.
 
@@ -107,14 +106,14 @@ class SessionManager:
                     self._relogin_count += 1
             return success
 
-    async def _perform_login(self, client: "HttpClient") -> bool:
+    async def _perform_login(self, client: HttpClient) -> bool:
         if self._auth.type == "form":
             return await self._form_login(client)
         if self._auth.type == "oauth2":
             return await self._oauth2_login(client)
         return False
 
-    async def _form_login(self, client: "HttpClient") -> bool:
+    async def _form_login(self, client: HttpClient) -> bool:
         cfg = self._auth.form
         assert cfg is not None
         response = await client.send_raw(
@@ -136,7 +135,7 @@ class SessionManager:
 
         return bool(response.cookies) or cfg.token_json_field is not None
 
-    async def _oauth2_login(self, client: "HttpClient") -> bool:
+    async def _oauth2_login(self, client: HttpClient) -> bool:
         cfg = self._auth.oauth2
         assert cfg is not None
         body: dict[str, str] = {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dastcore.core.models import HttpRequest
+from dastcore.core.models import HttpRequest, HttpResponse
 from dastcore.detectors.passive import (
     check_cors_misconfiguration,
     check_directory_listing,
@@ -11,7 +11,6 @@ from dastcore.detectors.passive import (
     check_technology_disclosure,
     run_passive_checks,
 )
-from dastcore.core.models import HttpResponse
 
 
 def _request(url: str = "http://x/page") -> HttpRequest:
@@ -19,7 +18,7 @@ def _request(url: str = "http://x/page") -> HttpRequest:
 
 
 def _response(**overrides) -> HttpResponse:
-    defaults = dict(status_code=200, headers={}, text="ok", elapsed_ms=1.0, url="http://x/page")
+    defaults = {"status_code": 200, "headers": {}, "text": "ok", "elapsed_ms": 1.0, "url": "http://x/page"}
     defaults.update(overrides)
     return HttpResponse(**defaults)
 
@@ -114,9 +113,13 @@ def test_missing_csp_flagged_on_html_without_csp() -> None:
 
 
 def test_missing_csp_not_flagged_when_present_or_non_html() -> None:
-    assert check_missing_csp(
-        _request(), _response(headers={"content-type": "text/html", "content-security-policy": "default-src 'self'"})
-    ) == []
+    assert (
+        check_missing_csp(
+            _request(),
+            _response(headers={"content-type": "text/html", "content-security-policy": "default-src 'self'"}),
+        )
+        == []
+    )
     assert check_missing_csp(_request(), _response(headers={"content-type": "application/json"})) == []
 
 

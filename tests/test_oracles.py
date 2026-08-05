@@ -13,7 +13,7 @@ from dastcore.validation.oracles import (
 
 
 def _response(**overrides) -> HttpResponse:
-    defaults = dict(status_code=200, headers={}, text="", elapsed_ms=5.0, url="http://x/")
+    defaults = {"status_code": 200, "headers": {}, "text": "", "elapsed_ms": 5.0, "url": "http://x/"}
     defaults.update(overrides)
     return HttpResponse(**defaults)
 

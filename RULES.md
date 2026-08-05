@@ -112,6 +112,17 @@ Oráculos IA (todos de bajo ruido):
 | `canary` | el modelo emitió un token único inyectado (`{{canary}}`) | token fresco por intento |
 | `response_match` | una regex casa en la respuesta | **diferencial**: ignora lo que ya estaba en el payload |
 | `pii` | la respuesta contiene PII (email, tarjeta validada por Luhn, teléfono, SSN) | no presente en el payload |
+| `url_canary` | el canary aparece dentro de una URL fetcheable (exfiltración) | token fresco por intento |
+| `no_refusal` | el modelo cumple (emite el canary) y **no** rechaza | clasificador de rechazo |
 | `length` | la respuesta supera `threshold` chars (denial of wallet) | — |
 
-El endpoint se adapta con `--ai-prompt-field`, `--ai-template` (con `{{prompt}}` o `{{messages}}` para multi-turno estilo OpenAI) y `--ai-response-path`.
+El endpoint se adapta con `--ai-prompt-field`, `--ai-template` (con `{{prompt}}` o `{{messages}}` para multi-turno estilo OpenAI), `--ai-response-path` y `--ai-stream` (SSE/NDJSON).
+
+### Wordlists de la comunidad
+
+Las reglas de jailbreak / prompt-injection admiten payloads extra de una wordlist (un payload por línea; a cada línea se le añade una instrucción `{{canary}}` automáticamente para poder confirmarla):
+
+- **Incluidas**: `dastcore/ai_rules/wordlists/*.txt` (referenciadas por `payloads_file:` en las reglas).
+- **Propias / comunidad**: `dastcore ai <url> --ai-wordlist misjailbreaks.txt` (o una carpeta con varios `.txt`). Así puedes enchufar sets públicos como [garak](https://github.com/NVIDIA/garak), L1B3RT4S o listas de PromptInjection: descárgalos y apunta `--ai-wordlist` a la carpeta.
+
+En una regla YAML, `payloads_file: wordlists/mi_fichero.txt` añade la wordlist como parte de la propia regla.

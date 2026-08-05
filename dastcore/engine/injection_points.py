@@ -5,6 +5,7 @@ engine (Phase 2) will mutate one at a time. Each point keeps the original
 request as its `request_template` so a mutated copy can be rebuilt without
 disturbing the other parameters.
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlsplit
@@ -26,15 +27,11 @@ def extract_injection_points(request: HttpRequest, *, include_headers: bool = Tr
 
     if request.data:
         for name, value in request.data.items():
-            points.append(
-                InjectionPoint(location="body", name=name, base_value=str(value), request_template=request)
-            )
+            points.append(InjectionPoint(location="body", name=name, base_value=str(value), request_template=request))
 
     if isinstance(request.json_body, dict):
         for name, value in request.json_body.items():
-            points.append(
-                InjectionPoint(location="json", name=name, base_value=str(value), request_template=request)
-            )
+            points.append(InjectionPoint(location="json", name=name, base_value=str(value), request_template=request))
 
     if include_headers:
         for header in FUZZABLE_HEADERS:

@@ -9,6 +9,7 @@ The template uses `{{messages}}` where the provider expects a chat history array
 (the client wraps a single prompt into a one-message array automatically) or
 `{{prompt}}` for single-string bodies.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -79,9 +80,7 @@ AI_PRESETS: dict[str, AiPreset] = {
 }
 
 
-def resolve_preset(
-    name: str, *, model: str = "", api_key: str = ""
-) -> tuple[str, str, dict[str, str]]:
+def resolve_preset(name: str, *, model: str = "", api_key: str = "") -> tuple[str, str, dict[str, str]]:
     """Return (template, response_path, headers) for a preset."""
     preset = AI_PRESETS[name]
     template = preset.template.replace("{{model}}", model or preset.default_model)

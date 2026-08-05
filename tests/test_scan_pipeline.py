@@ -4,6 +4,7 @@ against the local vulnerable target.
 Acceptance bar from the project spec: every planted vulnerability must be
 found, and clean routes/parameters must produce zero active-rule findings.
 """
+
 from __future__ import annotations
 
 from dastcore.config import RateLimitConfig, ScopeConfig
@@ -47,8 +48,8 @@ async def test_all_planted_vulnerabilities_are_detected(vuln_app_url: str) -> No
 
     # Additional classes discovered via the sitemap and scanned end to end.
     rule_ids = {f.rule_id for f in findings}
-    assert "ssti-inband" in rule_ids, rule_ids           # SSTI at /render
-    assert "nosqli-error" in rule_ids, rule_ids          # NoSQLi at /api/nosql
+    assert "ssti-inband" in rule_ids, rule_ids  # SSTI at /render
+    assert "nosqli-error" in rule_ids, rule_ids  # NoSQLi at /api/nosql
     assert "host-header-injection" in rule_ids, rule_ids  # Host header at /reset
     assert "active-cors-reflected-origin" in rule_ids, rule_ids  # CORS at /api/cors
 

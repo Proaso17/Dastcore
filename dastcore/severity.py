@@ -3,6 +3,7 @@
 Single source of truth so the SARIF `level`, the HTML badges, and the CI/CD
 exit-code gate all agree on how severities rank and translate.
 """
+
 from __future__ import annotations
 
 from dastcore.config import Severity

@@ -4,6 +4,7 @@ Covers the self-hosted collaborator, the end-to-end blind-SSRF flow with its
 zero-false-positive guarantee, and — offline — the Interactsh client's RSA+AES
 decryption (the one part of that client worth verifying without a live server).
 """
+
 from __future__ import annotations
 
 import base64
@@ -30,6 +31,7 @@ _SCOPE = ScopeConfig(allow_domains=["127.0.0.1"])
 
 # --- substitution ----------------------------------------------------------------------
 
+
 def test_substitute_oast_replaces_both_placeholders() -> None:
     handle = OastHandle(token="abc", url="http://c.test/abc", domain="c.test")
     assert substitute_oast("{{oast_url}}", handle) == "http://c.test/abc"
@@ -37,6 +39,7 @@ def test_substitute_oast_replaces_both_placeholders() -> None:
 
 
 # --- self-hosted collaborator ----------------------------------------------------------
+
 
 async def test_local_oast_records_and_polls_interactions() -> None:
     server = LocalOastServer()
@@ -55,6 +58,7 @@ async def test_local_oast_records_and_polls_interactions() -> None:
 
 
 # --- end-to-end blind SSRF -------------------------------------------------------------
+
 
 async def test_blind_ssrf_confirmed_via_oob(vuln_app_url: str) -> None:
     server = LocalOastServer()
@@ -99,6 +103,7 @@ async def test_oob_rules_do_nothing_without_a_provider(vuln_app_url: str) -> Non
 
 
 # --- Interactsh decryption (offline) ---------------------------------------------------
+
 
 def test_interactsh_decrypt_roundtrip() -> None:
     """Mimic the Interactsh server's encryption and verify the client decrypts it.

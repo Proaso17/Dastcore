@@ -4,6 +4,7 @@ Every scan is driven by a validated ``ScanConfig`` instance. Nothing in the
 engine should read raw dicts or environment variables directly — config
 flows in through these pydantic models so it is validated once, at the edge.
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -66,7 +67,7 @@ class AuthConfig(BaseModel):
     max_relogin: int = 3
 
     @model_validator(mode="after")
-    def _require_flow_config_for_dynamic_types(self) -> "AuthConfig":
+    def _require_flow_config_for_dynamic_types(self) -> AuthConfig:
         if self.type == "form" and self.form is None:
             raise ValueError("auth.type 'form' requires auth.form to be set")
         if self.type == "oauth2" and self.oauth2 is None:
@@ -146,7 +147,7 @@ class ScanConfig(BaseModel):
     i_have_authorization: bool = False
 
     @model_validator(mode="after")
-    def _ensure_target_host_in_scope(self) -> "ScanConfig":
+    def _ensure_target_host_in_scope(self) -> ScanConfig:
         """The target's own host is always in scope, regardless of --allow-domain.
 
         --allow-domain only ever *widens* scope (e.g. to reach a secondary API host);

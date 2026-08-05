@@ -4,6 +4,7 @@ Uses only the standard library (no Flask) so it works from a bare
 `pip install dastcore`. Every route is intentionally broken to give the demo
 scan known findings. DO NOT expose this anywhere.
 """
+
 from __future__ import annotations
 
 import json

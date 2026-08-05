@@ -4,6 +4,7 @@ These tests require Playwright and its Chromium browser. If either is missing
 they skip cleanly rather than fail, so the rest of the suite stays green on
 machines without a browser installed (`python -m playwright install chromium`).
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -15,8 +16,8 @@ pytest.importorskip("playwright.async_api")
 
 from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
-from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
+from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 

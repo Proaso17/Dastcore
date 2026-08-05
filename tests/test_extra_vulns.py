@@ -1,5 +1,6 @@
 """Coverage for additional vulnerability classes — common (SSTI, NoSQLi, CORS,
 sensitive files, GraphQL introspection) and obscure (Log4Shell/JNDI, Host header)."""
+
 from __future__ import annotations
 
 from dastcore.config import ScopeConfig
@@ -79,7 +80,6 @@ async def test_sensitive_files_exposed(vuln_app_url: str) -> None:
         findings = await probe_sensitive_files(client, vuln_app_url)
     names = {f.rule_id for f in findings}
     assert names == {"active-sensitive-file"}
-    paths = {f.request.url.rsplit("/", 1)[-1] or f.request.url for f in findings}
     assert any(".env" in f.request.url for f in findings)
     assert any(".git" in f.request.url for f in findings)
 

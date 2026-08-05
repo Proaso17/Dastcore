@@ -9,6 +9,7 @@ the answer extraction are both configurable:
 * response: a dot-path (`--ai-response-path choices.0.message.content`) or, if
   omitted, auto-detection of the most common answer fields.
 """
+
 from __future__ import annotations
 
 import json
@@ -80,7 +81,7 @@ def reassemble_stream(body: str, stream_path: str | None) -> str:
         if not line:
             continue
         if line.startswith("data:"):
-            line = line[len("data:"):].strip()
+            line = line[len("data:") :].strip()
         if line in ("[DONE]", ""):
             continue
         try:

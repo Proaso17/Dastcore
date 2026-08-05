@@ -9,6 +9,7 @@ static crawler produces, so the active scanner consumes both uniformly.
 
 Playwright is imported lazily so the rest of dastcore works without it installed.
 """
+
 from __future__ import annotations
 
 import json
@@ -61,7 +62,7 @@ class HeadlessEngine:
         self._browser = None
         self._context = None
 
-    async def __aenter__(self) -> "HeadlessEngine":
+    async def __aenter__(self) -> HeadlessEngine:
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:  # pragma: no cover - depends on optional dep

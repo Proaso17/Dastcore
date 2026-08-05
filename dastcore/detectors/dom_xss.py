@@ -10,6 +10,7 @@ the oracle, which makes this a zero-false-positive signal.
 This module operates on a Playwright ``BrowserContext`` supplied by
 ``crawler_headless``; it never launches a browser itself.
 """
+
 from __future__ import annotations
 
 import secrets
@@ -28,7 +29,7 @@ _NAV_TIMEOUT_MS = 8000
 def _payload_for(token: str) -> str:
     # <img onerror> fires when the (relative, 404-ing) src fails to load — classic
     # innerHTML-sink trigger that <script> insertion would not give us.
-    return f'<img src=x onerror="window.{_MARKER_GLOBAL}=\'{token}\'">'
+    return f"<img src=x onerror=\"window.{_MARKER_GLOBAL}='{token}'\">"
 
 
 def _strip_fragment(url: str) -> str:

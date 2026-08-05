@@ -7,6 +7,7 @@ becomes an `HttpRequest`; requests are deduplicated by "shape" (method + path
 + parameter names) so the same endpoint isn't scanned once per parameter
 value seen.
 """
+
 from __future__ import annotations
 
 import re

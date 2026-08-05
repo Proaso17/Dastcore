@@ -1,7 +1,6 @@
 """Phase 7: OpenAPI / Swagger ingestion."""
-from __future__ import annotations
 
-import httpx
+from __future__ import annotations
 
 from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
@@ -16,9 +15,7 @@ def test_parse_openapi_3x_fills_path_param_from_example() -> None:
         "paths": {
             "/api/orders/{order_id}": {
                 "get": {
-                    "parameters": [
-                        {"name": "order_id", "in": "path", "schema": {"type": "integer", "example": 101}}
-                    ]
+                    "parameters": [{"name": "order_id", "in": "path", "schema": {"type": "integer", "example": 101}}]
                 }
             }
         },
@@ -62,7 +59,11 @@ def test_parse_swagger_2_0_body_param_and_basepath() -> None:
             "/pets": {
                 "post": {
                     "parameters": [
-                        {"name": "body", "in": "body", "schema": {"type": "object", "properties": {"name": {"type": "string"}}}}
+                        {
+                            "name": "body",
+                            "in": "body",
+                            "schema": {"type": "object", "properties": {"name": {"type": "string"}}},
+                        }
                     ]
                 }
             }

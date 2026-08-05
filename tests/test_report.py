@@ -1,10 +1,11 @@
 """Phase 4: report renderers (JSON / SARIF 2.1.0 / HTML) and severity mapping."""
+
 from __future__ import annotations
 
 import json
 
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
-from dastcore.report import render_html, render_json, render_sarif
+from dastcore.report import render_html, render_json
 from dastcore.report.sarif import build_sarif
 from dastcore.severity import meets_threshold, sarif_level, severity_rank
 
@@ -76,6 +77,7 @@ def _sample_findings() -> list[Finding]:
 
 # --- severity mapping -----------------------------------------------------------------
 
+
 def test_severity_rank_orders_low_to_high() -> None:
     assert severity_rank("info") < severity_rank("low") < severity_rank("medium")
     assert severity_rank("medium") < severity_rank("high") < severity_rank("critical")
@@ -97,6 +99,7 @@ def test_sarif_level_mapping() -> None:
 
 # --- JSON -----------------------------------------------------------------------------
 
+
 def test_render_json_roundtrips_all_findings() -> None:
     data = json.loads(render_json(_sample_findings()))
     assert len(data) == 3
@@ -109,6 +112,7 @@ def test_render_json_empty() -> None:
 
 
 # --- SARIF 2.1.0 ----------------------------------------------------------------------
+
 
 def _assert_valid_sarif(doc: dict) -> None:
     assert doc["version"] == "2.1.0"
@@ -162,6 +166,7 @@ def test_sarif_rule_help_uri_points_to_cwe() -> None:
 
 
 # --- HTML -----------------------------------------------------------------------------
+
 
 def test_html_contains_finding_details() -> None:
     html = render_html(_sample_findings(), target="http://target.test")

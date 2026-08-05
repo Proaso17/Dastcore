@@ -59,6 +59,8 @@ dev = [
     "flask>=3.0.0",
     "playwright>=1.42.0",
     "cryptography>=42.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.10.0",
 ]
 
 [project.urls]
@@ -78,3 +80,32 @@ dastcore = ["rules/*.yaml", "ai_rules/*.yaml", "ai_rules/wordlists/*.txt", "repo
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# SIM (flake8-simplify) is intentionally excluded: its "return the condition
+# directly" / "collapse nested if" suggestions hurt readability in the branchy
+# scope/auth/security logic where explicit steps are clearer.
+select = ["E", "F", "I", "UP", "B", "C4"]
+ignore = [
+    "E501",   # line length is handled case by case, not enforced hard
+    "B008",   # typer uses function calls in argument defaults by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true
+# Pragmatic (not strict) — catches real bugs without a full annotation pass.
+disable_error_code = ["union-attr", "arg-type", "assignment", "index", "operator", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true

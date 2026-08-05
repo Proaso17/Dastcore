@@ -1,4 +1,5 @@
 """Phase 8: scan profiles, resumption, and the rich summary."""
+
 from __future__ import annotations
 
 import json
@@ -36,8 +37,17 @@ def test_explicit_engine_overrides_profile(vuln_app_url: str) -> None:
     result = runner.invoke(
         app,
         [
-            "scan", vuln_app_url, "--i-have-authorization", "--profile", "full",
-            "--engine", "http", "--rps", "50", "--fail-on", "none",
+            "scan",
+            vuln_app_url,
+            "--i-have-authorization",
+            "--profile",
+            "full",
+            "--engine",
+            "http",
+            "--rps",
+            "50",
+            "--fail-on",
+            "none",
         ],
     )
     assert result.exit_code == 0
@@ -78,13 +88,21 @@ def test_resume_skips_completed_requests_and_keeps_prior_findings(vuln_app_url: 
         return [r.signature() for r in reqs]
 
     signatures = asyncio.run(_sigs())
-    state_path.write_text(
-        json.dumps({"completed": signatures, "findings": [prior_finding]}), encoding="utf-8"
-    )
+    state_path.write_text(json.dumps({"completed": signatures, "findings": [prior_finding]}), encoding="utf-8")
 
     result = runner.invoke(
         app,
-        ["scan", f"{vuln_app_url}/", "--i-have-authorization", "--rps", "50", "--resume", str(state_path), "--fail-on", "none"],
+        [
+            "scan",
+            f"{vuln_app_url}/",
+            "--i-have-authorization",
+            "--rps",
+            "50",
+            "--resume",
+            str(state_path),
+            "--fail-on",
+            "none",
+        ],
     )
     assert result.exit_code == 0
     assert "Reanudando:" in result.stdout

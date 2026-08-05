@@ -6,6 +6,7 @@ parameters and request bodies with values derived from the schema (examples,
 defaults, enums, or type-based placeholders). Schema-driven discovery reaches
 API endpoints no crawler would ever find by following links.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import yaml
 
 from dastcore.core.http_client import HttpClient
-from dastcore.core.models import HttpRequest, Method
+from dastcore.core.models import HttpRequest
 
 _HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 

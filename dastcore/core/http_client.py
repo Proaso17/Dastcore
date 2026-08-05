@@ -6,6 +6,7 @@ helpers). Scope is checked here, at the network boundary, not left to
 callers to remember: this is what makes the "no request ever leaves scope"
 guarantee actually true.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -87,7 +88,7 @@ class HttpClient:
         max_retries: int = 2,
         proxy: str | None = None,
         follow_redirects: bool = False,
-        session: "SessionManager | None" = None,
+        session: SessionManager | None = None,
         max_requests: int | None = None,
         time_budget_s: float | None = None,
     ) -> None:
@@ -111,7 +112,7 @@ class HttpClient:
         if session is not None and session.cookies:
             self._client.cookies.update(session.cookies)
 
-    async def __aenter__(self) -> "HttpClient":
+    async def __aenter__(self) -> HttpClient:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -145,7 +146,7 @@ class HttpClient:
 
     def cookie_pairs(self) -> dict[str, str]:
         """Current cookies in the jar — used to share an authenticated session with the browser."""
-        return {cookie.name: cookie.value for cookie in self._client.cookies.jar}
+        return {cookie.name: cookie.value or "" for cookie in self._client.cookies.jar}
 
     def session_headers(self) -> dict[str, str]:
         """Header material the session injects (bearer/oauth2 tokens, custom headers)."""

@@ -3,6 +3,7 @@
 DO NOT deploy this anywhere reachable — every endpoint here is intentionally
 broken so the scanner has known, reproducible ground truth to detect.
 """
+
 from __future__ import annotations
 
 import json as _json
@@ -143,7 +144,7 @@ def create_app() -> Flask:
         name = request.args.get("name", "readme.txt")
         base = {"readme.txt": "welcome to the dastcore test target\n"}
         try:
-            with open(name, "r", encoding="utf-8", errors="replace") as fh:
+            with open(name, encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
             return Response(content, mimetype="text/plain")
         except OSError:
@@ -216,7 +217,7 @@ def create_app() -> Flask:
         if not _is_authed():
             return jsonify({"error": "unauthenticated"}), 401
         return Response(
-            '<!doctype html><html><body><h1>Dashboard</h1>'
+            "<!doctype html><html><body><h1>Dashboard</h1>"
             '<a href="/dashboard/secret">secret</a>'
             '<a href="/dashboard/lookup?q=demo">lookup</a>'
             "</body></html>",
@@ -258,7 +259,7 @@ def create_app() -> Flask:
     @app.get("/api/profile")
     def profile() -> Response:
         auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer ") and auth_header[len("Bearer "):] in valid_tokens:
+        if auth_header.startswith("Bearer ") and auth_header[len("Bearer ") :] in valid_tokens:
             return jsonify({"profile": "svc-client", "role": "service"})
         return jsonify({"error": "unauthenticated"}), 401
 
@@ -421,9 +422,7 @@ document.addEventListener('DOMContentLoaded', function(){
         """NoSQL injection (error-based): malformed operators surface a driver error."""
         query = request.args.get("filter", "")
         if any(ch in query for ch in ("'", '"', "{", "$")):
-            return Response(
-                f"MongoError: unknown top level operator near '{query}'", status=500, mimetype="text/plain"
-            )
+            return Response(f"MongoError: unknown top level operator near '{query}'", status=500, mimetype="text/plain")
         return jsonify({"results": []})
 
     @app.get("/api/log")
@@ -444,9 +443,7 @@ document.addEventListener('DOMContentLoaded', function(){
     def password_reset() -> Response:
         """Host header injection: a password-reset link is built from the untrusted Host header."""
         host = request.headers.get("Host", "")
-        return Response(
-            f"<p>Reset link: http://{host}/reset/confirm?token=abc123</p>", mimetype="text/html"
-        )
+        return Response(f"<p>Reset link: http://{host}/reset/confirm?token=abc123</p>", mimetype="text/html")
 
     @app.get("/api/cors")
     def cors_data() -> Response:
@@ -500,11 +497,23 @@ document.addEventListener('DOMContentLoaded', function(){
             return f"Sure, rendering that: {message}"
         # Order matters: a leak/disclosure request is answered as such even if it also
         # contains "ignore ...", so the response reveals real system content (not an echo).
-        if any(w in low for w in ("system prompt", "system instruction", "repeat the text above", "initial prompt", "reveal your prompt", "your exact")):
+        if any(
+            w in low
+            for w in (
+                "system prompt",
+                "system instruction",
+                "repeat the text above",
+                "initial prompt",
+                "reveal your prompt",
+                "your exact",
+            )
+        ):
             return _AI_SYSTEM_PROMPT  # LLM07 system-prompt leakage
         if any(w in low for w in ("customer", "personal data", "user record", "email address", "phone number")):
             # LLM02 sensitive-info / PII disclosure
-            return "Sure: customer Jane Doe — email jane.doe@example.com, phone +1-202-555-0173, card 4111 1111 1111 1111."
+            return (
+                "Sure: customer Jane Doe — email jane.doe@example.com, phone +1-202-555-0173, card 4111 1111 1111 1111."
+            )
         if any(w in low for w in ("api key", "secret", "password", "credential")):
             return "Of course — the SECRET_KEY is sk-DASTCORE-9f3a2b1c."
         if any(w in low for w in ("repeat forever", "1000 times", "as long as possible", "never stop", "infinite")):
@@ -512,12 +521,17 @@ document.addEventListener('DOMContentLoaded', function(){
         # LLM01 multi-turn crescendo: a request that alone is refused succeeds once the
         # conversation has been "primed" with roleplay/hypothetical framing.
         if "as we discussed" in low or "the code" in low:
-            primed = sum(1 for h in history if any(w in h.lower() for w in ("roleplay", "hypothetical", "story", "pretend"))) >= 2
+            primed = (
+                sum(1 for h in history if any(w in h.lower() for w in ("roleplay", "hypothetical", "story", "pretend")))
+                >= 2
+            )
             return f"As we discussed: {message}" if primed else "Sorry, I can't help with that."
         injection = any(w in low for w in ("ignore", "override", "disregard", "forget")) and any(
             w in low for w in ("instruction", "previous", "prior", "rules", "debug mode", "directive")
         )
-        jailbreak = any(w in low for w in ("dan mode", "developer mode", "jailbroken", "no restrictions", "do anything now"))
+        jailbreak = any(
+            w in low for w in ("dan mode", "developer mode", "jailbroken", "no restrictions", "do anything now")
+        )
         if injection or jailbreak:
             return f"Sure! {message}"  # LLM01 complies and echoes the injected content
         if "<" in message and ">" in message:
@@ -579,7 +593,7 @@ document.addEventListener('DOMContentLoaded', function(){
         def generate():
             for i in range(0, len(reply), 16):
                 chunk = reply[i : i + 16]
-                yield f'data: {_json.dumps({"choices": [{"delta": {"content": chunk}}]})}\n\n'
+                yield f"data: {_json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
             yield "data: [DONE]\n\n"
 
         return Response(generate(), mimetype="text/event-stream")

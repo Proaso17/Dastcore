@@ -4,6 +4,7 @@ Operate on a single already-fetched response — no extra requests, no
 mutation. Covers missing security headers, insecure cookie flags, permissive
 CORS, and verbose error / stack-trace disclosure.
 """
+
 from __future__ import annotations
 
 import re
@@ -79,7 +80,9 @@ def check_missing_security_headers(request: HttpRequest, response: HttpResponse)
                 owasp="WSTG-CONF-07",
                 injection_point=_passive_point(request, "Strict-Transport-Security"),
                 evidence=[
-                    Evidence(type="status", data="HTTPS response has no Strict-Transport-Security header", confidence="high")
+                    Evidence(
+                        type="status", data="HTTPS response has no Strict-Transport-Security header", confidence="high"
+                    )
                 ],
                 request=request,
                 response=response,
@@ -228,7 +231,9 @@ def check_missing_csp(request: HttpRequest, response: HttpResponse) -> list[Find
             cwe="CWE-693",
             owasp="WSTG-CONF-12",
             injection_point=_passive_point(request, "Content-Security-Policy"),
-            evidence=[Evidence(type="status", data="HTML response has no Content-Security-Policy header", confidence="high")],
+            evidence=[
+                Evidence(type="status", data="HTML response has no Content-Security-Policy header", confidence="high")
+            ],
             request=request,
             response=response,
             remediation="Define a restrictive Content-Security-Policy (e.g. default-src 'self') as defense in depth against XSS.",

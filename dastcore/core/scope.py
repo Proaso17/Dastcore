@@ -5,6 +5,7 @@ This is the engine-level gate: every outbound request the scanner ever makes
 ``ScopeChecker.is_in_scope`` before it is sent. Scope is never just a config
 suggestion — a request outside scope must never leave the process.
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlsplit

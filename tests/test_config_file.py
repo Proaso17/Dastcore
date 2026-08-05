@@ -1,4 +1,5 @@
 """Polish: unified YAML/JSON config file (`--config`) with CLI-flag override."""
+
 from __future__ import annotations
 
 import json

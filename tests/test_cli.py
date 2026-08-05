@@ -50,7 +50,19 @@ def test_scan_writes_sarif_file(vuln_app_url: str, tmp_path) -> None:
     out = tmp_path / "report.sarif"
     result = runner.invoke(
         app,
-        ["scan", vuln_app_url, "--i-have-authorization", "--rps", "50", "--format", "sarif", "-o", str(out), "--fail-on", "none"],
+        [
+            "scan",
+            vuln_app_url,
+            "--i-have-authorization",
+            "--rps",
+            "50",
+            "--format",
+            "sarif",
+            "-o",
+            str(out),
+            "--fail-on",
+            "none",
+        ],
     )
     assert result.exit_code == 0
     doc = json.loads(out.read_text(encoding="utf-8"))
@@ -63,7 +75,19 @@ def test_scan_writes_html_file(vuln_app_url: str, tmp_path) -> None:
     out = tmp_path / "report.html"
     result = runner.invoke(
         app,
-        ["scan", vuln_app_url, "--i-have-authorization", "--rps", "50", "--format", "html", "-o", str(out), "--fail-on", "none"],
+        [
+            "scan",
+            vuln_app_url,
+            "--i-have-authorization",
+            "--rps",
+            "50",
+            "--format",
+            "html",
+            "-o",
+            str(out),
+            "--fail-on",
+            "none",
+        ],
     )
     assert result.exit_code == 0
     html = out.read_text(encoding="utf-8")

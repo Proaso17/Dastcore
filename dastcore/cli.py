@@ -6,6 +6,7 @@ rule-based active scan + passive checks + DOM-XSS -> report (JSON / SARIF /
 HTML). For CI/CD, `--fail-on` sets a severity threshold that makes the process
 exit non-zero when met.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -200,7 +201,7 @@ def _print_banner() -> None:
 
 
 def _print_summary(findings: list[Finding], duration_s: float) -> None:
-    counts = {sev: 0 for sev in ("critical", "high", "medium", "low", "info")}
+    counts = dict.fromkeys(("critical", "high", "medium", "low", "info"), 0)
     for finding in findings:
         counts[finding.severity] = counts.get(finding.severity, 0) + 1
     parts = [
@@ -331,7 +332,7 @@ def _build_oast_provider(oast_mode: str, oast_server: str) -> OastProvider | Non
 
 
 async def _open_authenticated_client(
-    stack: AsyncExitStack, config: ScanConfig, auth: AuthConfig, budget: "_Budget"
+    stack: AsyncExitStack, config: ScanConfig, auth: AuthConfig, budget: _Budget
 ) -> HttpClient:
     session = SessionManager(auth) if auth.type != "none" else None
     client = await stack.enter_async_context(_make_client(config, budget, session))
@@ -341,7 +342,7 @@ async def _open_authenticated_client(
     return client
 
 
-def _make_client(config: ScanConfig, budget: "_Budget", session: SessionManager | None = None) -> HttpClient:
+def _make_client(config: ScanConfig, budget: _Budget, session: SessionManager | None = None) -> HttpClient:
     return HttpClient(
         config.scope,
         rate_limit=config.rate_limit,
@@ -351,7 +352,7 @@ def _make_client(config: ScanConfig, budget: "_Budget", session: SessionManager 
     )
 
 
-async def _run_authz(config: ScanConfig, probes: list[HttpRequest], budget: "_Budget") -> list[Finding]:
+async def _run_authz(config: ScanConfig, probes: list[HttpRequest], budget: _Budget) -> list[Finding]:
     """Run BOLA/BFLA/missing-auth checks across the configured identities."""
     async with AsyncExitStack() as stack:
         identities = []
@@ -370,9 +371,9 @@ async def _run_scan(
     oast_server: str = "",
     openapi_url: str = "",
     graphql_url: str = "",
-    state: "_ResumeState | None" = None,
-    budget: "_Budget | None" = None,
-    progress: "_ProgressAdapter | None" = None,
+    state: _ResumeState | None = None,
+    budget: _Budget | None = None,
+    progress: _ProgressAdapter | None = None,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -437,8 +438,8 @@ async def _run_scan(
 async def _scan_with_optional_resume(
     scanner: Scanner,
     requests: list[HttpRequest],
-    state: "_ResumeState | None",
-    progress: "_ProgressAdapter",
+    state: _ResumeState | None,
+    progress: _ProgressAdapter,
 ) -> list[Finding]:
     """Concurrent in-band + passive scan, then OOB. With a resume state, skip requests
     already completed in a prior run and persist progress after each one."""
@@ -544,12 +545,8 @@ def scan(
     max_requests: int = typer.Option(
         0, "--max-requests", help="Presupuesto total de peticiones (0 = sin límite). Detiene el escaneo al alcanzarlo."
     ),
-    time_budget: float = typer.Option(
-        0.0, "--time-budget", help="Presupuesto de tiempo en segundos (0 = sin límite)."
-    ),
-    output_format: str = typer.Option(
-        "json", "--format", "-f", help="Formato del reporte: json | sarif | html."
-    ),
+    time_budget: float = typer.Option(0.0, "--time-budget", help="Presupuesto de tiempo en segundos (0 = sin límite)."),
+    output_format: str = typer.Option("json", "--format", "-f", help="Formato del reporte: json | sarif | html."),
     output_path: str = typer.Option(
         "", "--output", "-o", help="Ruta de archivo para el reporte (por defecto, stdout)."
     ),
@@ -726,8 +723,16 @@ def scan(
         with progress:
             findings = asyncio.run(
                 _run_scan(
-                    config, max_pages, engine, oast_mode, oast_server, openapi_url, graphql_url,
-                    state, budget, _ProgressAdapter(progress),
+                    config,
+                    max_pages,
+                    engine,
+                    oast_mode,
+                    oast_server,
+                    openapi_url,
+                    graphql_url,
+                    state,
+                    budget,
+                    _ProgressAdapter(progress),
                 )
             )
     except SessionLoginError as exc:
@@ -852,7 +857,9 @@ def ai(
     i_have_authorization: bool = typer.Option(
         False, "--i-have-authorization", help="Confirma que tienes autorización para probar el objetivo."
     ),
-    ai_config: str = typer.Option("", "--ai-config", help="YAML/JSON con la forma del endpoint propio (los flags ganan)."),
+    ai_config: str = typer.Option(
+        "", "--ai-config", help="YAML/JSON con la forma del endpoint propio (los flags ganan)."
+    ),
     preset: str = typer.Option(
         "", "--ai-preset", help=f"Preset de proveedor: {' | '.join(AI_PRESETS)}. Configura template/response/headers."
     ),
@@ -862,12 +869,14 @@ def ai(
         "message", "--ai-prompt-field", help="Campo JSON del prompt (si no usas preset ni --ai-template)."
     ),
     template: str = typer.Option(
-        "", "--ai-template", help='Plantilla JSON del body con {{prompt}} o {{messages}} (anula el preset).'
+        "", "--ai-template", help="Plantilla JSON del body con {{prompt}} o {{messages}} (anula el preset)."
     ),
     response_path: str = typer.Option(
         "", "--ai-response-path", help="Dot-path al texto de respuesta (anula el preset; auto si se omite)."
     ),
-    stream: bool = typer.Option(False, "--ai-stream", help="El endpoint responde en streaming (SSE/NDJSON); reensambla los deltas."),
+    stream: bool = typer.Option(
+        False, "--ai-stream", help="El endpoint responde en streaming (SSE/NDJSON); reensambla los deltas."
+    ),
     stream_path: str = typer.Option("", "--ai-stream-path", help="Dot-path al delta por chunk (auto si se omite)."),
     wordlist: str = typer.Option("", "--ai-wordlist", help="Fichero de payloads de jailbreak extra (uno por línea)."),
     auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer / API key (cabecera Authorization)."),
@@ -882,7 +891,9 @@ def ai(
     """Probar un chatbot / LLM (OWASP LLM Top 10): prompt injection (directa/indirecta),
     jailbreak, crescendo multi-turno, fuga de system prompt, secretos/PII, excessive
     agency, output inseguro y denial of wallet. Usa --ai-preset para OpenAI/Anthropic/Ollama/…"""
-    logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     if not quiet:
         _print_banner()
 
@@ -958,7 +969,15 @@ def ai(
     try:
         findings = asyncio.run(
             _run_ai_scan(
-                config, str(config.target), prompt_field, template, response_path, headers, wordlist, stream, stream_path
+                config,
+                str(config.target),
+                prompt_field,
+                template,
+                response_path,
+                headers,
+                wordlist,
+                stream,
+                stream_path,
             )
         )
     except httpx.HTTPError as exc:

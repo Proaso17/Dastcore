@@ -17,6 +17,7 @@ Two providers implement the same interface:
   Correlation is by a unique subdomain label; interactions are fetched over an
   RSA+AES-encrypted poll channel.
 """
+
 from __future__ import annotations
 
 import abc
@@ -78,6 +79,7 @@ class OastProvider(abc.ABC):
 # --------------------------------------------------------------------------------------
 # Self-hosted local collaborator
 # --------------------------------------------------------------------------------------
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

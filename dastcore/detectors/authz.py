@@ -15,6 +15,7 @@ who can reach what:
 Each check requires a real difference in access to fire, which keeps false
 positives near zero.
 """
+
 from __future__ import annotations
 
 import re

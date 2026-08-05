@@ -6,6 +6,7 @@ query/mutation fields, and turns each into a concrete `HttpRequest` the scanner
 and authorization detector can probe — surfacing an API's whole operation set
 without any documentation.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,7 +45,7 @@ def _sample_document(operation: str, field: dict) -> str:
     args = field.get("args") or []
     if args:
         arg_str = ", ".join(f'{arg["name"]}: "1"' for arg in args if arg.get("name"))
-        selection = f'{field["name"]}({arg_str})' if arg_str else field["name"]
+        selection = f"{field['name']}({arg_str})" if arg_str else field["name"]
     else:
         selection = field["name"]
     return f"{operation} {{ {selection} }}"
@@ -64,9 +65,7 @@ def operations_from_schema(schema: dict, endpoint_url: str) -> list[HttpRequest]
     for field in _fields_of(schema, mutation_type):
         if field.get("name"):
             requests.append(
-                HttpRequest(
-                    method="POST", url=endpoint_url, json_body={"query": _sample_document("mutation", field)}
-                )
+                HttpRequest(method="POST", url=endpoint_url, json_body={"query": _sample_document("mutation", field)})
             )
     return requests
 

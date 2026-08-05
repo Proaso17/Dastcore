@@ -4,6 +4,7 @@ These craft specific requests (a forged Origin, probes for well-known sensitive
 paths, a GraphQL introspection query) rather than fuzzing an injection point, so
 they live here instead of as YAML rules.
 """
+
 from __future__ import annotations
 
 import re
@@ -99,7 +100,11 @@ async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding
                     cwe="CWE-538",
                     owasp="WSTG-CONF-04",
                     injection_point=_point(request, "path", path),
-                    evidence=[Evidence(type="response_match", data=f"{path} served (200) with matching content", confidence="high")],
+                    evidence=[
+                        Evidence(
+                            type="response_match", data=f"{path} served (200) with matching content", confidence="high"
+                        )
+                    ],
                     request=request,
                     response=response,
                     remediation="Elimina o bloquea el acceso a este fichero desde el servidor web; no lo despliegues.",

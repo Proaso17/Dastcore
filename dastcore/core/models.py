@@ -4,6 +4,7 @@ Grows incrementally with each phase: Phase 1 needs `HttpRequest`,
 `HttpResponse` and `InjectionPoint`. Phase 2 adds `Payload`, `Evidence`
 and `Finding` for the rule engine and oracles.
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -15,9 +16,7 @@ from dastcore.config import Severity
 
 Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 InjectionLocation = Literal["query", "body", "header", "cookie", "path", "json", "fragment"]
-EvidenceType = Literal[
-    "reflected", "response_match", "differential", "time_based", "oob", "status", "dom_execution"
-]
+EvidenceType = Literal["reflected", "response_match", "differential", "time_based", "oob", "status", "dom_execution"]
 Confidence = Literal["low", "medium", "high"]
 
 

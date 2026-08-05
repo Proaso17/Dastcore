@@ -3,11 +3,10 @@
 Uses three identities backed by static session cookies against the local target:
 alice & bob (role user) and admin (role admin).
 """
+
 from __future__ import annotations
 
 from contextlib import AsyncExitStack
-
-import pytest
 
 from dastcore.config import AuthConfig, ScopeConfig
 from dastcore.core.http_client import HttpClient

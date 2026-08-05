@@ -4,6 +4,7 @@ Unit tests pin down the SessionManager state machine (apply precedence, epoch
 coalescing, relogin budget); integration tests drive real login flows against
 the local target and prove the crawler and scanner operate authenticated.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -24,6 +25,7 @@ def _resp(status: int = 401, text: str = "") -> HttpResponse:
 
 
 # --- unit: SessionManager state machine ------------------------------------------------
+
 
 def test_static_bearer_seeds_authorization_header() -> None:
     session = SessionManager(AuthConfig(type="bearer", bearer_token="abc123"))
@@ -63,6 +65,7 @@ def test_is_expired_supports_body_pattern() -> None:
 
 # --- integration: static cookie auth ---------------------------------------------------
 
+
 async def test_static_cookie_auth_reaches_protected_page(vuln_app_url: str) -> None:
     login = httpx.post(f"{vuln_app_url}/auth/form-login", json={"username": "carol", "password": "carol-pw"})
     sid = login.cookies["sid"]
@@ -76,6 +79,7 @@ async def test_static_cookie_auth_reaches_protected_page(vuln_app_url: str) -> N
 
 
 # --- integration: form login -----------------------------------------------------------
+
 
 def _form_session(vuln_app_url: str) -> SessionManager:
     return SessionManager(
@@ -116,6 +120,7 @@ async def test_form_login_wrong_credentials_fails(vuln_app_url: str) -> None:
 
 # --- integration: OAuth2 client credentials --------------------------------------------
 
+
 async def test_oauth2_establishes_bearer_and_reaches_profile(vuln_app_url: str) -> None:
     session = SessionManager(
         AuthConfig(
@@ -137,6 +142,7 @@ async def test_oauth2_establishes_bearer_and_reaches_profile(vuln_app_url: str) 
 
 
 # --- integration: automatic re-login on dropped session --------------------------------
+
 
 async def test_auto_relogin_after_session_dropped(vuln_app_url: str) -> None:
     session = _form_session(vuln_app_url)
@@ -172,6 +178,7 @@ async def test_relogin_budget_is_respected(vuln_app_url: str) -> None:
 
 
 # --- integration: crawler & scanner operate authenticated ------------------------------
+
 
 async def test_crawler_reaches_authenticated_only_pages(vuln_app_url: str) -> None:
     session = _form_session(vuln_app_url)

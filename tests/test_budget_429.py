@@ -1,8 +1,8 @@
 """Robustness: global scan budget (max requests / time) and HTTP 429 backoff."""
+
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
