@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from dastcore import __version__
 from dastcore.core.models import Finding
+from dastcore.report.correlation import correlate
 from dastcore.severity import SEVERITY_ORDER, severity_rank
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -57,6 +58,7 @@ def render_html(
     template = _env.get_template("report.html.j2")
     return template.render(
         findings=ordered,
+        issues=correlate(findings),
         grouped=_group_by_category(findings) if group_by_category else None,
         counts=_severity_counts(findings),
         total=len(findings),

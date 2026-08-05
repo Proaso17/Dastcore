@@ -63,6 +63,12 @@
   h2.category { font-size: 15px; margin: 26px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
   h2.category .count { color: var(--muted); font-weight: 400; font-size: 13px; }
   pre.repro { border-left: 3px solid var(--accent); }
+  table.issues { width: 100%; border-collapse: collapse; margin: 18px 0 8px; font-size: 13px; }
+  table.issues th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .5px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  table.issues td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.issues td.num { text-align: right; font-weight: 700; }
+  table.issues .rid { color: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -77,6 +83,7 @@
 
   <section class="summary">
     <div class="stat"><div class="n">{{ total }}</div><div class="l">Total</div></div>
+    <div class="stat"><div class="n">{{ issues|length }}</div><div class="l">Issues</div></div>
     {% for sev in severity_order %}
     <div class="stat">
       <div class="n dot-{{ sev }}">{{ counts[sev] }}</div>
@@ -84,6 +91,22 @@
     </div>
     {% endfor %}
   </section>
+
+  {% if issues %}
+  <table class="issues">
+    <thead><tr><th>Severidad</th><th>Issue</th><th>CWE / OWASP</th><th>Instancias</th></tr></thead>
+    <tbody>
+    {% for issue in issues %}
+      <tr>
+        <td><span class="badge b-{{ issue.severity }}">{{ issue.severity }}</span></td>
+        <td>{{ issue.name }} <code class="rid">{{ issue.rule_id }}</code></td>
+        <td>{{ issue.cwe }} · {{ issue.owasp }}</td>
+        <td class="num">{{ issue.count }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 
   {% macro finding_card(f) %}
     <article class="finding sev-{{ f.severity }}">

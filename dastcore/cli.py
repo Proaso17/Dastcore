@@ -53,6 +53,7 @@ from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 from dastcore.report import render_html, render_json, render_sarif
+from dastcore.report.correlation import correlate, deduplicate
 from dastcore.severity import meets_threshold
 
 # Distinct from operational-error exit code 1: findings met the --fail-on bar.
@@ -235,7 +236,7 @@ async def _run_demo_scan(base_url: str) -> list[Finding]:
         findings.extend(await probe_sensitive_files(client, base_url))
         chat = AiChatClient(client, f"{base_url}/ai/chat")
         findings.extend(await AiScanner(chat, load_ai_rules()).scan())
-    return findings
+    return deduplicate(findings)
 
 
 @app.command("demo")
@@ -480,14 +481,17 @@ class SessionLoginError(RuntimeError):
 
 
 def _print_findings_table(findings: list[Finding]) -> None:
-    table = Table(title=f"{len(findings)} hallazgo(s)")
+    """Correlated overview: one row per issue (rule) with its instance count."""
+    issues = correlate(findings)
+    table = Table(title=f"{len(findings)} hallazgo(s) · {len(issues)} issue(s)")
     table.add_column("Severidad")
-    table.add_column("Nombre")
-    table.add_column("Ubicación")
-    for finding in findings:
-        style = _SEVERITY_STYLE.get(finding.severity, "")
-        location = f"{finding.injection_point.location}:{finding.injection_point.name} @ {finding.request.url}"
-        table.add_row(f"[{style}]{finding.severity}[/{style}]", finding.name, location)
+    table.add_column("Issue")
+    table.add_column("Instancias", justify="right")
+    table.add_column("Ubicaciones")
+    for issue in issues:
+        style = _SEVERITY_STYLE.get(issue.severity, "")
+        locations = ", ".join(issue.locations[:3]) + (" …" if len(issue.locations) > 3 else "")
+        table.add_row(f"[{style}]{issue.severity}[/{style}]", issue.name, str(issue.count), locations)
     console.print(table)
 
 
@@ -745,6 +749,7 @@ def scan(
         console.print(f"\n[bold red]Error de red al escanear el objetivo:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
+    findings = deduplicate(findings)
     duration_s = time.monotonic() - started_at
 
     if output_format == "html":
@@ -795,6 +800,7 @@ def _emit_report_and_gate(
     group_by_category: bool = False,
 ) -> None:
     """Shared reporting/exit-gate used by `scan` and `ai`."""
+    findings = deduplicate(findings)
     if output_format == "html":
         report = render_html(findings, target=target, title=html_title, group_by_category=group_by_category)
     else:
