@@ -485,13 +485,20 @@ def _print_findings_table(findings: list[Finding]) -> None:
     issues = correlate(findings)
     table = Table(title=f"{len(findings)} hallazgo(s) · {len(issues)} issue(s)")
     table.add_column("Severidad")
+    table.add_column("CVSS", justify="right")
     table.add_column("Issue")
     table.add_column("Instancias", justify="right")
     table.add_column("Ubicaciones")
     for issue in issues:
         style = _SEVERITY_STYLE.get(issue.severity, "")
         locations = ", ".join(issue.locations[:3]) + (" …" if len(issue.locations) > 3 else "")
-        table.add_row(f"[{style}]{issue.severity}[/{style}]", issue.name, str(issue.count), locations)
+        table.add_row(
+            f"[{style}]{issue.severity}[/{style}]",
+            f"{issue.cvss_score:.1f}",
+            issue.name,
+            str(issue.count),
+            locations,
+        )
     console.print(table)
 
 

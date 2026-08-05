@@ -4,6 +4,7 @@ family: host_header
 severity: medium
 cwe: CWE-644
 owasp: WSTG-INPV-17
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
 inject_into: [header]
 payloads:
   - "dastcore-host-probe.invalid"

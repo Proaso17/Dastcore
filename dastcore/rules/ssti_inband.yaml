@@ -4,6 +4,7 @@ family: ssti
 severity: high
 cwe: CWE-1336
 owasp: WSTG-INPV-18
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 inject_into: [query, body, json]
 payloads:
   # A distinctive product (1337*1337 = 1787569) is far less likely to appear by

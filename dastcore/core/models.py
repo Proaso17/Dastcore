@@ -120,9 +120,26 @@ class Finding(BaseModel):
     request: HttpRequest
     response: HttpResponse
     remediation: str
+    cvss: str | None = None  # explicit CVSS 3.1 base vector; falls back to a severity default
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def repro_curl(self) -> str:
         """A ready-to-run curl reproducing the request that triggered this finding."""
         return self.request.to_curl()
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cvss_vector(self) -> str:
+        """The resolved CVSS 3.1 vector (explicit rule vector, else a severity default)."""
+        from dastcore.cvss import default_vector
+
+        return self.cvss or default_vector(self.severity)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cvss_score(self) -> float:
+        """The CVSS 3.1 base score (0.0–10.0) for this finding."""
+        from dastcore.cvss import base_score
+
+        return base_score(self.cvss_vector)

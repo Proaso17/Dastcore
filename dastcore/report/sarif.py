@@ -13,7 +13,7 @@ import re
 
 from dastcore import __version__
 from dastcore.core.models import Finding
-from dastcore.severity import sarif_level, security_severity_score
+from dastcore.severity import sarif_level
 
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 SARIF_VERSION = "2.1.0"
@@ -47,7 +47,8 @@ def _build_rule(finding: Finding) -> dict:
         "properties": {
             "cwe": finding.cwe,
             "owasp": finding.owasp,
-            "security-severity": security_severity_score(finding.severity),
+            # GitHub code scanning reads this 0–10 number: use the real CVSS base score.
+            "security-severity": f"{finding.cvss_score:.1f}",
             "tags": ["security", finding.cwe, finding.owasp],
         },
     }
@@ -77,7 +78,9 @@ def _build_result(finding: Finding) -> dict:
             "cwe": finding.cwe,
             "owasp": finding.owasp,
             "severity": finding.severity,
-            "security-severity": security_severity_score(finding.severity),
+            "security-severity": f"{finding.cvss_score:.1f}",
+            "cvss": finding.cvss_vector,
+            "cvss_score": finding.cvss_score,
             "evidence": [ev.model_dump(mode="json") for ev in finding.evidence],
             "repro": finding.request.to_curl(),
         },

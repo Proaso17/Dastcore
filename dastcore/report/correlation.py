@@ -38,6 +38,7 @@ class IssueGroup:
     severity: Severity
     cwe: str
     owasp: str
+    cvss_score: float = 0.0
     count: int = 0
     locations: list[str] = field(default_factory=list)
 
@@ -60,6 +61,7 @@ def correlate(findings: list[Finding]) -> list[IssueGroup]:
                 severity=finding.severity,
                 cwe=finding.cwe,
                 owasp=finding.owasp,
+                cvss_score=finding.cvss_score,
             )
             groups[finding.rule_id] = group
         group.count += 1

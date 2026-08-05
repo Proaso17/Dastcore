@@ -68,6 +68,7 @@ class AiRule(BaseModel):
     accumulate: bool = False  # evaluate the joined transcript of a multi-turn conversation
     confirm_reproducible: bool = True
     remediation: str
+    cvss: str | None = None
 
 
 def _wrap_wordlist_line(line: str) -> str:
@@ -255,6 +256,7 @@ class AiScanner:
                 request=request,
                 response=response,
                 remediation=rule.remediation,
+                cvss=rule.cvss,
             )
         return None
 

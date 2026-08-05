@@ -4,6 +4,7 @@ family: open_redirect
 severity: medium
 cwe: CWE-601
 owasp: WSTG-CLNT-04
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:N/A:N"
 inject_into: [query]
 payloads:
   - "https://dastcore-redirect-probe.invalid/"

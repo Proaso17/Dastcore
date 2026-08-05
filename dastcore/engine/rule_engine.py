@@ -32,6 +32,7 @@ class Rule(BaseModel):
     oracle: OracleSpec
     confirm_reproducible: bool = True
     remediation: str
+    cvss: str | None = None
 
     @property
     def is_oob(self) -> bool:

@@ -4,6 +4,7 @@ family: rce
 severity: critical
 cwe: CWE-502
 owasp: WSTG-INPV-11
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
 # Logging frameworks commonly log request headers, so injecting there matters as
 # much as body/query — this is exactly how CVE-2021-44228 was triggered.
 inject_into: [query, body, json, header]

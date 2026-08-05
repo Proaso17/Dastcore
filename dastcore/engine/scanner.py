@@ -254,4 +254,5 @@ class Scanner:
             request=request,
             response=response,
             remediation=rule.remediation,
+            cvss=rule.cvss,
         )

@@ -4,6 +4,7 @@ family: crlf
 severity: medium
 cwe: CWE-93
 owasp: WSTG-INPV-16
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
 inject_into: [query]
 payloads:
   # URL-encoded CRLF that smuggles a Location header when the server reflects the

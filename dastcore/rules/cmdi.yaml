@@ -4,6 +4,7 @@ family: cmdi
 severity: critical
 cwe: CWE-78
 owasp: WSTG-INPV-12
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 inject_into: [query, body, json]
 payloads:
   - ";curl http://{{oast_domain}}/;"

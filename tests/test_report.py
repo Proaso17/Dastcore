@@ -156,7 +156,8 @@ def test_sarif_result_carries_level_cwe_and_security_severity() -> None:
     result = doc["runs"][0]["results"][0]
     assert result["level"] == "error"  # high -> error
     assert result["properties"]["cwe"] == "CWE-79"
-    assert result["properties"]["security-severity"] == "8.0"
+    # security-severity is now the real CVSS score (high default vector -> 7.5)
+    assert result["properties"]["security-severity"] == "7.5"
 
 
 def test_sarif_rule_help_uri_points_to_cwe() -> None:

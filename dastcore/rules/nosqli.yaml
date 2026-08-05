@@ -4,6 +4,7 @@ family: nosqli
 severity: high
 cwe: CWE-943
 owasp: WSTG-INPV-05
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
 inject_into: [query, body, json]
 payloads:
   - "'"

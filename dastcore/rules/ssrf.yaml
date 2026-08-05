@@ -4,6 +4,7 @@ family: ssrf
 severity: high
 cwe: CWE-918
 owasp: WSTG-INPV-19
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
 inject_into: [query, body, json]
 payloads:
   - "{{oast_url}}"

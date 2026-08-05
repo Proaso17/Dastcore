@@ -4,6 +4,7 @@ family: ssti
 severity: high
 cwe: CWE-1336
 owasp: WSTG-INPV-18
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 inject_into: [query, body, json]
 payloads:
   # Jinja2/Twig-style expression that triggers an outbound fetch when evaluated server-side.

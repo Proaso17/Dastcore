@@ -4,6 +4,7 @@ family: xss
 severity: high
 cwe: CWE-79
 owasp: WSTG-INPV-01
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
 inject_into: [query, body, json]
 payloads:
   - "<script>alert(1)</script>"
