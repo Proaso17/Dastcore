@@ -55,18 +55,25 @@ py -m venv .venv
 .venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --profile full -f sarif -o out.sarif --fail-on high
 ```
 
-Probar un chatbot / LLM (OWASP LLM Top 10):
+Probar un chatbot / LLM (OWASP LLM Top 10). Con **presets de proveedor** no hace falta configurar nada:
 
 ```powershell
-# Endpoint simple {"message": "..."} -> {"reply": "..."}
-.venv\Scripts\dastcore ai https://tu-bot.example/chat --i-have-authorization
+# OpenAI (y compatibles: vLLM, LM Studio, Groq, Together, Mistral, DeepSeek…)
+.venv\Scripts\dastcore ai https://api.openai.com/v1/chat/completions --i-have-authorization `
+  --ai-preset openai --ai-model gpt-4o-mini --ai-key "sk-..."
 
-# Formato OpenAI-style (plantilla de body + dot-path a la respuesta)
-.venv\Scripts\dastcore ai https://api.example/v1/chat/completions --i-have-authorization `
-  --auth-bearer "sk-..." `
-  --ai-template '{"model":"gpt-4o","messages":[{"role":"user","content":"{{prompt}}"}]}' `
-  --ai-response-path choices.0.message.content
+# Anthropic
+.venv\Scripts\dastcore ai https://api.anthropic.com/v1/messages --i-have-authorization `
+  --ai-preset anthropic --ai-model claude-3-5-sonnet-latest --ai-key "sk-ant-..."
+
+# Ollama local (sin auth)
+.venv\Scripts\dastcore ai http://localhost:11434/api/chat --i-have-authorization --ai-preset ollama --ai-model llama3
+
+# Endpoint propio {"message": "..."} -> {"reply": "..."} (sin preset)
+.venv\Scripts\dastcore ai https://tu-bot.example/chat --i-have-authorization
 ```
+
+Presets disponibles: `openai`, `azure-openai`, `anthropic`, `ollama`, `cohere`, `huggingface`, `gemini`. Para APIs no listadas, `--ai-template` (con `{{prompt}}` o `{{messages}}`) + `--ai-response-path` cubren cualquier forma.
 
 Documentación: [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · [`examples/github-action.yml`](examples/github-action.yml) (CI/CD).
 

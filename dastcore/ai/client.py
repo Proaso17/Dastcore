@@ -97,8 +97,11 @@ class AiChatClient:
         messages: list[dict] | None = None,
     ) -> dict | list:
         if self._template:
-            if "{{messages}}" in self._template and messages is not None:
-                return json.loads(self._template.replace("{{messages}}", json.dumps(messages)))
+            if "{{messages}}" in self._template:
+                # A single prompt is wrapped into a one-message array, so a {{messages}}
+                # template works for both single-turn and multi-turn.
+                msgs = messages if messages is not None else [{"role": "user", "content": message}]
+                return json.loads(self._template.replace("{{messages}}", json.dumps(msgs)))
             escaped = json.dumps(message)[1:-1]  # JSON-escape so quotes/newlines don't break it
             return json.loads(self._template.replace("{{prompt}}", escaped))
         body: dict = {self._prompt_field: message}

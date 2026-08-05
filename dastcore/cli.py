@@ -26,6 +26,7 @@ from rich.table import Table
 from dastcore import __version__
 from dastcore.ai.client import AiChatClient
 from dastcore.ai.engine import AiScanner, load_ai_rules
+from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.config import (
     AuthConfig,
     FormLoginConfig,
@@ -767,19 +768,21 @@ def _emit_report_and_gate(
 
 
 async def _run_ai_scan(
-    config: ScanConfig, target: str, prompt_field: str, template: str, response_path: str
+    config: ScanConfig,
+    target: str,
+    prompt_field: str,
+    template: str,
+    response_path: str,
+    headers: dict[str, str],
 ) -> list[Finding]:
-    session = SessionManager(config.auth) if config.auth.type != "none" else None
-    async with HttpClient(config.scope, rate_limit=config.rate_limit, session=session) as client:
-        if session is not None and session.can_relogin:
-            if not await session.ensure_logged_in(client, initial=True):
-                raise SessionLoginError("El login inicial falló: revisa credenciales.")
+    async with HttpClient(config.scope, rate_limit=config.rate_limit) as client:
         chat = AiChatClient(
             client,
             target,
             prompt_field=prompt_field,
             template=template or None,
             response_path=response_path or None,
+            headers=headers or None,
         )
         return await AiScanner(chat, load_ai_rules()).scan()
 
@@ -790,14 +793,19 @@ def ai(
     i_have_authorization: bool = typer.Option(
         False, "--i-have-authorization", help="Confirma que tienes autorización para probar el objetivo."
     ),
+    preset: str = typer.Option(
+        "", "--ai-preset", help=f"Preset de proveedor: {' | '.join(AI_PRESETS)}. Configura template/response/headers."
+    ),
+    model: str = typer.Option("", "--ai-model", help="Modelo a usar con el preset (p.ej. gpt-4o-mini, llama3)."),
+    api_key: str = typer.Option("", "--ai-key", help="API key del proveedor (se coloca en la cabecera del preset)."),
     prompt_field: str = typer.Option(
-        "message", "--ai-prompt-field", help="Campo JSON donde va el prompt del usuario (si no usas --ai-template)."
+        "message", "--ai-prompt-field", help="Campo JSON del prompt (si no usas preset ni --ai-template)."
     ),
     template: str = typer.Option(
-        "", "--ai-template", help='Plantilla JSON del body con {{prompt}}, p.ej. \'{"messages":[{"role":"user","content":"{{prompt}}"}]}\'.'
+        "", "--ai-template", help='Plantilla JSON del body con {{prompt}} o {{messages}} (anula el preset).'
     ),
     response_path: str = typer.Option(
-        "", "--ai-response-path", help="Dot-path al texto de respuesta, p.ej. choices.0.message.content (auto si se omite)."
+        "", "--ai-response-path", help="Dot-path al texto de respuesta (anula el preset; auto si se omite)."
     ),
     auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer / API key (cabecera Authorization)."),
     auth_header: list[str] = typer.Option([], "--auth-header", help="Cabecera estática 'Nombre=valor' (repetible)."),
@@ -808,8 +816,9 @@ def ai(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Silencia la salida decorativa; solo emite el reporte."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Log de cada petición HTTP (DEBUG)."),
 ) -> None:
-    """Probar un chatbot / LLM (OWASP LLM Top 10): prompt injection, jailbreak, fuga de
-    system prompt, divulgación de secretos y manejo inseguro de la salida."""
+    """Probar un chatbot / LLM (OWASP LLM Top 10): prompt injection (directa/indirecta),
+    jailbreak, crescendo multi-turno, fuga de system prompt, secretos/PII, excessive
+    agency, output inseguro y denial of wallet. Usa --ai-preset para OpenAI/Anthropic/Ollama/…"""
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not quiet:
         _print_banner()
@@ -827,32 +836,39 @@ def ai(
         console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r}.")
         raise typer.Exit(code=1)
 
+    headers: dict[str, str] = {}
+    if preset:
+        preset = preset.lower()
+        if preset not in AI_PRESETS:
+            console.print(f"[bold red]--ai-preset inválido:[/bold red] {preset!r} (usa {' | '.join(AI_PRESETS)}).")
+            raise typer.Exit(code=1)
+        preset_template, preset_response, preset_headers = resolve_preset(preset, model=model, api_key=api_key)
+        template = template or preset_template
+        response_path = response_path or preset_response
+        headers.update(preset_headers)
+    if auth_bearer:
+        headers["Authorization"] = f"Bearer {auth_bearer}"
     try:
-        auth = _build_auth_config(
-            auth_cookie=[], auth_header=auth_header, auth_bearer=auth_bearer, login_url="", login_field=[],
-            oauth_token_url="", oauth_client_id="", oauth_client_secret="", oauth_scope="",
-        )
+        headers.update(_parse_kv_list(auth_header, "--auth-header"))
         config = ScanConfig(
             target=target,  # type: ignore[arg-type]
-            auth=auth,
             rate_limit=RateLimitConfig(requests_per_second=requests_per_second),
             output=OutputConfig(format=output_format, path=output_path or None),
             i_have_authorization=i_have_authorization,
         )
-    except ValidationError as exc:
+    except (ValidationError, typer.BadParameter) as exc:
         console.print(f"[bold red]Configuración inválida:[/bold red]\n{exc}")
         raise typer.Exit(code=1) from exc
 
     if not quiet:
         console.print(f"\n[green]Autorización confirmada.[/green] Endpoint IA: [bold]{config.target}[/bold]")
+        if preset:
+            console.print(f"Preset: [bold]{preset}[/bold]" + (f" · modelo [bold]{model}[/bold]" if model else ""))
         console.print("Ejecutando ataques LLM (OWASP LLM Top 10)…\n")
 
     started_at = time.monotonic()
     try:
-        findings = asyncio.run(_run_ai_scan(config, str(config.target), prompt_field, template, response_path))
-    except SessionLoginError as exc:
-        console.print(f"\n[bold red]Error de autenticación:[/bold red] {exc}")
-        raise typer.Exit(code=1) from exc
+        findings = asyncio.run(_run_ai_scan(config, str(config.target), prompt_field, template, response_path, headers))
     except httpx.HTTPError as exc:
         console.print(f"\n[bold red]Error de red al contactar el endpoint IA:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc

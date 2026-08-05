@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 
 from dastcore.ai.client import AiChatClient, extract_response_text
 from dastcore.ai.engine import AiScanner, load_ai_rules
+from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.cli import app
 from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
@@ -113,6 +114,48 @@ async def test_no_llm_findings_on_secure_bot(vuln_app_url: str) -> None:
     """The hardened bot refuses every probe — zero findings (no false positives)."""
     findings = await _scan(f"{vuln_app_url}/ai/chat-secure")
     assert findings == []
+
+
+# --- provider presets ------------------------------------------------------------------
+
+def test_preset_resolution() -> None:
+    assert set(AI_PRESETS) >= {"openai", "anthropic", "ollama", "huggingface", "gemini", "cohere"}
+    template, path, headers = resolve_preset("openai", model="gpt-4o-mini", api_key="sk-x")
+    assert '"model":"gpt-4o-mini"' in template and "{{messages}}" in template
+    assert path == "choices.0.message.content"
+    assert headers == {"Authorization": "Bearer sk-x"}
+
+    _, apath, aheaders = resolve_preset("anthropic", api_key="ak")
+    assert apath == "content.0.text"
+    assert aheaders["x-api-key"] == "ak" and aheaders["anthropic-version"] == "2023-06-01"
+
+
+async def test_openai_preset_end_to_end(vuln_app_url: str) -> None:
+    """The openai preset template ({{messages}}) drives the OpenAI-shaped fixture."""
+    template, response_path, _ = resolve_preset("openai", model="gpt-4o-mini")
+    async with HttpClient(_SCOPE) as client:
+        chat = AiChatClient(client, f"{vuln_app_url}/ai/chat-openai", template=template, response_path=response_path)
+        findings = await AiScanner(chat, load_ai_rules()).scan()
+    ids = {f.rule_id for f in findings}
+    assert "llm-prompt-injection" in ids
+    assert "llm-crescendo-jailbreak" in ids  # multi-turn works via the {{messages}} history
+
+
+def test_ai_command_with_preset(vuln_app_url: str) -> None:
+    result = runner.invoke(
+        app,
+        ["ai", f"{vuln_app_url}/ai/chat-openai", "--i-have-authorization", "--ai-preset", "openai",
+         "--ai-model", "gpt-4o-mini", "--rps", "50", "--fail-on", "none"],
+    )
+    assert result.exit_code == 0
+    assert "Preset: openai" in result.stdout
+    assert "Prompt Injection" in result.stdout
+
+
+def test_ai_command_rejects_bad_preset(vuln_app_url: str) -> None:
+    result = runner.invoke(app, ["ai", f"{vuln_app_url}/ai/chat", "--i-have-authorization", "--ai-preset", "gpt5"])
+    assert result.exit_code == 1
+    assert "--ai-preset inválido" in result.stdout
 
 
 async def test_openai_style_shape_via_template_and_path(vuln_app_url: str) -> None:
