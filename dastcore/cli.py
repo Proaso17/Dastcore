@@ -55,6 +55,7 @@ from dastcore.engine.scanner import Scanner
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate, deduplicate
 from dastcore.severity import meets_threshold
+from dastcore.suppressions import Suppression, apply_suppressions, resolve_suppressions
 
 # Distinct from operational-error exit code 1: findings met the --fail-on bar.
 EXIT_FINDINGS_OVER_THRESHOLD = 2
@@ -217,6 +218,22 @@ def _print_summary(findings: list[Finding], duration_s: float) -> None:
             title="Resumen del escaneo",
             border_style="cyan",
         )
+    )
+
+
+def _load_suppressions_or_exit(explicit_path: str) -> list[Suppression]:
+    """Resolve triage suppressions, turning any error into a clean CLI abort."""
+    try:
+        return resolve_suppressions(explicit_path)
+    except (OSError, ValueError, ValidationError) as exc:
+        console.print(f"[bold red]--suppress inválido:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+def _print_suppressed_note(suppressed: list[Finding]) -> None:
+    console.print(
+        f"\n[dim]{len(suppressed)} hallazgo(s) suprimido(s) por triaje (.dastcore-ignore): "
+        "excluidos del gate --fail-on; siguen en JSON/SARIF marcados como aceptados.[/dim]"
     )
 
 
@@ -567,6 +584,12 @@ def scan(
         help="Umbral de severidad que hace fallar el proceso (exit 2) para CI/CD: "
         "info | low | medium | high | critical | none.",
     ),
+    suppress: str = typer.Option(
+        "",
+        "--suppress",
+        help="Archivo de triaje (falsos positivos / riesgos aceptados). "
+        "Si se omite, se auto-detecta .dastcore-ignore en el directorio actual.",
+    ),
     auth_cookie: list[str] = typer.Option([], "--auth-cookie", help="Cookie estática 'nombre=valor' (repetible)."),
     auth_header: list[str] = typer.Option([], "--auth-header", help="Cabecera estática 'Nombre=valor' (repetible)."),
     auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer estático (cabecera Authorization)."),
@@ -653,6 +676,8 @@ def scan(
     if fail_on not in valid_fail_on:
         console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r} (usa {' | '.join(valid_fail_on)}).")
         raise typer.Exit(code=1)
+
+    suppressions = _load_suppressions_or_exit(suppress)
 
     identities: list[Identity] = []
     if roles_file:
@@ -756,42 +781,16 @@ def scan(
         console.print(f"\n[bold red]Error de red al escanear el objetivo:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    findings = deduplicate(findings)
-    duration_s = time.monotonic() - started_at
-
-    if output_format == "html":
-        report = render_html(findings, target=str(config.target))
-    else:
-        report = _RENDERERS[output_format](findings)
-
-    if not quiet:
-        console.print()
-        _print_findings_table(findings)
-        _print_summary(findings, duration_s)
-
-    if config.output.path:
-        Path(config.output.path).write_text(report, encoding="utf-8")
-        info(f"\n[green]Reporte {output_format.upper()} escrito en {config.output.path}[/green]")
-    elif output_format == "html" and not quiet:
-        console.print(
-            "\n[yellow]El reporte HTML es extenso; usa[/yellow] [bold]-o reporte.html[/bold] "
-            "[yellow]para guardarlo en un archivo.[/yellow]"
-        )
-        print(report)
-    else:
-        # In quiet mode, emit only the raw report to stdout (clean for piping).
-        if not quiet:
-            console.print(f"\n[bold]{output_format.upper()}:[/bold]")
-        print(report)
-
-    if fail_on != "none":
-        blocking = [f for f in findings if meets_threshold(f.severity, fail_on)]  # type: ignore[arg-type]
-        if blocking:
-            console.print(
-                f"\n[bold red]{len(blocking)} hallazgo(s) con severidad >= {fail_on}.[/bold red] "
-                f"Saliendo con código {EXIT_FINDINGS_OVER_THRESHOLD} (--fail-on)."
-            )
-            raise typer.Exit(code=EXIT_FINDINGS_OVER_THRESHOLD)
+    _emit_report_and_gate(
+        findings,
+        output_format=output_format,
+        output_path=config.output.path or "",
+        fail_on=fail_on,
+        quiet=quiet,
+        target=str(config.target),
+        duration_s=time.monotonic() - started_at,
+        suppressions=suppressions,
+    )
 
 
 def _emit_report_and_gate(
@@ -805,18 +804,31 @@ def _emit_report_and_gate(
     duration_s: float,
     html_title: str = "dastcore — Dynamic Security Report",
     group_by_category: bool = False,
+    suppressions: list[Suppression] | None = None,
 ) -> None:
-    """Shared reporting/exit-gate used by `scan` and `ai`."""
+    """Shared reporting/exit-gate used by `scan` and `ai`.
+
+    Suppressed findings (triaged via `.dastcore-ignore`) stay in the machine-readable
+    JSON/SARIF as an audit trail but drop out of the human console/HTML views and never
+    trip the `--fail-on` gate.
+    """
     findings = deduplicate(findings)
+    apply_suppressions(findings, suppressions or [])
+    active = [f for f in findings if not f.suppressed]
+    suppressed = [f for f in findings if f.suppressed]
+
     if output_format == "html":
-        report = render_html(findings, target=target, title=html_title, group_by_category=group_by_category)
+        report = render_html(active, target=target, title=html_title, group_by_category=group_by_category)
     else:
+        # JSON/SARIF carry every finding; suppressed ones are flagged in place.
         report = _RENDERERS[output_format](findings)
 
     if not quiet:
         console.print()
-        _print_findings_table(findings)
-        _print_summary(findings, duration_s)
+        _print_findings_table(active)
+        _print_summary(active, duration_s)
+        if suppressed:
+            _print_suppressed_note(suppressed)
 
     if output_path:
         Path(output_path).write_text(report, encoding="utf-8")
@@ -828,7 +840,7 @@ def _emit_report_and_gate(
         print(report)
 
     if fail_on != "none":
-        blocking = [f for f in findings if meets_threshold(f.severity, fail_on)]  # type: ignore[arg-type]
+        blocking = [f for f in active if meets_threshold(f.severity, fail_on)]  # type: ignore[arg-type]
         if blocking:
             console.print(
                 f"\n[bold red]{len(blocking)} hallazgo(s) con severidad >= {fail_on}.[/bold red] "
@@ -898,6 +910,9 @@ def ai(
     output_format: str = typer.Option("json", "--format", "-f", help="Formato del reporte: json | sarif | html."),
     output_path: str = typer.Option("", "--output", "-o", help="Ruta de archivo para el reporte."),
     fail_on: str = typer.Option("high", "--fail-on", help="Umbral que hace fallar el proceso (exit 2): ... | none."),
+    suppress: str = typer.Option(
+        "", "--suppress", help="Archivo de triaje (auto-detecta .dastcore-ignore si se omite)."
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Silencia la salida decorativa; solo emite el reporte."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Log de cada petición HTTP (DEBUG)."),
 ) -> None:
@@ -922,6 +937,8 @@ def ai(
     if fail_on not in ("info", "low", "medium", "high", "critical", "none"):
         console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r}.")
         raise typer.Exit(code=1)
+
+    suppressions = _load_suppressions_or_exit(suppress)
 
     # Load an optional endpoint-shape config file; explicit CLI flags win over it.
     ai_file: dict = {}
@@ -1007,6 +1024,7 @@ def ai(
         duration_s=time.monotonic() - started_at,
         html_title="dastcore — LLM Security Report (OWASP LLM Top 10)",
         group_by_category=True,
+        suppressions=suppressions,
     )
 
 

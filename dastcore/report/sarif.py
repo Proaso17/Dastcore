@@ -60,7 +60,7 @@ def _build_result(finding: Finding) -> dict:
         f"{finding.name} at [{point.location}] parameter '{point.name}' "
         f"of {finding.request.method} {finding.request.url}. Evidence: {_evidence_text(finding)}."
     )
-    return {
+    result: dict = {
         "ruleId": finding.rule_id,
         "level": sarif_level(finding.severity),
         "message": {"text": message},
@@ -85,6 +85,12 @@ def _build_result(finding: Finding) -> dict:
             "repro": finding.request.to_curl(),
         },
     }
+    if finding.suppressed:
+        # GitHub code scanning reads this to show the alert as dismissed, not open.
+        result["suppressions"] = [
+            {"kind": "external", "justification": finding.suppression_reason or "suppressed via .dastcore-ignore"}
+        ]
+    return result
 
 
 def build_sarif(findings: list[Finding]) -> dict:

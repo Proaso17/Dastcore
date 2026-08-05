@@ -121,6 +121,8 @@ class Finding(BaseModel):
     response: HttpResponse
     remediation: str
     cvss: str | None = None  # explicit CVSS 3.1 base vector; falls back to a severity default
+    suppressed: bool = False  # triaged as accepted/false-positive via a .dastcore-ignore rule
+    suppression_reason: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

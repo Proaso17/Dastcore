@@ -294,9 +294,23 @@ La Fase 4 entrega los reportes y la integración CI/CD:
 - CLI:
   - `--format json|sarif|html` (`-f`) y `--output/-o archivo` (por defecto stdout).
   - `--fail-on info|low|medium|high|critical|none` (por defecto `high`): si hay algún hallazgo con severidad `>=` al umbral, el proceso **sale con código 2** (distinto del 1 de errores operativos), ideal para romper un pipeline CI/CD. `none` desactiva el gate.
+  - `--suppress archivo` (o auto-detección de `.dastcore-ignore` en el directorio): triaje de falsos positivos / riesgos aceptados. Un hallazgo suprimido **no rompe el gate `--fail-on`** ni aparece en la consola/HTML, pero **sigue en el JSON/SARIF** marcado (en SARIF con `suppressions`, de modo que GitHub code scanning lo muestra como *dismissed* en vez de abierto). Cada regla filtra por `id` exacto, `rule_id` exacto y/o `url` (glob), combinables (deben cumplirse todas), con `reason` y `expires` opcionales (una regla caducada deja de aplicar, para que un triaje viejo no oculte regresiones para siempre):
+
+```yaml
+# .dastcore-ignore
+suppressions:
+  - rule_id: passive-missing-x-content-type-options
+    reason: "Aceptado: lo fija el CDN en el edge"
+  - id: "xss-reflected:GET:/legacy:query:q"
+    reason: "Falso positivo conocido en el endpoint legacy"
+  - rule_id: xss-reflected
+    url: "*/legacy/*"
+    reason: "Ruta legacy fuera de alcance"
+    expires: 2026-12-31
+```
 
 ```powershell
-.venv\Scripts\pytest tests/test_report.py tests/test_cli.py -v
+.venv\Scripts\pytest tests/test_report.py tests/test_cli.py tests/test_suppressions.py -v
 ```
 
 Generar reportes contra el target local (arranca primero el target: `.venv\Scripts\python -c "from tests.targets.vuln_app.app import create_app; create_app().run(port=5000)"`):
