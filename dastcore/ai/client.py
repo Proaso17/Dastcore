@@ -63,6 +63,38 @@ def extract_response_text(payload: object, response_path: str | None) -> str | N
     return None
 
 
+# Delta fields tried per streamed chunk when no explicit stream path is given.
+_AUTO_STREAM_PATHS = ("choices.0.delta.content", "message.content", "choices.0.text", "delta.content", "response")
+
+
+def reassemble_stream(body: str, stream_path: str | None) -> str:
+    """Reassemble a streamed answer from an SSE (`data: {...}`) or NDJSON response body.
+
+    Each chunk carries an incremental delta (e.g. OpenAI `choices.0.delta.content`,
+    Ollama `message.content`); the pieces are concatenated in order.
+    """
+    paths = [stream_path] if stream_path else list(_AUTO_STREAM_PATHS)
+    parts: list[str] = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("data:"):
+            line = line[len("data:"):].strip()
+        if line in ("[DONE]", ""):
+            continue
+        try:
+            chunk = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for path in paths:
+            value = _walk_path(chunk, path)
+            if isinstance(value, str):
+                parts.append(value)
+                break
+    return "".join(parts)
+
+
 class AiChatClient:
     """Sends prompts to a chat endpoint and returns the model's text answer."""
 
@@ -77,6 +109,8 @@ class AiChatClient:
         conversation_field: str = "conversation_id",
         method: str = "POST",
         headers: dict[str, str] | None = None,
+        stream: bool = False,
+        stream_path: str | None = None,
     ) -> None:
         self._http = http_client
         self._url = url
@@ -86,6 +120,8 @@ class AiChatClient:
         self._conversation_field = conversation_field
         self._method = method.upper()
         self._headers = headers or {}
+        self._stream = stream
+        self._stream_path = stream_path
 
     def _build_body(
         self,
@@ -112,12 +148,16 @@ class AiChatClient:
         return body
 
     def _request(self, body: dict | list) -> HttpRequest:
+        if self._stream and isinstance(body, dict) and "stream" not in body:
+            body = {**body, "stream": True}  # ask the provider to stream (OpenAI/Ollama style)
         return HttpRequest(method=self._method, url=self._url, headers=dict(self._headers), json_body=body)  # type: ignore[arg-type]
 
     async def _send(self, request: HttpRequest) -> tuple[str, HttpRequest, HttpResponse]:
         response = await self._http.request(
             request.method, request.url, headers=request.headers or None, json=request.json_body
         )
+        if self._stream:
+            return reassemble_stream(response.text, self._stream_path), request, response
         try:
             payload = json.loads(response.text)
         except (json.JSONDecodeError, ValueError):

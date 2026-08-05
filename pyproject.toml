@@ -5,11 +5,38 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dastcore"
 version = "0.1.0"
-description = "Dynamic Application Security Testing (DAST) scanner — dynamic twin of sastcore"
+description = "Dynamic Application Security Testing (DAST) scanner for web, APIs and LLM/AI chatbots"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "dastcore contributors" }]
+keywords = [
+    "dast",
+    "security",
+    "pentest",
+    "scanner",
+    "web-security",
+    "api-security",
+    "sarif",
+    "owasp",
+    "llm-security",
+    "ai-security",
+    "prompt-injection",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
 
 dependencies = [
     "httpx>=0.27.0",
@@ -33,6 +60,11 @@ dev = [
     "playwright>=1.42.0",
     "cryptography>=42.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Proaso17/Dastcore"
+Repository = "https://github.com/Proaso17/Dastcore"
+Issues = "https://github.com/Proaso17/Dastcore/issues"
 
 [project.scripts]
 dastcore = "dastcore.cli:app"

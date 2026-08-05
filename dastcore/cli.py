@@ -225,6 +225,56 @@ def version_cmd() -> None:
     console.print(f"dastcore [bold]{__version__}[/bold]")
 
 
+async def _run_demo_scan(base_url: str) -> list[Finding]:
+    scope = ScopeConfig(allow_domains=["127.0.0.1"])
+    findings: list[Finding] = []
+    async with HttpClient(scope) as client:
+        discovered = await HttpCrawler(client).crawl(base_url)
+        findings.extend(await Scanner(client, load_rules(), concurrency=5).scan(discovered))
+        findings.extend(await probe_sensitive_files(client, base_url))
+        chat = AiChatClient(client, f"{base_url}/ai/chat")
+        findings.extend(await AiScanner(chat, load_ai_rules()).scan())
+    return findings
+
+
+@app.command("demo")
+def demo(
+    output_path: str = typer.Option("", "--output", "-o", help="Guarda un reporte HTML del demo."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Solo el resumen."),
+) -> None:
+    """Lanza un objetivo vulnerable incluido y lo escanea (web + IA) para probar dastcore al instante."""
+    from dastcore.demo.app import start_demo_target
+
+    if not quiet:
+        console.print(
+            Panel(
+                "Escaneando un objetivo vulnerable [bold]incluido en dastcore[/bold] (localhost).\n"
+                "Sirve para ver resultados al instante, sin tener un objetivo propio.",
+                title="dastcore demo",
+                border_style="cyan",
+            )
+        )
+    server, base_url = start_demo_target()
+    started_at = time.monotonic()
+    try:
+        console.print(f"\n[yellow]Objetivo demo en[/yellow] [bold]{base_url}[/bold] · escaneando (web + IA)…\n")
+        findings = asyncio.run(_run_demo_scan(base_url))
+    finally:
+        server.shutdown()
+
+    _print_findings_table(findings)
+    _print_summary(findings, time.monotonic() - started_at)
+    if output_path:
+        Path(output_path).write_text(
+            render_html(findings, target=base_url, title="dastcore demo report"), encoding="utf-8"
+        )
+        console.print(f"\n[green]Reporte HTML escrito en {output_path}[/green]")
+    console.print(
+        "\n[dim]Prueba contra tu objetivo:[/dim] dastcore scan <URL> --i-have-authorization  ·  "
+        "dastcore ai <URL-chat> --i-have-authorization"
+    )
+
+
 def _parse_kv_list(pairs: list[str], flag_name: str) -> dict[str, str]:
     parsed: dict[str, str] = {}
     for pair in pairs:
@@ -736,10 +786,12 @@ def _emit_report_and_gate(
     quiet: bool,
     target: str,
     duration_s: float,
+    html_title: str = "dastcore — Dynamic Security Report",
+    group_by_category: bool = False,
 ) -> None:
     """Shared reporting/exit-gate used by `scan` and `ai`."""
     if output_format == "html":
-        report = render_html(findings, target=target)
+        report = render_html(findings, target=target, title=html_title, group_by_category=group_by_category)
     else:
         report = _RENDERERS[output_format](findings)
 
@@ -775,6 +827,8 @@ async def _run_ai_scan(
     response_path: str,
     headers: dict[str, str],
     wordlist: str,
+    stream: bool,
+    stream_path: str,
 ) -> list[Finding]:
     async with HttpClient(config.scope, rate_limit=config.rate_limit) as client:
         chat = AiChatClient(
@@ -784,6 +838,8 @@ async def _run_ai_scan(
             template=template or None,
             response_path=response_path or None,
             headers=headers or None,
+            stream=stream,
+            stream_path=stream_path or None,
         )
         rules = load_ai_rules(extra_wordlist=Path(wordlist) if wordlist else None)
         return await AiScanner(chat, rules).scan()
@@ -811,6 +867,8 @@ def ai(
     response_path: str = typer.Option(
         "", "--ai-response-path", help="Dot-path al texto de respuesta (anula el preset; auto si se omite)."
     ),
+    stream: bool = typer.Option(False, "--ai-stream", help="El endpoint responde en streaming (SSE/NDJSON); reensambla los deltas."),
+    stream_path: str = typer.Option("", "--ai-stream-path", help="Dot-path al delta por chunk (auto si se omite)."),
     wordlist: str = typer.Option("", "--ai-wordlist", help="Fichero de payloads de jailbreak extra (uno por línea)."),
     auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer / API key (cabecera Authorization)."),
     auth_header: list[str] = typer.Option([], "--auth-header", help="Cabecera estática 'Nombre=valor' (repetible)."),
@@ -899,7 +957,9 @@ def ai(
     started_at = time.monotonic()
     try:
         findings = asyncio.run(
-            _run_ai_scan(config, str(config.target), prompt_field, template, response_path, headers, wordlist)
+            _run_ai_scan(
+                config, str(config.target), prompt_field, template, response_path, headers, wordlist, stream, stream_path
+            )
         )
     except httpx.HTTPError as exc:
         console.print(f"\n[bold red]Error de red al contactar el endpoint IA:[/bold red] {exc}")
@@ -913,6 +973,8 @@ def ai(
         quiet=quiet,
         target=str(config.target),
         duration_s=time.monotonic() - started_at,
+        html_title="dastcore — LLM Security Report (OWASP LLM Top 10)",
+        group_by_category=True,
     )
 
 

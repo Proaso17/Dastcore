@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dastcore report{% if target %} — {{ target }}{% endif %}</title>
+<title>{{ title }}{% if target %} — {{ target }}{% endif %}</title>
 <style>
   :root {
     --bg: #0f1420; --panel: #1a2130; --panel-2: #141a26; --text: #e6e9ef;
@@ -60,12 +60,14 @@
   .empty { text-align: center; color: var(--muted); padding: 48px 0; }
   code { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 12.5px; }
   footer { color: var(--muted); font-size: 12px; margin-top: 32px; text-align: center; }
+  h2.category { font-size: 15px; margin: 26px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h2.category .count { color: var(--muted); font-weight: 400; font-size: 13px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>dastcore — Dynamic Security Report</h1>
+    <h1>{{ title }}</h1>
     <div class="meta">
       {% if target %}Target: <code>{{ target }}</code> · {% endif %}
       Generated {{ generated_at }} · dastcore v{{ version }}
@@ -82,8 +84,7 @@
     {% endfor %}
   </section>
 
-  {% if findings %}
-    {% for f in findings %}
+  {% macro finding_card(f) %}
     <article class="finding sev-{{ f.severity }}">
       <h3>
         <span class="badge b-{{ f.severity }}">{{ f.severity }}</span>
@@ -126,9 +127,17 @@ json: {{ f.request.json_body }}
       <div class="section-label">Remediation</div>
       <div class="remediation">{{ f.remediation }}</div>
     </article>
+  {% endmacro %}
+
+  {% if not findings %}
+    <div class="empty">No findings. Nothing at or above the reporting bar was confirmed.</div>
+  {% elif grouped %}
+    {% for category, group in grouped %}
+    <h2 class="category">{{ category }} <span class="count">{{ group|length }}</span></h2>
+    {% for f in group %}{{ finding_card(f) }}{% endfor %}
     {% endfor %}
   {% else %}
-    <div class="empty">No findings. Nothing at or above the reporting bar was confirmed.</div>
+    {% for f in findings %}{{ finding_card(f) }}{% endfor %}
   {% endif %}
 
   <footer>

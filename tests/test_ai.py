@@ -5,7 +5,7 @@ import json
 
 from typer.testing import CliRunner
 
-from dastcore.ai.client import AiChatClient, extract_response_text
+from dastcore.ai.client import AiChatClient, extract_response_text, reassemble_stream
 from dastcore.ai.engine import AiScanner, load_ai_rules
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.cli import app
@@ -157,6 +157,38 @@ async def test_no_llm_findings_on_secure_bot(vuln_app_url: str) -> None:
     """The hardened bot refuses every probe — zero findings (no false positives)."""
     findings = await _scan(f"{vuln_app_url}/ai/chat-secure")
     assert findings == []
+
+
+# --- streaming -------------------------------------------------------------------------
+
+def test_reassemble_stream_sse_and_ndjson() -> None:
+    sse = (
+        'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":"lo!"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    assert reassemble_stream(sse, None) == "Hello!"
+    ndjson = '{"message":{"content":"foo"}}\n{"message":{"content":"bar"}}'
+    assert reassemble_stream(ndjson, None) == "foobar"
+
+
+async def test_streaming_endpoint_scanned(vuln_app_url: str) -> None:
+    """The SSE-streaming bot is reassembled and attacks are detected as usual."""
+    async with HttpClient(_SCOPE) as client:
+        chat = AiChatClient(client, f"{vuln_app_url}/ai/chat-stream", stream=True)
+        findings = await AiScanner(chat, load_ai_rules()).scan()
+    ids = {f.rule_id for f in findings}
+    assert "llm-prompt-injection" in ids, ids
+    assert "llm-sensitive-disclosure" in ids
+
+
+def test_ai_command_stream_flag(vuln_app_url: str) -> None:
+    result = runner.invoke(
+        app,
+        ["ai", f"{vuln_app_url}/ai/chat-stream", "--i-have-authorization", "--ai-stream", "--rps", "50", "--fail-on", "none"],
+    )
+    assert result.exit_code == 0
+    assert "Prompt Injection" in result.stdout
 
 
 # --- provider presets ------------------------------------------------------------------

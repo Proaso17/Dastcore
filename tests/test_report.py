@@ -192,3 +192,17 @@ def test_html_is_self_contained() -> None:
 def test_html_empty_state() -> None:
     html = render_html([])
     assert "No findings" in html
+
+
+def test_html_custom_title() -> None:
+    html = render_html(_sample_findings(), title="LLM Security Report")
+    assert "<title>LLM Security Report" in html
+    assert "<h1>LLM Security Report</h1>" in html
+
+
+def test_html_grouped_by_category() -> None:
+    # two findings share OWASP category (xss), one is different (passive) -> 2 groups.
+    html = render_html(_sample_findings(), group_by_category=True)
+    assert 'class="category"' in html
+    assert "WSTG-INPV-01" in html  # the XSS category header
+    assert 'class="count">2<' in html  # the two XSS findings grouped

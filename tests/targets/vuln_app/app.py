@@ -5,6 +5,7 @@ broken so the scanner has known, reproducible ground truth to detect.
 """
 from __future__ import annotations
 
+import json as _json
 import re
 import secrets
 import sqlite3
@@ -563,6 +564,25 @@ document.addEventListener('DOMContentLoaded', function(){
         if any(w in message for w in ("delete", "transfer", "send email", "execute", "run command", "invoke")):
             return jsonify({"reply": "Action executed successfully.", "tool_called": True})
         return jsonify({"reply": "How can I help?", "tool_called": False})
+
+    @app.post("/ai/chat-stream")
+    def ai_chat_stream() -> Response:
+        """Same vulnerable bot, but streams the answer as OpenAI-style SSE deltas."""
+        payload = request.get_json(silent=True) or {}
+        if payload.get("messages"):
+            user_turns = [m.get("content", "") for m in payload["messages"] if m.get("role") == "user"]
+            message, history = (user_turns[-1] if user_turns else ""), user_turns[:-1]
+        else:
+            message, history = payload.get("message", ""), []
+        reply = _vulnerable_reply(message, history=history)
+
+        def generate():
+            for i in range(0, len(reply), 16):
+                chunk = reply[i : i + 16]
+                yield f'data: {_json.dumps({"choices": [{"delta": {"content": chunk}}]})}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return Response(generate(), mimetype="text/event-stream")
 
     @app.post("/ai/chat-secure")
     def ai_chat_secure() -> Response:

@@ -48,6 +48,9 @@ py -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
 .venv\Scripts\python -m playwright install chromium   # para --engine headless|both
 
+# Pruébalo al instante contra un objetivo vulnerable incluido (web + IA, sin configurar nada)
+.venv\Scripts\dastcore demo
+
 # Escaneo rápido (estático), reporte a stdout
 .venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --profile quick
 
@@ -75,6 +78,8 @@ Probar un chatbot / LLM (OWASP LLM Top 10). Con **presets de proveedor** no hace
 
 Presets disponibles: `openai`, `azure-openai`, `anthropic`, `ollama`, `cohere`, `huggingface`, `gemini`. Para APIs no listadas, `--ai-template` (con `{{prompt}}` o `{{messages}}`) + `--ai-response-path` cubren cualquier forma — y puedes guardarla una vez en un fichero y reutilizarla con `--ai-config myapi.yaml`. Amplía los jailbreaks con tu propia wordlist: `--ai-wordlist jailbreaks.txt`.
 
+Si el endpoint responde en **streaming** (SSE/NDJSON, típico de OpenAI/Ollama), añade `--ai-stream` y dastcore reensambla los *deltas* automáticamente. El reporte HTML de `dastcore ai` (`-f html -o report.html`) se agrupa por categoría OWASP LLM.
+
 Documentación: [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · [`examples/github-action.yml`](examples/github-action.yml) (CI/CD).
 
 ## Estado del proyecto
@@ -94,12 +99,22 @@ Documentación: [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md]
 
 Requiere Python 3.11+.
 
+```bash
+# Desde PyPI (una vez publicado)
+pipx install dastcore            # o: pip install dastcore
+dastcore demo                    # pruébalo al instante
+
+# Extras opcionales
+pip install "dastcore[headless]" && python -m playwright install chromium   # SPAs / DOM-XSS
+pip install "dastcore[oast]"     # cliente Interactsh para vulnerabilidades ciegas
+```
+
+Desde el código (desarrollo):
+
 ```powershell
 py -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
-
-# Para el motor headless (Fase 5), instala el navegador Chromium una vez:
-.venv\Scripts\python -m playwright install chromium
+.venv\Scripts\python -m playwright install chromium   # motor headless
 ```
 
 ## Cómo probar la Fase 0

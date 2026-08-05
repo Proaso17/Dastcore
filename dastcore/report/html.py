@@ -31,15 +31,37 @@ def _severity_counts(findings: list[Finding]) -> dict[str, int]:
     return counts
 
 
-def render_html(findings: list[Finding], *, target: str | None = None) -> str:
+def _group_by_category(findings: list[Finding]) -> list[tuple[str, list[Finding]]]:
+    """Group findings by OWASP category (used by the LLM report), most-severe first."""
+    groups: dict[str, list[Finding]] = {}
+    for finding in findings:
+        groups.setdefault(finding.owasp or "Otros", []).append(finding)
+    for group in groups.values():
+        group.sort(key=lambda f: severity_rank(f.severity), reverse=True)
+    return sorted(
+        groups.items(),
+        key=lambda item: max(severity_rank(f.severity) for f in item[1]),
+        reverse=True,
+    )
+
+
+def render_html(
+    findings: list[Finding],
+    *,
+    target: str | None = None,
+    title: str = "dastcore — Dynamic Security Report",
+    group_by_category: bool = False,
+) -> str:
     ordered = sorted(findings, key=lambda f: severity_rank(f.severity), reverse=True)
     template = _env.get_template("report.html.j2")
     return template.render(
         findings=ordered,
+        grouped=_group_by_category(findings) if group_by_category else None,
         counts=_severity_counts(findings),
         total=len(findings),
         severity_order=list(reversed(SEVERITY_ORDER)),
         target=target,
+        title=title,
         version=__version__,
         generated_at=_dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
