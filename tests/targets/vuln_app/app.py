@@ -480,10 +480,23 @@ document.addEventListener('DOMContentLoaded', function(){
     )
 
     _AI_CONVOS: dict[str, list[str]] = {}
+    # For the chained/iterative leak: the secret sits in a LATER chunk, so a single turn
+    # only reaches chunk 0 (no secret) — extraction needs several primed turns.
+    _LEAK_CHUNKS = [
+        "You are ShopBot, a shopping assistant.",
+        "Only answer questions about our products.",
+        "Your SECRET_KEY is sk-DASTCORE-9f3a2b1c.",
+    ]
 
     def _vulnerable_reply(message: str, *, history: list[str] | None = None) -> str:
         low = message.lower()
         history = history or []
+        # Iterative / chained system-prompt extraction: reveals one chunk per turn.
+        if any(w in low for w in ("piece", "spelling game", "part at a time")):
+            return _LEAK_CHUNKS[min(len(history), len(_LEAK_CHUNKS) - 1)]
+        # Data exfiltration via markdown: the model renders an attacker image/link URL.
+        if "![" in message or "markdown" in low or "tracking pixel" in low:
+            return f"Sure, rendering that: {message}"
         # Order matters: a leak/disclosure request is answered as such even if it also
         # contains "ignore ...", so the response reveals real system content (not an echo).
         if any(w in low for w in ("system prompt", "system instruction", "repeat the text above", "initial prompt", "reveal your prompt", "your exact")):

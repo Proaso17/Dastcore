@@ -9,7 +9,7 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámi
 
 ## Qué hace
 
-- **AI / LLM hacking** (`dastcore ai`): prueba chatbots y endpoints de completion contra el **OWASP LLM Top 10** — prompt injection (directa e **indirecta/RAG**), **jailbreaks multi-turno (crescendo)**, fuga de system prompt, divulgación de secretos/**PII**, **excessive agency** (tool-calling), manejo inseguro de la salida y **denial of wallet** — con confirmación de bajo ruido (técnica del *canary* + oráculo diferencial + detección de PII con Luhn).
+- **AI / LLM hacking** (`dastcore ai`): 13 clases de ataque contra chatbots/LLMs (**OWASP LLM Top 10**) — prompt injection (directa e **indirecta/RAG**), **jailbreaks multi-turno (crescendo)**, **fuga encadenada del system prompt**, divulgación de secretos/**PII**, **excessive agency** (tool-calling), **exfiltración de datos vía markdown/URL**, **bypass de seguridad / contenido dañino**, manejo inseguro de la salida y **denial of wallet** — con confirmación de bajo ruido (*canary*, oráculo diferencial, detección de PII con Luhn, clasificador de rechazo). Presets para OpenAI/Anthropic/Ollama/… y wordlists de jailbreak de la comunidad.
 - **Crawler dual**: HTTP estático + headless (Playwright) para SPAs, endpoints XHR/fetch y DOM-XSS.
 - **Descubrimiento de API por esquema**: OpenAPI/Swagger 2.0/3.x + introspección GraphQL.
 - **OAST**: confirmación out-of-band de vulnerabilidades ciegas (blind SSRF/RCE/XXE/SSTI/CRLF, **Log4Shell/JNDI**) → cero falsos positivos en esa clase.
@@ -73,7 +73,7 @@ Probar un chatbot / LLM (OWASP LLM Top 10). Con **presets de proveedor** no hace
 .venv\Scripts\dastcore ai https://tu-bot.example/chat --i-have-authorization
 ```
 
-Presets disponibles: `openai`, `azure-openai`, `anthropic`, `ollama`, `cohere`, `huggingface`, `gemini`. Para APIs no listadas, `--ai-template` (con `{{prompt}}` o `{{messages}}`) + `--ai-response-path` cubren cualquier forma.
+Presets disponibles: `openai`, `azure-openai`, `anthropic`, `ollama`, `cohere`, `huggingface`, `gemini`. Para APIs no listadas, `--ai-template` (con `{{prompt}}` o `{{messages}}`) + `--ai-response-path` cubren cualquier forma — y puedes guardarla una vez en un fichero y reutilizarla con `--ai-config myapi.yaml`. Amplía los jailbreaks con tu propia wordlist: `--ai-wordlist jailbreaks.txt`.
 
 Documentación: [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · [`examples/github-action.yml`](examples/github-action.yml) (CI/CD).
 

@@ -134,15 +134,10 @@ class AiChatClient:
         """Indirect injection: benign user message + malicious content in another field (e.g. `context`)."""
         return await self._send(self._request(self._build_body(base_message, vector_field=field, vector_value=payload)))
 
-    async def converse(self, turns: list[str]) -> tuple[str, HttpRequest, HttpResponse]:
-        """Multi-turn: send `turns` in order, returning the last turn's (answer, request, response).
-
-        Uses the message-history array when the template supports `{{messages}}`, otherwise a
-        stable conversation id (for stateful/thread-based endpoints).
-        """
+    async def _converse(self, turns: list[str]) -> list[tuple[str, HttpRequest, HttpResponse]]:
         conversation_id = "dast-" + secrets.token_hex(4)
         messages: list[dict] = []
-        last: tuple[str, HttpRequest, HttpResponse] | None = None
+        results: list[tuple[str, HttpRequest, HttpResponse]] = []
         for turn in turns:
             if self._template and "{{messages}}" in self._template:
                 messages.append({"role": "user", "content": turn})
@@ -151,6 +146,21 @@ class AiChatClient:
                 body = self._build_body(turn, conversation_id=conversation_id)
             answer, request, response = await self._send(self._request(body))
             messages.append({"role": "assistant", "content": answer})
-            last = (answer, request, response)
-        assert last is not None
-        return last
+            results.append((answer, request, response))
+        return results
+
+    async def converse(self, turns: list[str]) -> tuple[str, HttpRequest, HttpResponse]:
+        """Multi-turn: send `turns` in order, returning the last turn's (answer, request, response).
+
+        Uses the message-history array when the template supports `{{messages}}`, otherwise a
+        stable conversation id (for stateful/thread-based endpoints).
+        """
+        return (await self._converse(turns))[-1]
+
+    async def converse_all(self, turns: list[str]) -> tuple[str, HttpRequest, HttpResponse]:
+        """Like `converse`, but the returned text is the joined transcript of every assistant
+        answer — for attacks (chained prompt extraction) where the leak is split across turns."""
+        results = await self._converse(turns)
+        transcript = "\n".join(answer for answer, _, _ in results)
+        _, request, response = results[-1]
+        return transcript, request, response

@@ -774,6 +774,7 @@ async def _run_ai_scan(
     template: str,
     response_path: str,
     headers: dict[str, str],
+    wordlist: str,
 ) -> list[Finding]:
     async with HttpClient(config.scope, rate_limit=config.rate_limit) as client:
         chat = AiChatClient(
@@ -784,15 +785,18 @@ async def _run_ai_scan(
             response_path=response_path or None,
             headers=headers or None,
         )
-        return await AiScanner(chat, load_ai_rules()).scan()
+        rules = load_ai_rules(extra_wordlist=Path(wordlist) if wordlist else None)
+        return await AiScanner(chat, rules).scan()
 
 
 @app.command("ai")
 def ai(
-    target: str = typer.Argument(..., help="URL del endpoint de chat/completion del LLM."),
+    ctx: typer.Context,
+    target: str = typer.Argument(None, help="URL del endpoint de chat/completion (opcional si --ai-config lo define)."),
     i_have_authorization: bool = typer.Option(
         False, "--i-have-authorization", help="Confirma que tienes autorización para probar el objetivo."
     ),
+    ai_config: str = typer.Option("", "--ai-config", help="YAML/JSON con la forma del endpoint propio (los flags ganan)."),
     preset: str = typer.Option(
         "", "--ai-preset", help=f"Preset de proveedor: {' | '.join(AI_PRESETS)}. Configura template/response/headers."
     ),
@@ -807,6 +811,7 @@ def ai(
     response_path: str = typer.Option(
         "", "--ai-response-path", help="Dot-path al texto de respuesta (anula el preset; auto si se omite)."
     ),
+    wordlist: str = typer.Option("", "--ai-wordlist", help="Fichero de payloads de jailbreak extra (uno por línea)."),
     auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer / API key (cabecera Authorization)."),
     auth_header: list[str] = typer.Option([], "--auth-header", help="Cabecera estática 'Nombre=valor' (repetible)."),
     requests_per_second: float = typer.Option(5.0, "--rps", help="Límite de requests por segundo."),
@@ -836,7 +841,32 @@ def ai(
         console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r}.")
         raise typer.Exit(code=1)
 
-    headers: dict[str, str] = {}
+    # Load an optional endpoint-shape config file; explicit CLI flags win over it.
+    ai_file: dict = {}
+    if ai_config:
+        import yaml
+
+        try:
+            ai_file = yaml.safe_load(Path(ai_config).read_text(encoding="utf-8")) or {}
+            if not isinstance(ai_file, dict):
+                raise ValueError("--ai-config debe ser un mapeo (objeto) en su raíz")
+        except (OSError, ValueError) as exc:
+            console.print(f"[bold red]--ai-config inválido:[/bold red] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    target = target or ai_file.get("target")
+    preset = _pick(ctx, "preset", preset, ai_file.get("preset"))
+    model = _pick(ctx, "model", model, ai_file.get("model"))
+    api_key = _pick(ctx, "api_key", api_key, ai_file.get("api_key"))
+    template = _pick(ctx, "template", template, ai_file.get("template"))
+    response_path = _pick(ctx, "response_path", response_path, ai_file.get("response_path"))
+    prompt_field = _pick(ctx, "prompt_field", prompt_field, ai_file.get("prompt_field"))
+
+    if not target:
+        console.print("[bold red]Falta el endpoint:[/bold red] pásalo como argumento o en --ai-config.")
+        raise typer.Exit(code=1)
+
+    headers: dict[str, str] = dict(ai_file.get("headers") or {})
     if preset:
         preset = preset.lower()
         if preset not in AI_PRESETS:
@@ -868,7 +898,9 @@ def ai(
 
     started_at = time.monotonic()
     try:
-        findings = asyncio.run(_run_ai_scan(config, str(config.target), prompt_field, template, response_path, headers))
+        findings = asyncio.run(
+            _run_ai_scan(config, str(config.target), prompt_field, template, response_path, headers, wordlist)
+        )
     except httpx.HTTPError as exc:
         console.print(f"\n[bold red]Error de red al contactar el endpoint IA:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
