@@ -79,6 +79,7 @@ def _build_result(finding: Finding) -> dict:
             "severity": finding.severity,
             "security-severity": security_severity_score(finding.severity),
             "evidence": [ev.model_dump(mode="json") for ev in finding.evidence],
+            "repro": finding.request.to_curl(),
         },
     }
 

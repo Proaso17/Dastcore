@@ -7,10 +7,11 @@ and `Finding` for the rule engine and oracles.
 
 from __future__ import annotations
 
+import json as _json
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from dastcore.config import Severity
 
@@ -18,6 +19,11 @@ Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 InjectionLocation = Literal["query", "body", "header", "cookie", "path", "json", "fragment"]
 EvidenceType = Literal["reflected", "response_match", "differential", "time_based", "oob", "status", "dom_execution"]
 Confidence = Literal["low", "medium", "high"]
+
+
+def _shell_quote(value: str) -> str:
+    """POSIX single-quote a value so it survives a shell verbatim."""
+    return "'" + value.replace("'", "'\\''") + "'"
 
 
 class HttpRequest(BaseModel):
@@ -42,6 +48,26 @@ class HttpRequest(BaseModel):
         query_keys = tuple(sorted(self.params.keys()))
         body_keys = tuple(sorted((self.data or {}).keys()))
         return f"{self.method} {path} q={query_keys} b={body_keys} j={json_keys}"
+
+    def to_curl(self) -> str:
+        """A copy-pasteable `curl` command that reproduces this exact request."""
+        url = self.url
+        if self.params:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}{urlencode(self.params)}"
+        parts = ["curl", "-i", "-X", self.method, _shell_quote(url)]
+        headers = dict(self.headers)
+        if self.json_body is not None:
+            headers.setdefault("Content-Type", "application/json")
+        for name, value in headers.items():
+            parts += ["-H", _shell_quote(f"{name}: {value}")]
+        if self.cookies:
+            parts += ["-b", _shell_quote("; ".join(f"{k}={v}" for k, v in self.cookies.items()))]
+        if self.json_body is not None:
+            parts += ["--data", _shell_quote(_json.dumps(self.json_body, ensure_ascii=False))]
+        elif self.data:
+            parts += ["--data", _shell_quote(urlencode(self.data))]
+        return " ".join(parts)
 
 
 class HttpResponse(BaseModel):
@@ -94,3 +120,9 @@ class Finding(BaseModel):
     request: HttpRequest
     response: HttpResponse
     remediation: str
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def repro_curl(self) -> str:
+        """A ready-to-run curl reproducing the request that triggered this finding."""
+        return self.request.to_curl()

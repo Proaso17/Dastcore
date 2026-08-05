@@ -62,6 +62,7 @@
   footer { color: var(--muted); font-size: 12px; margin-top: 32px; text-align: center; }
   h2.category { font-size: 15px; margin: 26px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
   h2.category .count { color: var(--muted); font-weight: 400; font-size: 13px; }
+  pre.repro { border-left: 3px solid var(--accent); }
 </style>
 </head>
 <body>
@@ -123,6 +124,9 @@ json: {{ f.request.json_body }}
       <div class="section-label">Response</div>
       <pre>HTTP {{ f.response.status_code }} · {{ "%.0f"|format(f.response.elapsed_ms) }} ms
 {{ f.response.text | truncate(800, true, "…") }}</pre>
+
+      <div class="section-label">Reproducir (curl)</div>
+      <pre class="repro">{{ f.repro_curl }}</pre>
 
       <div class="section-label">Remediation</div>
       <div class="remediation">{{ f.remediation }}</div>
