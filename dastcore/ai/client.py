@@ -12,6 +12,7 @@ the answer extraction are both configurable:
 from __future__ import annotations
 
 import json
+import secrets
 
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import HttpRequest, HttpResponse
@@ -73,6 +74,7 @@ class AiChatClient:
         prompt_field: str = "message",
         template: str | None = None,
         response_path: str | None = None,
+        conversation_field: str = "conversation_id",
         method: str = "POST",
         headers: dict[str, str] | None = None,
     ) -> None:
@@ -81,36 +83,71 @@ class AiChatClient:
         self._prompt_field = prompt_field
         self._template = template
         self._response_path = response_path
+        self._conversation_field = conversation_field
         self._method = method.upper()
         self._headers = headers or {}
 
-    def _build_body(self, prompt: str) -> dict | list:
+    def _build_body(
+        self,
+        message: str,
+        *,
+        vector_field: str | None = None,
+        vector_value: str | None = None,
+        conversation_id: str | None = None,
+        messages: list[dict] | None = None,
+    ) -> dict | list:
         if self._template:
-            # JSON-escape the prompt so quotes/newlines don't break the template.
-            escaped = json.dumps(prompt)[1:-1]
+            if "{{messages}}" in self._template and messages is not None:
+                return json.loads(self._template.replace("{{messages}}", json.dumps(messages)))
+            escaped = json.dumps(message)[1:-1]  # JSON-escape so quotes/newlines don't break it
             return json.loads(self._template.replace("{{prompt}}", escaped))
-        return {self._prompt_field: prompt}
+        body: dict = {self._prompt_field: message}
+        if vector_field and vector_value is not None:
+            body[vector_field] = vector_value
+        if conversation_id is not None:
+            body[self._conversation_field] = conversation_id
+        return body
 
-    def build_request(self, prompt: str) -> HttpRequest:
-        return HttpRequest(
-            method=self._method,  # type: ignore[arg-type]
-            url=self._url,
-            headers=dict(self._headers),
-            json_body=self._build_body(prompt),
-        )
+    def _request(self, body: dict | list) -> HttpRequest:
+        return HttpRequest(method=self._method, url=self._url, headers=dict(self._headers), json_body=body)  # type: ignore[arg-type]
 
-    async def ask(self, prompt: str) -> tuple[str, HttpRequest, HttpResponse]:
-        """Send `prompt`; return (answer_text, request, response). Answer is '' if unparseable."""
-        request = self.build_request(prompt)
+    async def _send(self, request: HttpRequest) -> tuple[str, HttpRequest, HttpResponse]:
         response = await self._http.request(
-            request.method,
-            request.url,
-            headers=request.headers or None,
-            json=request.json_body,
+            request.method, request.url, headers=request.headers or None, json=request.json_body
         )
         try:
             payload = json.loads(response.text)
         except (json.JSONDecodeError, ValueError):
             return "", request, response
-        text = extract_response_text(payload, self._response_path)
-        return (text or ""), request, response
+        return (extract_response_text(payload, self._response_path) or ""), request, response
+
+    async def ask(self, prompt: str) -> tuple[str, HttpRequest, HttpResponse]:
+        """Single-turn: send `prompt` in the configured field/template."""
+        return await self._send(self._request(self._build_body(prompt)))
+
+    async def ask_via(
+        self, field: str, payload: str, *, base_message: str = "Please summarize the provided document."
+    ) -> tuple[str, HttpRequest, HttpResponse]:
+        """Indirect injection: benign user message + malicious content in another field (e.g. `context`)."""
+        return await self._send(self._request(self._build_body(base_message, vector_field=field, vector_value=payload)))
+
+    async def converse(self, turns: list[str]) -> tuple[str, HttpRequest, HttpResponse]:
+        """Multi-turn: send `turns` in order, returning the last turn's (answer, request, response).
+
+        Uses the message-history array when the template supports `{{messages}}`, otherwise a
+        stable conversation id (for stateful/thread-based endpoints).
+        """
+        conversation_id = "dast-" + secrets.token_hex(4)
+        messages: list[dict] = []
+        last: tuple[str, HttpRequest, HttpResponse] | None = None
+        for turn in turns:
+            if self._template and "{{messages}}" in self._template:
+                messages.append({"role": "user", "content": turn})
+                body = self._build_body(turn, messages=messages)
+            else:
+                body = self._build_body(turn, conversation_id=conversation_id)
+            answer, request, response = await self._send(self._request(body))
+            messages.append({"role": "assistant", "content": answer})
+            last = (answer, request, response)
+        assert last is not None
+        return last

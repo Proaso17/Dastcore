@@ -36,7 +36,21 @@ def test_ai_rules_load() -> None:
         "llm-system-prompt-leak",
         "llm-sensitive-disclosure",
         "llm-insecure-output",
+        "llm-indirect-injection",
+        "llm-crescendo-jailbreak",
+        "llm-excessive-agency",
+        "llm-pii-disclosure",
+        "llm-denial-of-wallet",
     }
+
+
+def test_pii_and_luhn_helpers() -> None:
+    from dastcore.ai.engine import _find_pii, _luhn_ok
+
+    assert _luhn_ok("4111 1111 1111 1111") is True
+    assert _luhn_ok("1234 5678 9012 3456") is False
+    assert _find_pii("contact jane.doe@example.com please").startswith("email")
+    assert _find_pii("no personal data here") is None
 
 
 # --- detection against the vulnerable bot ----------------------------------------------
@@ -50,11 +64,43 @@ async def _scan(url: str):
 async def test_all_llm_attacks_detected_on_vulnerable_bot(vuln_app_url: str) -> None:
     findings = await _scan(f"{vuln_app_url}/ai/chat")
     ids = {f.rule_id for f in findings}
-    assert "llm-prompt-injection" in ids, ids
-    assert "llm-jailbreak" in ids, ids
-    assert "llm-system-prompt-leak" in ids, ids
-    assert "llm-sensitive-disclosure" in ids, ids
-    assert "llm-insecure-output" in ids, ids
+    # Single-turn classes reachable on the main chat endpoint.
+    for expected in (
+        "llm-prompt-injection",
+        "llm-jailbreak",
+        "llm-system-prompt-leak",
+        "llm-sensitive-disclosure",
+        "llm-insecure-output",
+        "llm-pii-disclosure",
+        "llm-denial-of-wallet",
+        "llm-crescendo-jailbreak",  # multi-turn via conversation_id state
+    ):
+        assert expected in ids, (expected, ids)
+
+
+async def test_indirect_prompt_injection_via_context(vuln_app_url: str) -> None:
+    """The malicious instruction rides in the `context` field, not the user message."""
+    findings = await _scan(f"{vuln_app_url}/ai/rag")
+    assert any(f.rule_id == "llm-indirect-injection" for f in findings), [f.rule_id for f in findings]
+
+
+async def test_excessive_agency_detected(vuln_app_url: str) -> None:
+    findings = await _scan(f"{vuln_app_url}/ai/agent")
+    assert any(f.rule_id == "llm-excessive-agency" for f in findings), [f.rule_id for f in findings]
+
+
+async def test_crescendo_needs_multiple_turns(vuln_app_url: str) -> None:
+    """The crescendo payload alone (single-turn) is refused; the rule's priming turns make it work."""
+    from dastcore.ai.engine import AiRule
+
+    async with HttpClient(_SCOPE) as client:
+        chat = AiChatClient(client, f"{vuln_app_url}/ai/chat")
+        crescendo = next(r for r in load_ai_rules() if r.id == "llm-crescendo-jailbreak")
+        # Same payload with no priming conversation -> should NOT fire.
+        single_turn = AiRule(**{**crescendo.model_dump(), "conversation": []})
+        assert await AiScanner(chat, [single_turn]).scan() == []
+        # With the priming turns -> fires.
+        assert any(f.rule_id == "llm-crescendo-jailbreak" for f in await AiScanner(chat, [crescendo]).scan())
 
 
 async def test_sensitive_disclosure_reveals_secret(vuln_app_url: str) -> None:

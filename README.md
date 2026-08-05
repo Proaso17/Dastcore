@@ -9,7 +9,7 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámi
 
 ## Qué hace
 
-- **AI / LLM hacking** (`dastcore ai`): prueba chatbots y endpoints de completion contra el **OWASP LLM Top 10** — prompt injection, jailbreak, fuga de system prompt, divulgación de secretos y manejo inseguro de la salida — con confirmación de bajo ruido (técnica del *canary* + oráculo diferencial).
+- **AI / LLM hacking** (`dastcore ai`): prueba chatbots y endpoints de completion contra el **OWASP LLM Top 10** — prompt injection (directa e **indirecta/RAG**), **jailbreaks multi-turno (crescendo)**, fuga de system prompt, divulgación de secretos/**PII**, **excessive agency** (tool-calling), manejo inseguro de la salida y **denial of wallet** — con confirmación de bajo ruido (técnica del *canary* + oráculo diferencial + detección de PII con Luhn).
 - **Crawler dual**: HTTP estático + headless (Playwright) para SPAs, endpoints XHR/fetch y DOM-XSS.
 - **Descubrimiento de API por esquema**: OpenAPI/Swagger 2.0/3.x + introspección GraphQL.
 - **OAST**: confirmación out-of-band de vulnerabilidades ciegas (blind SSRF/RCE/XXE/SSTI/CRLF, **Log4Shell/JNDI**) → cero falsos positivos en esa clase.
@@ -36,7 +36,7 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra), gemelo dinámi
 | Exposición de ficheros sensibles (`.env`, `.git`, claves) | detector activo | CWE-538 / WSTG-CONF-04 |
 | GraphQL introspection habilitada | detector activo | CWE-200 / WSTG-APIT-01 |
 | Cabeceras/cookies inseguras, CSP/HSTS ausentes, directory listing, stack traces, divulgación de tecnología | pasivos | varios |
-| **LLM: prompt injection, jailbreak, fuga de system prompt, divulgación de secretos, output inseguro** | `dastcore ai` | OWASP LLM01/02/05/07 |
+| **LLM: prompt injection (directa+indirecta), jailbreak, crescendo multi-turno, system-prompt leak, secretos/PII, excessive agency, output inseguro, denial of wallet** | `dastcore ai` | OWASP LLM01/02/05/06/07/10 |
 - **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.
 - **Motor async con concurrencia**: escaneo paralelo acotado (`--concurrency`), rate limiting (`--rps`), backoff ante HTTP 429, y presupuesto global (`--max-requests` / `--time-budget`) para escaneos seguros y acotados.
 - **Salidas**: JSON, SARIF 2.1.0 (CI/CD) y HTML autocontenido.
