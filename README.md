@@ -501,6 +501,31 @@ Una UI **local, self-contained** sobre el mismo motor de escaneo, para quien pre
 .venv\Scripts\pytest tests/test_web.py -v
 ```
 
+## Cloud (control-plane + runner)
+
+Porque el escaneo es **intrusivo** y necesita alcance de red al objetivo, un cloud multi-tenant no puede llegar a la red interna del cliente. El modelo es **control-plane + runner**: un plano de control en la nube encola trabajos y guarda resultados; **runners self-hosted** desplegados en la red del cliente reclaman los trabajos, escanean localmente y devuelven los hallazgos. Así el tráfico intrusivo **nunca sale de la red del cliente**.
+
+- **`dastcore/cloud/app.py`** — control-plane **FastAPI multi-tenant**. Auth por `Authorization: Bearer`: un **admin token** crea proyectos; la **API key del proyecto** (guardada *hasheada*, mostrada una sola vez) autoriza encolar, leer y el protocolo de runner. Endpoints: `POST /api/projects` (admin), `POST/GET /api/jobs`, `GET /api/jobs/{id}`, y runner `POST /api/runner/claim` (reparto atómico) + `POST /api/runner/jobs/{id}/result`.
+- **`dastcore/cloud/runner.py`** — agente self-hosted: reclama el trabajo más antiguo, construye el `ScanConfig` y **reusa `_run_scan`** para escanear localmente, y publica los hallazgos. Sin duplicar motor.
+- **`dastcore/cloud/store.py`** — persistencia SQLite (proyectos, api_keys hasheadas, jobs con estado y aislamiento por proyecto).
+
+Es una **base** (proyectos + API keys + protocolo claim/result + almacenamiento); billing, roles/orgs y UI hosted quedan fuera de alcance. El bucle completo está cubierto por tests end-to-end (encolar → runner reclama → escanea la app vulnerable → reporta).
+
+```powershell
+# 1) control-plane (imprime un admin token si no lo pasas)
+.venv\Scripts\dastcore cloud-serve --port 8800
+# 2) crea un proyecto (devuelve la API key una sola vez)
+curl -X POST http://127.0.0.1:8800/api/projects -H "Authorization: Bearer <ADMIN>" -H "Content-Type: application/json" -d '{"name":"acme"}'
+# 3) encola un trabajo
+curl -X POST http://127.0.0.1:8800/api/jobs -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" -d '{"target":"https://staging.example.com","engine":"http"}'
+# 4) en la red del objetivo, arranca un runner que lo ejecuta
+.venv\Scripts\dastcore runner http://127.0.0.1:8800 --token <API_KEY> --i-have-authorization
+```
+
+```powershell
+.venv\Scripts\pytest tests/test_cloud.py -v
+```
+
 ## Correr toda la suite
 
 ```powershell

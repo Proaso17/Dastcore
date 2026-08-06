@@ -1316,5 +1316,91 @@ def serve(
     run_server(host, port, resolved_db)
 
 
+@app.command("cloud-serve")
+def cloud_serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Interfaz donde escuchar."),
+    port: int = typer.Option(8800, "--port", help="Puerto del control-plane."),
+    db_path: str = typer.Option("", "--db", help="SQLite del control-plane (por defecto ~/.dastcore/cloud.db)."),
+    admin_token: str = typer.Option(
+        "", "--admin-token", help="Token de administración para crear proyectos (se genera si se omite)."
+    ),
+) -> None:
+    """Lanza el control-plane cloud: encola trabajos de escaneo y guarda resultados,
+    que los runners self-hosted reclaman y ejecutan en la red del objetivo."""
+    try:
+        import uvicorn
+
+        from dastcore.cloud.app import create_app
+    except ModuleNotFoundError as exc:
+        console.print(
+            f"[bold red]El control-plane requiere dependencias extra:[/bold red] {exc.name}.\n"
+            "Instálalas con: [bold]pip install 'dastcore[web]'[/bold]"
+        )
+        raise typer.Exit(code=1) from exc
+
+    import secrets as _secrets
+    from pathlib import Path as _Path
+
+    _print_banner()
+    resolved_db = db_path or str(_Path.home() / ".dastcore" / "cloud.db")
+    token = admin_token or ("admin_" + _secrets.token_urlsafe(24))
+    if not admin_token:
+        console.print(
+            f"\n[yellow]Admin token generado:[/yellow] [bold]{token}[/bold]  [dim](úsalo para crear proyectos)[/dim]"
+        )
+    console.print(
+        f"\n[green]Control-plane dastcore en[/green] [bold]http://{host}:{port}[/bold]  ·  "
+        f"[dim]{resolved_db}[/dim]\n[dim]Ctrl+C para detener.[/dim]\n"
+    )
+    uvicorn.run(create_app(resolved_db, admin_token=token), host=host, port=port, log_level="warning")
+
+
+async def _run_runner(server: str, token: str, runner_name: str, poll_seconds: float, once: bool) -> None:
+    from dastcore.cloud.runner import run_forever, run_once
+
+    async with httpx.AsyncClient(base_url=server.rstrip("/"), timeout=None) as client:
+        if once:
+            handled = await run_once(client, token, runner_name=runner_name)
+            console.print("Trabajo ejecutado." if handled else "No había trabajos en cola.")
+        else:
+            await run_forever(client, token, runner_name=runner_name, poll_seconds=poll_seconds)
+
+
+@app.command("runner")
+def runner(
+    server: str = typer.Argument(..., help="URL del control-plane (p.ej. https://cloud.example.com)."),
+    token: str = typer.Option(..., "--token", help="API key del proyecto."),
+    i_have_authorization: bool = typer.Option(
+        False, "--i-have-authorization", help="Confirma autorización para escanear los objetivos que reciba."
+    ),
+    runner_name: str = typer.Option("runner", "--name", help="Nombre de este runner (aparece en el control-plane)."),
+    poll_seconds: float = typer.Option(5.0, "--poll", help="Segundos entre sondeos cuando no hay trabajos."),
+    once: bool = typer.Option(False, "--once", help="Ejecuta un solo trabajo (si lo hay) y termina."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Log de actividad (INFO)."),
+) -> None:
+    """Runner self-hosted: reclama trabajos del control-plane y los escanea localmente.
+
+    Ejecútalo dentro de la red que tiene acceso a los objetivos. El tráfico intrusivo
+    sale de esta máquina, no del cloud."""
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    _print_banner()
+    if not i_have_authorization:
+        console.print("\n[bold red]ABORTADO[/bold red]: se requiere [bold]--i-have-authorization[/bold].")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"\n[green]Runner[/green] [bold]{runner_name}[/bold] conectado a [bold]{server}[/bold]"
+        + (" · un solo trabajo" if once else f" · sondeo cada {poll_seconds}s")
+        + "\n[dim]Ctrl+C para detener.[/dim]\n"
+    )
+    try:
+        asyncio.run(_run_runner(server, token, runner_name, poll_seconds, once))
+    except httpx.HTTPError as exc:
+        console.print(f"\n[bold red]Error hablando con el control-plane:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
 if __name__ == "__main__":
     app()
