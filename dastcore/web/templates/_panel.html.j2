@@ -13,6 +13,40 @@
 {% elif scan.status == 'interrupted' %}
   <div class="status st-interrupted">Interrumpido</div>
   <p class="muted">El escaneo no terminó (probablemente el servidor se reinició).</p>
+{% elif scan.kind == 'retest' %}
+  <div class="status st-done">Reverificación completada</div>
+  {% set c = (retest.counts if retest else {}) %}
+  <p class="muted">
+    <span class="rt-open">abiertos: {{ c.get('open', 0) }}</span> ·
+    <span class="rt-fixed">corregidos: {{ c.get('fixed', 0) }}</span> ·
+    <span class="rt-unverified">sin verificar: {{ c.get('unverified', 0) }}</span>
+    {% if scan.duration_s %}· {{ scan.duration_s | round(1) }}s{% endif %}
+    {% if scan.parent_id %}· <a href="/scans/{{ scan.parent_id }}">escaneo original</a>{% endif %}
+  </p>
+  {% if retest and retest.outcomes %}
+  <div class="overflow">
+    <table>
+      <thead><tr><th>Estado</th><th>Severidad</th><th>Issue</th><th>Ubicación</th></tr></thead>
+      <tbody>
+        {% for o in retest.outcomes | sort(attribute='status') %}
+        <tr>
+          <td><span class="rt-{{ o.status }}">
+            {{ {'open': 'ABIERTO', 'fixed': 'CORREGIDO', 'unverified': 'SIN VERIFICAR'}[o.status] }}
+          </span></td>
+          <td><span class="badge sev-{{ o.severity }}">{{ o.severity }}</span></td>
+          <td>{{ o.name }}</td>
+          <td class="muted">{{ o.location }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  <div class="actions">
+    {% if scan.num_findings %}<a href="/scans/{{ scan.id }}/report" target="_blank">Reporte de abiertos</a>
+    <a href="/scans/{{ scan.id }}/findings.json">JSON abiertos</a>
+    <a href="/scans/{{ scan.id }}/findings.sarif">SARIF abiertos</a>{% endif %}
+  </div>
 {% else %}
   <div class="status st-done">Completado</div>
   <p class="muted">
@@ -44,4 +78,21 @@
     <a href="/scans/{{ scan.id }}/findings.json">Descargar JSON</a>
     <a href="/scans/{{ scan.id }}/findings.sarif">Descargar SARIF</a>
   </div>
+  {% if scan.num_findings %}
+  <form class="subform" method="post" action="/scans/{{ scan.id }}/retest">
+    <strong>Reverificar</strong>
+    <span class="muted">— re-lanza solo estas peticiones para ver qué sigue vivo y qué se corrigió.</span>
+    <div class="row">
+      <div><label for="rt_bearer">Bearer token (opcional)</label>
+        <input id="rt_bearer" name="auth_bearer" placeholder="eyJ…"></div>
+      <div><label for="rt_cookie">Cookie (opcional)</label>
+        <input id="rt_cookie" name="auth_cookie" placeholder="sid=abc123"></div>
+    </div>
+    <div class="check">
+      <input id="rt_auth" name="authorization" type="checkbox" value="on">
+      <label for="rt_auth" style="margin:0">Tengo autorización para reverificar este objetivo.</label>
+    </div>
+    <button type="submit">Reverificar hallazgos</button>
+  </form>
+  {% endif %}
 {% endif %}

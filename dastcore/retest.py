@@ -71,11 +71,28 @@ def _is_oob(finding: Finding) -> bool:
     return any(ev.type == "oob" for ev in finding.evidence)
 
 
+# CORS is checked inside the scanner's per-request pass, so a re-scan reproduces it.
+_REPRODUCIBLE_EXTRA = frozenset({"active-cors-reflected-origin"})
+
+
+def _reproducible_by_rescan(finding: Finding, active_rule_ids: frozenset[str]) -> bool:
+    """Whether re-issuing this finding's request through the scanner can re-emit it.
+
+    The retest re-runs in-band active rules + passive checks + the CORS check. It does
+    *not* re-run standalone probes (sensitive files, GraphQL introspection), authz,
+    DOM-XSS or AI checks — so an absent finding of those classes is *unverified*, not
+    fixed: we simply didn't retest it, and claiming "fixed" would be misleading.
+    """
+    rid = finding.rule_id
+    return rid in active_rule_ids or rid in _REPRODUCIBLE_EXTRA or rid.startswith("passive-")
+
+
 def classify(
     prior_findings: list[Finding],
     new_findings: list[Finding],
     *,
     oast_attempted: bool,
+    active_rule_ids: frozenset[str] | None = None,
 ) -> list[RetestOutcome]:
     """Line up each prior finding against a fresh scan of its request.
 
@@ -83,6 +100,11 @@ def classify(
     prior set are considered (retest verifies the prior findings, it does not report
     newly-discovered issues). ``oast_attempted`` says whether an OAST collector was
     active this run — when it wasn't, out-of-band findings are left *unverified*.
+
+    ``active_rule_ids`` (the ids from ``load_rules()``) lets classify tell apart a
+    genuinely-fixed finding from one the re-scan simply can't reproduce: an absent
+    finding whose class isn't reproducible is *unverified*, not fixed. When omitted,
+    every absent non-OOB finding is treated as fixed (legacy behaviour).
     """
     current_by_id = {finding.id: finding for finding in new_findings}
     outcomes: list[RetestOutcome] = []
@@ -91,6 +113,8 @@ def classify(
         if current is not None:
             outcomes.append(RetestOutcome(prior=prior, status="open", current=current))
         elif _is_oob(prior) and not oast_attempted:
+            outcomes.append(RetestOutcome(prior=prior, status="unverified"))
+        elif active_rule_ids is not None and not _reproducible_by_rescan(prior, active_rule_ids):
             outcomes.append(RetestOutcome(prior=prior, status="unverified"))
         else:
             outcomes.append(RetestOutcome(prior=prior, status="fixed"))

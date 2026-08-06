@@ -14,8 +14,18 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from dastcore.cli import SessionLoginError, _Budget, _build_auth_config, _run_scan
+from dastcore.cli import (
+    SessionLoginError,
+    _Budget,
+    _build_auth_config,
+    _retest_scope_and_target,
+    _run_retest,
+    _run_scan,
+)
 from dastcore.config import OutputConfig, RateLimitConfig, ScanConfig, ScopeConfig
+from dastcore.core.models import Finding
+from dastcore.engine.rule_engine import load_rules
+from dastcore.retest import classify, open_findings, summarize
 from dastcore.web.store import Store
 
 
@@ -131,6 +141,74 @@ class ScanManager:
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)
+            job.status = "done"
+            job.phase = "Completado"
+        except SessionLoginError as exc:
+            self._fail(job, started, f"Error de autenticación: {exc}")
+        except Exception as exc:  # noqa: BLE001 — surface any engine error to the UI, don't crash the server
+            self._fail(job, started, f"{type(exc).__name__}: {exc}")
+
+    # --- retest ------------------------------------------------------------------------
+
+    def start_retest(self, parent_id: str, *, auth_bearer: str = "", auth_cookie: str = "", rps: float = 5.0) -> str | None:
+        """Launch a retest of a finished scan's findings. Returns the new run id, or
+        None if the parent has no findings / no usable target to re-scan."""
+        prior = self._store.get_findings(parent_id)
+        if not prior:
+            return None
+        scope, target = _retest_scope_and_target(prior, [], [])
+        if not target:
+            return None
+        auth = _build_auth_config(
+            auth_cookie=[auth_cookie] if auth_cookie else [],
+            auth_header=[],
+            auth_bearer=auth_bearer,
+            login_url="",
+            login_field=[],
+            oauth_token_url="",
+            oauth_client_id="",
+            oauth_client_secret="",
+            oauth_scope="",
+        )
+        config = ScanConfig(
+            target=target,  # type: ignore[arg-type]
+            scope=scope,
+            auth=auth,
+            rate_limit=RateLimitConfig(requests_per_second=rps if rps > 0 else 5.0),
+            output=OutputConfig(format="json"),
+            i_have_authorization=True,
+        )
+        scan_id = uuid.uuid4().hex[:12]
+        job = LiveJob(id=scan_id, target=target, phase="Reverificando…")
+        self._live[scan_id] = job
+        self._store.insert_running(scan_id, target, "retest", None, time.time(), kind="retest", parent_id=parent_id)
+
+        task = asyncio.create_task(self._run_retest_job(job, config, prior))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return scan_id
+
+    async def _run_retest_job(self, job: LiveJob, config: ScanConfig, prior: list[Finding]) -> None:
+        started = time.monotonic()
+        try:
+            new_findings = await _run_retest(config, prior, "off", "", _Budget(None, None))
+            active_rule_ids = frozenset(r.id for r in load_rules())
+            outcomes = classify(prior, new_findings, oast_attempted=False, active_rule_ids=active_rule_ids)
+            still_open = open_findings(outcomes)
+            retest = {
+                "counts": summarize(outcomes),
+                "outcomes": [
+                    {
+                        "id": o.prior.id,
+                        "name": o.prior.name,
+                        "severity": o.prior.severity,
+                        "location": f"{o.prior.injection_point.location}:{o.prior.injection_point.name}",
+                        "status": o.status,
+                    }
+                    for o in outcomes
+                ],
+            }
+            self._store.mark_retest_done(job.id, time.time(), time.monotonic() - started, still_open, retest)
             job.status = "done"
             job.phase = "Completado"
         except SessionLoginError as exc:

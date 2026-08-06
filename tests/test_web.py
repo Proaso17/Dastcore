@@ -77,6 +77,48 @@ async def test_full_scan_flow_finds_planted_vulns(client: httpx.AsyncClient, vul
         assert "<title>" in report.text
 
 
+async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+    async with client:
+        # 1) an initial scan to retest
+        resp = await client.post(
+            "/scans",
+            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            follow_redirects=False,
+        )
+        scan_id = resp.headers["location"].rsplit("/", 1)[-1]
+        await _wait_done(client, scan_id)
+
+        # retest requires the authorization checkbox
+        denied = await client.post(f"/scans/{scan_id}/retest", data={})
+        assert denied.status_code == 400
+
+        # 2) launch the retest
+        resp = await client.post(
+            f"/scans/{scan_id}/retest", data={"rps": "50", "authorization": "on"}, follow_redirects=False
+        )
+        assert resp.status_code == 303
+        retest_id = resp.headers["location"].rsplit("/", 1)[-1]
+        assert retest_id != scan_id
+
+        panel = await _wait_done(client, retest_id)
+        # target is untouched -> every prior finding is still open, nothing fixed
+        assert "Reverificación completada" in panel.text
+        assert "ABIERTO" in panel.text
+        assert "corregidos: 0" in panel.text
+        # the retest links back to its parent scan
+        assert scan_id in panel.text
+
+        # history distinguishes the retest run
+        home = await client.get("/")
+        assert "retest" in home.text
+
+
+async def test_retest_missing_scan_is_404(client: httpx.AsyncClient) -> None:
+    async with client:
+        resp = await client.post("/scans/deadbeef/retest", data={"authorization": "on"})
+    assert resp.status_code == 404
+
+
 async def test_bad_target_rerenders_form_with_error(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.post("/scans", data={"target": "not-a-url", "authorization": "on"})

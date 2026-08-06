@@ -1069,7 +1069,10 @@ def retest(
         console.print(f"\n[bold red]Error de red al reverificar:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    outcomes = classify(prior_findings, new_findings, oast_attempted=oast_mode != "off")
+    active_rule_ids = frozenset(rule.id for rule in load_rules())
+    outcomes = classify(
+        prior_findings, new_findings, oast_attempted=oast_mode != "off", active_rule_ids=active_rule_ids
+    )
     still_open = open_findings(outcomes)
     counts = summarize(outcomes)
 

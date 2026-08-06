@@ -2,9 +2,12 @@
 {% block title %}dastcore · {{ scan.target }}{% endblock %}
 {% block body %}
   <div class="panel">
-    <h2 style="word-break:break-all">{{ scan.target }}</h2>
+    <h2 style="word-break:break-all">
+      {% if scan.kind == 'retest' %}<span class="muted">↻ Reverificación ·</span> {% endif %}{{ scan.target }}
+    </h2>
     <div class="muted">
-      Motor <strong>{{ scan.engine }}</strong>{% if scan.profile %} · perfil <strong>{{ scan.profile }}</strong>{% endif %}
+      {% if scan.kind == 'retest' %}retest de un escaneo previo{% else %}Motor <strong>{{ scan.engine }}</strong>{% endif %}
+      {% if scan.profile %} · perfil <strong>{{ scan.profile }}</strong>{% endif %}
       · iniciado {{ scan.created_at | datetime }}
     </div>
   </div>

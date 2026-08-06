@@ -32,9 +32,19 @@ CREATE TABLE IF NOT EXISTS scans (
     num_findings    INTEGER NOT NULL DEFAULT 0,
     severity_counts TEXT NOT NULL DEFAULT '{}',
     error           TEXT,
-    findings_json   TEXT NOT NULL DEFAULT '[]'
+    findings_json   TEXT NOT NULL DEFAULT '[]',
+    kind            TEXT NOT NULL DEFAULT 'scan',
+    parent_id       TEXT,
+    retest_json     TEXT
 );
 """
+
+# Columns added after the initial release; applied to pre-existing DBs on open.
+_MIGRATIONS = {
+    "kind": "TEXT NOT NULL DEFAULT 'scan'",
+    "parent_id": "TEXT",
+    "retest_json": "TEXT",
+}
 
 
 @dataclass
@@ -52,6 +62,8 @@ class ScanRow:
     num_findings: int = 0
     severity_counts: dict[str, int] = field(default_factory=dict)
     error: str | None = None
+    kind: str = "scan"  # scan | retest
+    parent_id: str | None = None
 
 
 def severity_counts(findings: list[Finding]) -> dict[str, int]:
@@ -75,6 +87,14 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Add any columns introduced after a DB was first created."""
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(scans)")}
+        for column, decl in _MIGRATIONS.items():
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE scans ADD COLUMN {column} {decl}")
 
     def close(self) -> None:
         self._conn.close()
@@ -92,13 +112,26 @@ class Store:
             num_findings=row["num_findings"],
             severity_counts=json.loads(row["severity_counts"] or "{}"),
             error=row["error"],
+            kind=row["kind"] if "kind" in row.keys() else "scan",
+            parent_id=row["parent_id"] if "parent_id" in row.keys() else None,
         )
 
-    def insert_running(self, scan_id: str, target: str, engine: str, profile: str | None, created_at: float) -> None:
+    def insert_running(
+        self,
+        scan_id: str,
+        target: str,
+        engine: str,
+        profile: str | None,
+        created_at: float,
+        *,
+        kind: str = "scan",
+        parent_id: str | None = None,
+    ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT INTO scans (id, target, engine, profile, status, created_at) VALUES (?, ?, ?, ?, 'running', ?)",
-                (scan_id, target, engine, profile, created_at),
+                "INSERT INTO scans (id, target, engine, profile, status, created_at, kind, parent_id) "
+                "VALUES (?, ?, ?, ?, 'running', ?, ?, ?)",
+                (scan_id, target, engine, profile, created_at, kind, parent_id),
             )
 
     def mark_done(self, scan_id: str, finished_at: float, duration_s: float, findings: list[Finding]) -> None:
@@ -110,6 +143,41 @@ class Store:
                 "severity_counts=?, findings_json=? WHERE id=?",
                 (finished_at, duration_s, len(findings), json.dumps(counts), findings_json, scan_id),
             )
+
+    def mark_retest_done(
+        self,
+        scan_id: str,
+        finished_at: float,
+        duration_s: float,
+        still_open: list[Finding],
+        retest: dict,
+    ) -> None:
+        """Persist a finished retest: still-open findings as the run's findings,
+        plus the per-prior-finding verdicts (open/fixed/unverified) in ``retest_json``."""
+        counts = severity_counts(still_open)
+        findings_json = json.dumps([f.model_dump(mode="json") for f in still_open], ensure_ascii=False)
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE scans SET status='done', finished_at=?, duration_s=?, num_findings=?, "
+                "severity_counts=?, findings_json=?, retest_json=? WHERE id=?",
+                (
+                    finished_at,
+                    duration_s,
+                    len(still_open),
+                    json.dumps(counts),
+                    findings_json,
+                    json.dumps(retest, ensure_ascii=False),
+                    scan_id,
+                ),
+            )
+
+    def get_retest(self, scan_id: str) -> dict | None:
+        """The stored retest verdicts ({counts, outcomes}) for a retest run, if any."""
+        with self._lock:
+            row = self._conn.execute("SELECT retest_json FROM scans WHERE id=?", (scan_id,)).fetchone()
+        if not row or not row["retest_json"]:
+            return None
+        return json.loads(row["retest_json"])
 
     def mark_error(self, scan_id: str, finished_at: float, duration_s: float, error: str) -> None:
         with self._lock, self._conn:

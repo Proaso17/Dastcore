@@ -472,6 +472,7 @@ Una UI **local, self-contained** sobre el mismo motor de escaneo, para quien pre
 - **`dastcore/web/jobs.py`** — `ScanManager`: cada escaneo corre como una `asyncio.Task` en el loop del servidor y **reusa `_run_scan` del motor** vía un *progress sink*. Sin workers ni colas externas (el motor ya es async e I/O-bound).
 - **`dastcore/web/store.py`** — historial persistente en **SQLite** (stdlib, sin ORM): un registro por escaneo con sus findings como el mismo JSON del reporte. Sobrevive reinicios; un escaneo cortado por un reinicio se marca `interrupted`.
 - Qué da la UI que la CLI no: **historial** por objetivo, tabla de issues correlacionada, y **descarga** de reporte HTML / JSON / SARIF de cualquier ejecución pasada. El gate de autorización sigue vigente: el escaneo no arranca sin marcar la casilla.
+- **Reverificar (retest) con un clic**: cada escaneo completado trae un botón *Reverificar* que re-lanza solo esas peticiones y muestra, hallazgo a hallazgo, **ABIERTO / CORREGIDO / SIN VERIFICAR** (reusa el motor de retest). El retest se guarda como un run propio enlazado al original. Con criterio honesto: los hallazgos que el rescan no puede reproducir (ficheros sensibles, introspección GraphQL, authz…) se marcan *sin verificar*, nunca *corregido*.
 
 ```powershell
 # instala el extra web una vez

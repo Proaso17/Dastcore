@@ -57,7 +57,10 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 False,
             )
         issues: list[IssueGroup] = correlate(store.get_findings(scan.id)) if scan.status == "done" else []
-        return {"scan": scan, "running": False, "issues": issues}, True
+        ctx: dict[str, object] = {"scan": scan, "running": False, "issues": issues}
+        if scan.kind == "retest":
+            ctx["retest"] = store.get_retest(scan.id)
+        return ctx, True
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> HTMLResponse:
@@ -104,6 +107,34 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 status_code=400,
             )
         return RedirectResponse(url=f"/scans/{scan_id}", status_code=303)
+
+    @app.post("/scans/{scan_id}/retest")
+    async def start_retest(
+        scan_id: str,
+        authorization: str = Form(""),
+        auth_bearer: str = Form(""),
+        auth_cookie: str = Form(""),
+        rps: float = Form(5.0),
+    ) -> Response:
+        scan = store.get_scan(scan_id)
+        if scan is None:
+            return HTMLResponse("<h1>404</h1><p>Escaneo no encontrado.</p>", status_code=404)
+        if authorization != "on":
+            return HTMLResponse(
+                f"<p>Debes confirmar la autorización para reverificar. "
+                f'<a href="/scans/{scan_id}">Volver</a></p>',
+                status_code=400,
+            )
+        new_id = manager.start_retest(
+            scan_id, auth_bearer=auth_bearer.strip(), auth_cookie=auth_cookie.strip(), rps=rps
+        )
+        if new_id is None:
+            return HTMLResponse(
+                f"<p>Nada que reverificar (sin hallazgos o sin objetivo válido). "
+                f'<a href="/scans/{scan_id}">Volver</a></p>',
+                status_code=400,
+            )
+        return RedirectResponse(url=f"/scans/{new_id}", status_code=303)
 
     @app.get("/scans/{scan_id}", response_class=HTMLResponse)
     def scan_detail(scan_id: str) -> Response:

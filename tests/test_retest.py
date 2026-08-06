@@ -98,6 +98,26 @@ def test_classify_oob_with_oast_attempted_is_fixed() -> None:
     assert outcomes[0].status == "fixed"
 
 
+def test_classify_absent_reproducible_rule_is_fixed_with_active_ids() -> None:
+    prior = _finding("sqli:GET:/a:query:x")
+    outcomes = classify([prior], [], oast_attempted=False, active_rule_ids=frozenset({"sqli"}))
+    assert outcomes[0].status == "fixed"
+
+
+def test_classify_absent_nonreproducible_probe_is_unverified() -> None:
+    # A standalone-probe finding the re-scan can't reproduce must not be called "fixed".
+    prior = _finding("active-sensitive-file:/.git/config:path:file")
+    outcomes = classify([prior], [], oast_attempted=False, active_rule_ids=frozenset({"sqli", "xss-reflected"}))
+    assert outcomes[0].status == "unverified"
+
+
+def test_classify_absent_passive_is_fixed_with_active_ids() -> None:
+    # Passive checks re-run per request, so an absent passive finding is genuinely fixed.
+    prior = _finding("passive-missing-hsts:GET:/a")
+    outcomes = classify([prior], [], oast_attempted=False, active_rule_ids=frozenset({"sqli"}))
+    assert outcomes[0].status == "fixed"
+
+
 def test_open_findings_and_summarize() -> None:
     prior_open = _finding("sqli:GET:/a:query:x")
     prior_fixed = _finding("xss:GET:/b:query:x", url="http://t.test/b")
