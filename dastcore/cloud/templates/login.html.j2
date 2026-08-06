@@ -1,0 +1,18 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore cloud · acceso{% endblock %}
+{% block body %}
+  <div class="panel" style="max-width:520px; margin:40px auto">
+    <h2>Acceder a un proyecto</h2>
+    <p class="muted">Introduce la API key del proyecto para ver sus escaneos, encolar trabajos y gestionar runners y programados.</p>
+    {% if error %}<div class="panel err" style="margin:12px 0">{{ error }}</div>{% endif %}
+    <form method="post" action="/ui/login">
+      <label for="api_key">API key del proyecto</label>
+      <input id="api_key" name="api_key" placeholder="dast_…" required autofocus>
+      <button type="submit">Entrar</button>
+    </form>
+    <p class="muted" style="font-size:13px; margin-top:16px">
+      ¿Sin proyecto? Créalo con el admin token:
+      <code>POST /api/projects</code> (Authorization: Bearer &lt;ADMIN&gt;).
+    </p>
+  </div>
+{% endblock %}

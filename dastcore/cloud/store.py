@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dastcore.cloud.models import JobSpec
+from dastcore.cloud.models import JobSpec, ScheduleCreate
 from dastcore.core.models import Finding
 
 _SEVERITIES = ("critical", "high", "medium", "low", "info")
@@ -56,6 +56,32 @@ CREATE TABLE IF NOT EXISTS jobs (
     error           TEXT,
     findings_json   TEXT NOT NULL DEFAULT '[]'
 );
+
+CREATE TABLE IF NOT EXISTS runners (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    token_hash   TEXT NOT NULL,
+    created_at   REAL NOT NULL,
+    last_seen_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS schedules (
+    id               TEXT PRIMARY KEY,
+    project_id       TEXT NOT NULL,
+    target           TEXT NOT NULL,
+    engine           TEXT NOT NULL DEFAULT 'http',
+    profile          TEXT,
+    rps              REAL NOT NULL DEFAULT 5.0,
+    auth_bearer      TEXT,
+    auth_cookie      TEXT,
+    allow_domains    TEXT NOT NULL DEFAULT '[]',
+    interval_minutes INTEGER NOT NULL,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    created_at       REAL NOT NULL,
+    last_run_at      REAL,
+    next_run_at      REAL NOT NULL
+);
 """
 
 
@@ -64,6 +90,44 @@ class ProjectRow:
     id: str
     name: str
     created_at: float
+
+
+@dataclass
+class RunnerRow:
+    id: str
+    project_id: str
+    name: str
+    created_at: float
+    last_seen_at: float | None = None
+
+
+@dataclass
+class ScheduleRow:
+    id: str
+    project_id: str
+    target: str
+    engine: str
+    profile: str | None
+    rps: float
+    auth_bearer: str | None
+    auth_cookie: str | None
+    allow_domains: list[str]
+    interval_minutes: int
+    enabled: bool
+    created_at: float
+    last_run_at: float | None
+    next_run_at: float
+
+    def spec(self) -> JobSpec:
+        return JobSpec(
+            target=self.target,
+            engine=self.engine,
+            profile=self.profile or "",
+            rps=self.rps,
+            auth_bearer=self.auth_bearer or "",
+            auth_cookie=self.auth_cookie or "",
+            allow_domains=self.allow_domains,
+        )
 
 
 @dataclass
@@ -257,3 +321,134 @@ class Store:
                 (time.time(), error, job_id, project_id),
             )
             return cur.rowcount > 0
+
+    # --- runners -----------------------------------------------------------------------
+
+    def create_runner(self, project_id: str, name: str) -> tuple[str, str]:
+        """Register a runner and mint its token. Returns (runner_id, token).
+
+        Runner tokens are distinct from the project API key: they can only claim jobs
+        and post results, not enqueue jobs or manage the project.
+        """
+        runner_id = uuid.uuid4().hex[:12]
+        token = "dastr_" + secrets.token_urlsafe(24)
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO runners (id, project_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                (runner_id, project_id, name, _hash_key(token), time.time()),
+            )
+        return runner_id, token
+
+    def runner_for_token(self, token: str) -> RunnerRow | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM runners WHERE token_hash=?", (_hash_key(token),)).fetchone()
+        if row is None:
+            return None
+        return RunnerRow(
+            id=row["id"],
+            project_id=row["project_id"],
+            name=row["name"],
+            created_at=row["created_at"],
+            last_seen_at=row["last_seen_at"],
+        )
+
+    def touch_runner(self, runner_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (time.time(), runner_id))
+
+    def list_runners(self, project_id: str) -> list[RunnerRow]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM runners WHERE project_id=? ORDER BY created_at DESC", (project_id,)
+            ).fetchall()
+        return [
+            RunnerRow(
+                id=row["id"],
+                project_id=row["project_id"],
+                name=row["name"],
+                created_at=row["created_at"],
+                last_seen_at=row["last_seen_at"],
+            )
+            for row in rows
+        ]
+
+    # --- schedules ---------------------------------------------------------------------
+
+    def _row_to_schedule(self, row: sqlite3.Row) -> ScheduleRow:
+        return ScheduleRow(
+            id=row["id"],
+            project_id=row["project_id"],
+            target=row["target"],
+            engine=row["engine"],
+            profile=row["profile"],
+            rps=row["rps"],
+            auth_bearer=row["auth_bearer"],
+            auth_cookie=row["auth_cookie"],
+            allow_domains=json.loads(row["allow_domains"] or "[]"),
+            interval_minutes=row["interval_minutes"],
+            enabled=bool(row["enabled"]),
+            created_at=row["created_at"],
+            last_run_at=row["last_run_at"],
+            next_run_at=row["next_run_at"],
+        )
+
+    def create_schedule(self, project_id: str, spec: ScheduleCreate, now: float) -> str:
+        schedule_id = uuid.uuid4().hex[:12]
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO schedules (id, project_id, target, engine, profile, rps, auth_bearer, auth_cookie, "
+                "allow_domains, interval_minutes, enabled, created_at, next_run_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (
+                    schedule_id,
+                    project_id,
+                    spec.target,
+                    spec.engine,
+                    spec.profile or None,
+                    spec.rps,
+                    spec.auth_bearer or None,
+                    spec.auth_cookie or None,
+                    json.dumps(spec.allow_domains),
+                    max(1, spec.interval_minutes),
+                    now,
+                    now + max(1, spec.interval_minutes) * 60,
+                ),
+            )
+        return schedule_id
+
+    def list_schedules(self, project_id: str) -> list[ScheduleRow]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM schedules WHERE project_id=? ORDER BY created_at DESC", (project_id,)
+            ).fetchall()
+        return [self._row_to_schedule(row) for row in rows]
+
+    def get_schedule(self, project_id: str, schedule_id: str) -> ScheduleRow | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM schedules WHERE id=? AND project_id=?", (schedule_id, project_id)
+            ).fetchone()
+        return self._row_to_schedule(row) if row else None
+
+    def due_schedules(self, now: float) -> list[ScheduleRow]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM schedules WHERE enabled=1 AND next_run_at<=?", (now,)).fetchall()
+        return [self._row_to_schedule(row) for row in rows]
+
+    def mark_schedule_ran(self, schedule_id: str, last_run_at: float, next_run_at: float) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE schedules SET last_run_at=?, next_run_at=? WHERE id=?",
+                (last_run_at, next_run_at, schedule_id),
+            )
+
+    def set_schedule_enabled(self, project_id: str, schedule_id: str, enabled: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE schedules SET enabled=? WHERE id=? AND project_id=?",
+                (1 if enabled else 0, schedule_id, project_id),
+            )
+
+    def delete_schedule(self, project_id: str, schedule_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM schedules WHERE id=? AND project_id=?", (schedule_id, project_id))

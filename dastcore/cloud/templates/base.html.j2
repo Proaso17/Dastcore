@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}dastcore cloud{% endblock %}</title>
+  <style>
+    :root {
+      --bg:#f6f7f9; --panel:#fff; --ink:#1a1d21; --muted:#667085; --border:#e4e7ec;
+      --accent:#2f6fed; --accent-ink:#fff; --ok:#067647; --bad:#b42318; --med:#b54708;
+      --crit:#b42318; --high:#d92d20; --medium:#b54708; --low:#026aa2; --info:#667085;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#14171c; --panel:#1c2027; --ink:#e6e8eb; --muted:#98a2b3; --border:#2a2f38;
+        --accent:#4b8bff; --accent-ink:#0b0e12; --ok:#4ac489; --bad:#ff6b5e; --med:#f5a623;
+        --crit:#ff6b5e; --high:#ff7a70; --medium:#f5a623; --low:#4bb3e6; --info:#98a2b3; }
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+      font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+    header.top { background:var(--panel); border-bottom:1px solid var(--border); padding:14px 22px;
+      display:flex; align-items:baseline; gap:12px; }
+    header.top .brand { font-weight:700; font-size:18px; }
+    header.top .tag { color:var(--muted); font-size:13px; }
+    main { max-width:1080px; margin:0 auto; padding:22px; }
+    .panel { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px 20px; margin-bottom:20px; }
+    .panel h2 { margin:0 0 14px; font-size:16px; }
+    label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+    input, select { width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:8px;
+      background:var(--bg); color:var(--ink); font-size:14px; }
+    .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }
+    button { background:var(--accent); color:var(--accent-ink); border:0; border-radius:8px;
+      padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; margin-top:12px; }
+    button.small { padding:5px 10px; font-size:12px; margin:0; }
+    button.danger { background:var(--bad); }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); }
+    th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .overflow { overflow-x:auto; }
+    code { background:var(--bg); border:1px solid var(--border); border-radius:5px; padding:1px 5px; font-size:13px; word-break:break-all; }
+    .muted { color:var(--muted); } .empty { color:var(--muted); font-style:italic; padding:8px 0; }
+    .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:700; color:#fff; }
+    .sev-critical{background:var(--crit)} .sev-high{background:var(--high)} .sev-medium{background:var(--medium)} .sev-low{background:var(--low)} .sev-info{background:var(--info)}
+    .st-done{color:var(--ok);font-weight:700} .st-error{color:var(--bad);font-weight:700}
+    .st-running{color:var(--accent);font-weight:700} .st-queued{color:var(--muted);font-weight:700}
+    .flash { border-left:3px solid var(--ok); }
+    .err { border-left:3px solid var(--bad); color:var(--bad); }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <span class="brand">dastcore</span>
+    <span class="tag">control-plane</span>
+    {% block nav %}{% endblock %}
+  </header>
+  <main>{% block body %}{% endblock %}</main>
+</body>
+</html>

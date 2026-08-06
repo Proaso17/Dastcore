@@ -29,3 +29,13 @@ class JobResult(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str
+
+
+class RunnerCreate(BaseModel):
+    name: str = "runner"
+
+
+class ScheduleCreate(JobSpec):
+    """A recurring job: a JobSpec plus how often to enqueue it (minutes)."""
+
+    interval_minutes: int = 1440

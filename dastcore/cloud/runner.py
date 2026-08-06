@@ -58,10 +58,20 @@ async def _run_job(spec: JobSpec) -> list[Finding]:
     return await _run_scan(config, max_pages, engine, budget=_Budget(None, None))
 
 
-async def run_once(client: httpx.AsyncClient, token: str, *, runner_name: str = "runner") -> bool:
-    """Claim and run a single job if one is queued. Returns True if a job was handled."""
+async def register_runner(client: httpx.AsyncClient, project_key: str, name: str = "runner") -> str:
+    """Register a runner with a project API key and return its (runner) token."""
+    resp = await client.post("/api/runners", json={"name": name}, headers={"Authorization": f"Bearer {project_key}"})
+    resp.raise_for_status()
+    return resp.json()["token"]
+
+
+async def run_once(client: httpx.AsyncClient, token: str) -> bool:
+    """Claim and run a single job if one is queued. Returns True if a job was handled.
+
+    ``token`` is a runner token; the runner's identity is derived from it server-side.
+    """
     headers = {"Authorization": f"Bearer {token}"}
-    claim = await client.post("/api/runner/claim", params={"runner": runner_name}, headers=headers)
+    claim = await client.post("/api/runner/claim", headers=headers)
     if claim.status_code == 204:
         return False
     claim.raise_for_status()
@@ -82,13 +92,14 @@ async def run_once(client: httpx.AsyncClient, token: str, *, runner_name: str = 
     return True
 
 
-async def run_forever(
-    client: httpx.AsyncClient, token: str, *, runner_name: str = "runner", poll_seconds: float = 5.0
-) -> None:
-    """Continuously claim and run jobs, sleeping when the queue is empty."""
+async def run_forever(client: httpx.AsyncClient, token: str, *, poll_seconds: float = 5.0) -> None:
+    """Continuously claim and run jobs, heartbeating and sleeping when idle."""
+    headers = {"Authorization": f"Bearer {token}"}
     while True:
         try:
-            worked = await run_once(client, token, runner_name=runner_name)
+            worked = await run_once(client, token)
+            if not worked:
+                await client.post("/api/runner/heartbeat", headers=headers)
         except httpx.HTTPError as exc:
             _log.warning("control-plane request failed: %s", exc)
             worked = False

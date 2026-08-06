@@ -1,0 +1,32 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore cloud · trabajo{% endblock %}
+{% block nav %}<span style="margin-left:auto"><a href="/ui">← Trabajos</a></span>{% endblock %}
+{% block body %}
+  <div class="panel">
+    <h2 style="word-break:break-all">{{ job.target }}</h2>
+    <div class="muted">
+      motor <strong>{{ job.engine }}</strong> · estado <span class="st-{{ job.status }}">{{ job.status }}</span>
+      {% if job.runner %} · runner <strong>{{ job.runner }}</strong>{% endif %}
+      · creado {{ job.created_at | datetime }}
+    </div>
+    {% if job.error %}<div class="panel err" style="margin-top:12px">{{ job.error }}</div>{% endif %}
+  </div>
+
+  {% if job.status == 'done' %}
+  <div class="panel">
+    <h2>Hallazgos ({{ findings | length }})</h2>
+    {% if findings %}
+    <div class="overflow"><table>
+      <thead><tr><th>Severidad</th><th>Issue</th><th>Regla</th></tr></thead>
+      <tbody>{% for f in findings %}<tr>
+        <td><span class="badge sev-{{ f.severity }}">{{ f.severity }}</span></td>
+        <td>{{ f.name }}</td>
+        <td class="muted">{{ f.rule_id }}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<div class="empty">Sin hallazgos. 🎉</div>{% endif %}
+  </div>
+  {% else %}
+  <div class="panel"><div class="empty">El trabajo aún no ha terminado (lo ejecuta un runner).</div></div>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,103 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore cloud · {{ project.name }}{% endblock %}
+{% block nav %}
+  <span style="margin-left:auto" class="muted">
+    proyecto <strong>{{ project.name }}</strong>
+    · <form method="post" action="/ui/logout" style="display:inline"><button class="small" type="submit">Salir</button></form>
+  </span>
+{% endblock %}
+{% block body %}
+  {% if new_runner_token %}
+  <div class="panel flash">
+    <strong>Runner creado.</strong> Guarda su token (se muestra solo una vez):
+    <div style="margin-top:8px"><code>{{ new_runner_token }}</code></div>
+    <div class="muted" style="font-size:13px; margin-top:8px">
+      Arráncalo en la red del objetivo:
+      <code>dastcore runner &lt;URL&gt; --token {{ new_runner_token }} --i-have-authorization</code>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    <h2>Encolar escaneo</h2>
+    <form method="post" action="/ui/jobs">
+      <label for="target">URL objetivo</label>
+      <input id="target" name="target" placeholder="https://staging.example.com" required>
+      <div class="row3">
+        <div><label for="engine">Motor</label>
+          <select id="engine" name="engine"><option value="http">http</option><option value="headless">headless</option><option value="both">both</option></select></div>
+        <div><label for="profile">Perfil</label>
+          <select id="profile" name="profile"><option value="">(personalizado)</option><option value="quick">quick</option><option value="full">full</option><option value="api">api</option></select></div>
+        <div style="display:flex; align-items:flex-end"><button type="submit" style="width:100%">Encolar</button></div>
+      </div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>Trabajos ({{ jobs | length }})</h2>
+    {% if jobs %}
+    <div class="overflow"><table>
+      <thead><tr><th>Objetivo</th><th>Motor</th><th>Estado</th><th>Runner</th><th>Hallazgos</th><th>Creado</th></tr></thead>
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td><a href="/ui/jobs/{{ j.id }}">{{ j.target }}</a></td>
+          <td class="muted">{{ j.engine }}{% if j.profile %} · {{ j.profile }}{% endif %}</td>
+          <td><span class="st-{{ j.status }}">{{ j.status }}</span></td>
+          <td class="muted">{{ j.runner or '—' }}</td>
+          <td>{% if j.status == 'done' %}<strong>{{ j.num_findings }}</strong>
+              {% for sev in ['critical','high','medium','low'] %}{% if j.severity_counts.get(sev) %}<span class="badge sev-{{ sev }}">{{ j.severity_counts[sev] }}</span>{% endif %}{% endfor %}
+              {% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="muted">{{ j.created_at | datetime }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}<div class="empty">Sin trabajos. Encola uno arriba.</div>{% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Runners ({{ runners | length }})</h2>
+    {% if runners %}
+    <div class="overflow"><table>
+      <thead><tr><th>Nombre</th><th>Creado</th><th>Última vez</th></tr></thead>
+      <tbody>{% for r in runners %}<tr><td>{{ r.name }}</td><td class="muted">{{ r.created_at | datetime }}</td><td class="muted">{{ r.last_seen_at | datetime }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<div class="empty">Sin runners. Crea uno para ejecutar los trabajos.</div>{% endif %}
+    <form method="post" action="/ui/runners" style="display:flex; gap:10px; align-items:flex-end; margin-top:12px">
+      <div style="flex:1"><label for="rname">Nuevo runner (nombre)</label><input id="rname" name="name" placeholder="runner-staging"></div>
+      <button type="submit">Crear token</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>Programados ({{ schedules | length }})</h2>
+    {% if schedules %}
+    <div class="overflow"><table>
+      <thead><tr><th>Objetivo</th><th>Cada</th><th>Estado</th><th>Próxima</th><th></th></tr></thead>
+      <tbody>
+        {% for s in schedules %}
+        <tr>
+          <td>{{ s.target }}</td>
+          <td class="muted">{% set m = s.interval_minutes %}{% if m % 1440 == 0 %}{{ m // 1440 }} día(s){% elif m % 60 == 0 %}{{ m // 60 }} h{% else %}{{ m }} min{% endif %}</td>
+          <td><span class="{{ 'st-done' if s.enabled else 'st-error' }}">{{ 'activo' if s.enabled else 'pausado' }}</span></td>
+          <td class="muted">{{ s.next_run_at | datetime }}</td>
+          <td><div style="display:flex; gap:6px">
+            <form method="post" action="/ui/schedules/{{ s.id }}/toggle"><button class="small" type="submit">{{ 'Pausar' if s.enabled else 'Reanudar' }}</button></form>
+            <form method="post" action="/ui/schedules/{{ s.id }}/delete"><button class="small danger" type="submit">Borrar</button></form>
+          </div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}<div class="empty">Sin programados.</div>{% endif %}
+    <form method="post" action="/ui/schedules" style="margin-top:12px">
+      <div class="row3">
+        <div><label for="starget">Objetivo</label><input id="starget" name="target" placeholder="https://staging.example.com" required></div>
+        <div><label for="sengine">Motor</label><select id="sengine" name="engine"><option value="http">http</option><option value="headless">headless</option><option value="both">both</option></select></div>
+        <div><label for="sinterval">Frecuencia</label><select id="sinterval" name="interval_minutes">{% for m, label in intervals %}<option value="{{ m }}" {% if m == 1440 %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+      </div>
+      <button type="submit">Programar</button>
+    </form>
+  </div>
+{% endblock %}

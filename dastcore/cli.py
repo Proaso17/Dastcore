@@ -1355,21 +1355,30 @@ def cloud_serve(
     uvicorn.run(create_app(resolved_db, admin_token=token), host=host, port=port, log_level="warning")
 
 
-async def _run_runner(server: str, token: str, runner_name: str, poll_seconds: float, once: bool) -> None:
-    from dastcore.cloud.runner import run_forever, run_once
+async def _run_runner(
+    server: str, token: str, project_key: str, runner_name: str, poll_seconds: float, once: bool
+) -> None:
+    from dastcore.cloud.runner import register_runner, run_forever, run_once
 
     async with httpx.AsyncClient(base_url=server.rstrip("/"), timeout=None) as client:
+        runner_token = token
+        if not runner_token:
+            runner_token = await register_runner(client, project_key, runner_name)
+            console.print(f"[green]Runner registrado[/green] como [bold]{runner_name}[/bold].")
         if once:
-            handled = await run_once(client, token, runner_name=runner_name)
+            handled = await run_once(client, runner_token)
             console.print("Trabajo ejecutado." if handled else "No había trabajos en cola.")
         else:
-            await run_forever(client, token, runner_name=runner_name, poll_seconds=poll_seconds)
+            await run_forever(client, runner_token, poll_seconds=poll_seconds)
 
 
 @app.command("runner")
 def runner(
     server: str = typer.Argument(..., help="URL del control-plane (p.ej. https://cloud.example.com)."),
-    token: str = typer.Option(..., "--token", help="API key del proyecto."),
+    token: str = typer.Option("", "--token", help="Token de runner (si ya lo tienes)."),
+    project_key: str = typer.Option(
+        "", "--project-key", help="API key del proyecto: registra este runner y obtiene su token."
+    ),
     i_have_authorization: bool = typer.Option(
         False, "--i-have-authorization", help="Confirma autorización para escanear los objetivos que reciba."
     ),
@@ -1381,13 +1390,19 @@ def runner(
     """Runner self-hosted: reclama trabajos del control-plane y los escanea localmente.
 
     Ejecútalo dentro de la red que tiene acceso a los objetivos. El tráfico intrusivo
-    sale de esta máquina, no del cloud."""
+    sale de esta máquina, no del cloud. Pasa un --token de runner, o --project-key para
+    registrarte y obtener uno automáticamente."""
     logging.basicConfig(
         level=logging.INFO if verbose else logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     _print_banner()
     if not i_have_authorization:
         console.print("\n[bold red]ABORTADO[/bold red]: se requiere [bold]--i-have-authorization[/bold].")
+        raise typer.Exit(code=1)
+    if not token and not project_key:
+        console.print(
+            "\n[bold red]Falta credencial:[/bold red] pasa [bold]--token[/bold] o [bold]--project-key[/bold]."
+        )
         raise typer.Exit(code=1)
 
     console.print(
@@ -1396,7 +1411,7 @@ def runner(
         + "\n[dim]Ctrl+C para detener.[/dim]\n"
     )
     try:
-        asyncio.run(_run_runner(server, token, runner_name, poll_seconds, once))
+        asyncio.run(_run_runner(server, token, project_key, runner_name, poll_seconds, once))
     except httpx.HTTPError as exc:
         console.print(f"\n[bold red]Error hablando con el control-plane:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
