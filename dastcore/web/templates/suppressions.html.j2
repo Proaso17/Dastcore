@@ -1,0 +1,59 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · triaje{% endblock %}
+{% block body %}
+  <div class="panel">
+    <h2>Triaje · suppressions</h2>
+    <p class="muted">
+      Falsos positivos y riesgos aceptados. Un hallazgo suprimido sale de la tabla activa de cada
+      escaneo (y del gate de CI), pero sigue en el JSON/SARIF como registro. Exporta a
+      <code>.dastcore-ignore</code> para versionarlo y reusarlo desde la CLI en CI.
+    </p>
+    <div class="actions"><a href="/dastcore-ignore">Descargar .dastcore-ignore</a></div>
+  </div>
+
+  <div class="panel">
+    <h2>Reglas ({{ suppressions | length }})</h2>
+    {% if suppressions %}
+    <div class="overflow">
+      <table>
+        <thead><tr><th>rule_id</th><th>id (finding)</th><th>url</th><th>motivo</th><th>expira</th><th></th></tr></thead>
+        <tbody>
+          {% for s in suppressions %}
+          <tr>
+            <td>{{ s.rule_id or '—' }}</td>
+            <td class="muted">{{ s.finding_id or '—' }}</td>
+            <td class="muted">{{ s.url or '—' }}</td>
+            <td class="muted">{{ s.reason or '—' }}</td>
+            <td class="muted">{{ s.expires or '—' }}</td>
+            <td>
+              <form method="post" action="/suppress/{{ s.id }}/delete" style="margin:0">
+                <button type="submit" class="danger" style="padding:5px 10px;font-size:12px">Borrar</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty">Sin reglas de triaje. Acepta hallazgos desde un escaneo o añade una abajo.</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Añadir regla manual</h2>
+    <form method="post" action="/suppress">
+      <div class="row3">
+        <div><label for="rule_id">rule_id</label><input id="rule_id" name="rule_id" placeholder="xss-reflected"></div>
+        <div><label for="finding_id">id de hallazgo</label><input id="finding_id" name="finding_id" placeholder="xss-reflected:GET:/x:query:q"></div>
+        <div><label for="url">url (glob)</label><input id="url" name="url" placeholder="*/legacy/*"></div>
+      </div>
+      <div class="row">
+        <div><label for="reason">motivo</label><input id="reason" name="reason" placeholder="Aceptado: lo fija el CDN"></div>
+        <div><label for="expires">expira (YYYY-MM-DD)</label><input id="expires" name="expires" placeholder="2026-12-31"></div>
+      </div>
+      <p class="muted" style="font-size:13px">Debe cumplir al menos un selector (rule_id, id o url); si das varios, deben cumplirse todos.</p>
+      <button type="submit">Añadir</button>
+    </form>
+  </div>
+{% endblock %}

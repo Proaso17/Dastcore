@@ -61,13 +61,19 @@
     .progress > span { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
     .actions { display: flex; gap: 14px; margin-top: 12px; font-size: 14px; }
     .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+    form.triage { display: flex; gap: 6px; margin: 0; }
+    form.triage input { width: 120px; padding: 5px 7px; font-size: 12px; }
+    form.triage button { padding: 5px 10px; font-size: 12px; }
+    .accepted { margin-top: 18px; border-top: 1px dashed var(--border); padding-top: 12px; }
+    code { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font-size: 13px; }
+    button.danger { background: var(--bad); }
   </style>
 </head>
 <body>
   <header class="top">
     <span class="brand">dastcore</span>
     <span class="tag">panel local · DAST</span>
-    <span style="margin-left:auto"><a href="/">Escaneos</a></span>
+    <span style="margin-left:auto"><a href="/">Escaneos</a> · <a href="/suppressions">Triaje</a></span>
   </header>
   <main>{% block body %}{% endblock %}</main>
 </body>

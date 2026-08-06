@@ -16,7 +16,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from dastcore.report import render_html, render_json, render_sarif
-from dastcore.report.correlation import IssueGroup, correlate
+from dastcore.report.correlation import correlate
+from dastcore.suppressions import apply_suppressions
 from dastcore.web.jobs import ScanManager, ScanRequest
 from dastcore.web.store import ScanRow, Store
 
@@ -56,10 +57,18 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 {"scan": scan, "running": True, "phase": live.phase, "completed": live.completed, "total": live.total},
                 False,
             )
-        issues: list[IssueGroup] = correlate(store.get_findings(scan.id)) if scan.status == "done" else []
-        ctx: dict[str, object] = {"scan": scan, "running": False, "issues": issues}
-        if scan.kind == "retest":
-            ctx["retest"] = store.get_retest(scan.id)
+        ctx: dict[str, object] = {"scan": scan, "running": False, "issues": [], "accepted": []}
+        if scan.status == "done":
+            findings = store.get_findings(scan.id)
+            if scan.kind == "retest":
+                ctx["retest"] = store.get_retest(scan.id)
+                ctx["issues"] = correlate(findings)  # still-open set; triage doesn't apply here
+            else:
+                # Triage: accepted / false-positive findings drop out of the issues table
+                # into a separate "aceptados" section (they still live in the stored JSON).
+                apply_suppressions(findings, store.build_suppressions())
+                ctx["issues"] = correlate([f for f in findings if not f.suppressed])
+                ctx["accepted"] = correlate([f for f in findings if f.suppressed])
         return ctx, True
 
     @app.get("/", response_class=HTMLResponse)
@@ -152,6 +161,62 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         ctx, done = panel_context(scan)
         html = env.get_template("_panel.html.j2").render(**ctx)
         return HTMLResponse(html, headers={"X-Scan-Done": "1" if done else "0"})
+
+    @app.post("/suppress")
+    def suppress(
+        rule_id: str = Form(""),
+        finding_id: str = Form(""),
+        url: str = Form(""),
+        reason: str = Form(""),
+        expires: str = Form(""),
+        scan_id: str = Form(""),
+    ) -> Response:
+        if not (rule_id.strip() or finding_id.strip() or url.strip()):
+            dest = f"/scans/{scan_id}" if scan_id else "/suppressions"
+            return RedirectResponse(dest, status_code=303)
+        store.add_suppression(
+            rule_id=rule_id.strip(),
+            finding_id=finding_id.strip(),
+            url=url.strip(),
+            reason=reason.strip(),
+            expires=expires.strip(),
+        )
+        dest = f"/scans/{scan_id}" if scan_id.strip() else "/suppressions"
+        return RedirectResponse(dest, status_code=303)
+
+    @app.post("/suppress/{row_id}/delete")
+    def suppress_delete(row_id: int) -> Response:
+        store.delete_suppression(row_id)
+        return RedirectResponse("/suppressions", status_code=303)
+
+    @app.get("/suppressions", response_class=HTMLResponse)
+    def suppressions_page() -> HTMLResponse:
+        return render("suppressions.html.j2", suppressions=store.list_suppressions())
+
+    @app.get("/dastcore-ignore")
+    def dastcore_ignore() -> Response:
+        import yaml
+
+        items = []
+        for supp in store.build_suppressions():
+            entry: dict[str, object] = {}
+            if supp.id:
+                entry["id"] = supp.id
+            if supp.rule_id:
+                entry["rule_id"] = supp.rule_id
+            if supp.url:
+                entry["url"] = supp.url
+            if supp.reason:
+                entry["reason"] = supp.reason
+            if supp.expires:
+                entry["expires"] = supp.expires.isoformat()
+            items.append(entry)
+        body = yaml.safe_dump({"suppressions": items}, allow_unicode=True, sort_keys=False)
+        return Response(
+            body,
+            media_type="application/yaml",
+            headers={"Content-Disposition": 'attachment; filename=".dastcore-ignore"'},
+        )
 
     @app.get("/scans/{scan_id}/report", response_class=HTMLResponse)
     def scan_report(scan_id: str) -> Response:

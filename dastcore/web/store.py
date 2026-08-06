@@ -9,6 +9,7 @@ connection guarded by a lock is enough and keeps the store dependency-free.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import sqlite3
 import threading
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dastcore.core.models import Finding
+from dastcore.suppressions import Suppression
 
 _SEVERITIES = ("critical", "high", "medium", "low", "info")
 
@@ -36,6 +38,16 @@ CREATE TABLE IF NOT EXISTS scans (
     kind            TEXT NOT NULL DEFAULT 'scan',
     parent_id       TEXT,
     retest_json     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS suppressions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id     TEXT,
+    finding_id  TEXT,
+    url         TEXT,
+    reason      TEXT NOT NULL DEFAULT '',
+    expires     TEXT,
+    created_at  REAL NOT NULL
 );
 """
 
@@ -64,6 +76,19 @@ class ScanRow:
     error: str | None = None
     kind: str = "scan"  # scan | retest
     parent_id: str | None = None
+
+
+@dataclass
+class SuppressionRow:
+    """A persisted triage suppression (DB row)."""
+
+    id: int
+    rule_id: str | None
+    finding_id: str | None
+    url: str | None
+    reason: str
+    expires: str | None
+    created_at: float
 
 
 def severity_counts(findings: list[Finding]) -> dict[str, int]:
@@ -213,3 +238,56 @@ class Store:
         if not raw:
             return []
         return [Finding.model_validate(item) for item in json.loads(raw)]
+
+    # --- triage suppressions -----------------------------------------------------------
+
+    def add_suppression(
+        self,
+        *,
+        rule_id: str | None = None,
+        finding_id: str | None = None,
+        url: str | None = None,
+        reason: str = "",
+        expires: str | None = None,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO suppressions (rule_id, finding_id, url, reason, expires, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (rule_id or None, finding_id or None, url or None, reason, expires or None, _dt.datetime.now().timestamp()),
+            )
+
+    def list_suppressions(self) -> list[SuppressionRow]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM suppressions ORDER BY created_at DESC").fetchall()
+        return [
+            SuppressionRow(
+                id=row["id"],
+                rule_id=row["rule_id"],
+                finding_id=row["finding_id"],
+                url=row["url"],
+                reason=row["reason"],
+                expires=row["expires"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def delete_suppression(self, row_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM suppressions WHERE id=?", (row_id,))
+
+    def build_suppressions(self) -> list[Suppression]:
+        """Domain `Suppression` objects for applying/exporting (skips malformed rows)."""
+        result: list[Suppression] = []
+        for row in self.list_suppressions():
+            try:
+                expires = _dt.date.fromisoformat(row.expires) if row.expires else None
+                result.append(
+                    Suppression(
+                        id=row.finding_id, rule_id=row.rule_id, url=row.url, reason=row.reason, expires=expires
+                    )
+                )
+            except ValueError:
+                continue  # bad date or no selector at all — ignore rather than crash the view
+        return result

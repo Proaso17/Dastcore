@@ -113,6 +113,56 @@ async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncCli
         assert "retest" in home.text
 
 
+async def test_triage_accepts_finding_and_exports_ignore_file(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+    async with client:
+        resp = await client.post(
+            "/scans",
+            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            follow_redirects=False,
+        )
+        scan_id = resp.headers["location"].rsplit("/", 1)[-1]
+        await _wait_done(client, scan_id)
+
+        # the SQLi issue is active before triage
+        before = await client.get(f"/scans/{scan_id}/panel")
+        assert "SQL Injection" in before.text
+        assert "Aceptados" not in before.text
+
+        # accept (suppress) the SQLi rule as a false positive
+        supp = await client.post(
+            "/suppress",
+            data={"rule_id": "sqli-injection", "reason": "revisado: parametrizado", "scan_id": scan_id},
+            follow_redirects=False,
+        )
+        assert supp.status_code == 303
+
+        # now it shows under "Aceptados", not the active table's triage control
+        after = await client.get(f"/scans/{scan_id}/panel")
+        assert "Aceptados" in after.text
+
+        # it is exported into a downloadable .dastcore-ignore
+        ignore = await client.get("/dastcore-ignore")
+        assert ignore.status_code == 200
+        assert "sqli-injection" in ignore.text
+        assert "revisado: parametrizado" in ignore.text
+
+        # the triage page lists it, and it can be deleted
+        page = await client.get("/suppressions")
+        assert "sqli-injection" in page.text
+        row_id = page.text.split("/suppress/")[1].split("/delete")[0]
+        deleted = await client.post(f"/suppress/{row_id}/delete", follow_redirects=False)
+        assert deleted.status_code == 303
+        assert "sqli-injection" not in (await client.get("/suppressions")).text
+
+
+async def test_suppress_without_selector_is_ignored(client: httpx.AsyncClient) -> None:
+    async with client:
+        resp = await client.post("/suppress", data={"reason": "nada"}, follow_redirects=False)
+        assert resp.status_code == 303
+        page = await client.get("/suppressions")
+    assert "Sin reglas de triaje" in page.text
+
+
 async def test_retest_missing_scan_is_404(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.post("/scans/deadbeef/retest", data={"authorization": "on"})

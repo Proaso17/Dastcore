@@ -56,7 +56,7 @@
   {% if issues %}
   <div class="overflow">
     <table>
-      <thead><tr><th>Severidad</th><th>CVSS</th><th>Issue</th><th>Inst.</th><th>Ubicaciones</th></tr></thead>
+      <thead><tr><th>Severidad</th><th>CVSS</th><th>Issue</th><th>Inst.</th><th>Ubicaciones</th><th>Triaje</th></tr></thead>
       <tbody>
         {% for i in issues %}
         <tr>
@@ -65,13 +65,43 @@
           <td>{{ i.name }}</td>
           <td>{{ i.count }}</td>
           <td class="muted">{{ i.locations[:3] | join(', ') }}{% if i.locations | length > 3 %} …{% endif %}</td>
+          <td>
+            <form method="post" action="/suppress" class="triage">
+              <input type="hidden" name="rule_id" value="{{ i.rule_id }}">
+              <input type="hidden" name="scan_id" value="{{ scan.id }}">
+              <input name="reason" placeholder="motivo (opcional)">
+              <button type="submit" title="Marcar como aceptado / falso positivo">Aceptar</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% elif accepted %}
+    <div class="empty">Sin hallazgos activos (todo triado abajo).</div>
   {% else %}
     <div class="empty">Sin hallazgos. 🎉</div>
+  {% endif %}
+  {% if accepted %}
+  <div class="accepted">
+    <strong class="muted">Aceptados / falsos positivos ({{ accepted | length }})</strong>
+    <div class="overflow">
+      <table>
+        <thead><tr><th>Severidad</th><th>Issue</th><th>Inst.</th></tr></thead>
+        <tbody>
+          {% for i in accepted %}
+          <tr>
+            <td><span class="badge sev-{{ i.severity }}">{{ i.severity }}</span></td>
+            <td class="muted">{{ i.name }}</td>
+            <td class="muted">{{ i.count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:13px">Gestiona o exporta a <code>.dastcore-ignore</code> en <a href="/suppressions">Triaje</a>.</p>
+  </div>
   {% endif %}
   <div class="actions">
     <a href="/scans/{{ scan.id }}/report" target="_blank">Ver reporte HTML</a>
