@@ -74,6 +74,7 @@
                 {% for sev in ['critical','high','medium','low'] %}
                   {% if s.severity_counts.get(sev) %}<span class="badge sev-{{ sev }}">{{ s.severity_counts[sev] }}</span>{% endif %}
                 {% endfor %}
+                {% if s.accepted %}<span class="muted" title="ocultos por triaje">· {{ s.accepted }} aceptado(s)</span>{% endif %}
               {% else %}<span class="muted">—</span>{% endif %}
             </td>
             <td class="muted">{{ s.created_at | datetime }}</td>

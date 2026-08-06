@@ -22,7 +22,7 @@ from dastcore.severity import severity_rank
 from dastcore.suppressions import apply_suppressions
 from dastcore.web.diff import diff_findings, location_label
 from dastcore.web.jobs import ScanManager, ScanRequest
-from dastcore.web.store import ScanRow, Store
+from dastcore.web.store import ScanRow, Store, severity_counts
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -74,9 +74,27 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 ctx["accepted"] = correlate([f for f in findings if f.suppressed])
         return ctx, True
 
+    def _with_triage(scan: ScanRow, suppressions: list) -> ScanRow:
+        """Recompute a row's finding counts with current triage applied (display only).
+
+        Fast path: with no suppressions the stored counts already stand, so we skip
+        loading findings. Retests and unfinished runs are shown as stored.
+        """
+        if not suppressions or scan.status != "done" or scan.kind == "retest":
+            return scan
+        findings = store.get_findings(scan.id)
+        apply_suppressions(findings, suppressions)
+        active = [f for f in findings if not f.suppressed]
+        scan.num_findings = len(active)
+        scan.severity_counts = severity_counts(active)
+        scan.accepted = len(findings) - len(active)
+        return scan
+
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> HTMLResponse:
-        return render("dashboard.html.j2", scans=store.list_scans())
+        suppressions = store.build_suppressions()
+        scans = [_with_triage(s, suppressions) for s in store.list_scans()]
+        return render("dashboard.html.j2", scans=scans)
 
     @app.post("/scans")
     async def start_scan(

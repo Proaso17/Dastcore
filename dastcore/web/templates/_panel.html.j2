@@ -50,7 +50,8 @@
 {% else %}
   <div class="status st-done">Completado</div>
   <p class="muted">
-    {{ scan.num_findings }} hallazgo(s) · {{ issues | length }} issue(s)
+    {{ issues | sum(attribute='count') }} hallazgo(s) activo(s) · {{ issues | length }} issue(s)
+    {% if accepted %}· {{ accepted | sum(attribute='count') }} aceptado(s){% endif %}
     {% if scan.duration_s %}· {{ scan.duration_s | round(1) }}s{% endif %}
   </p>
   {% if issues %}

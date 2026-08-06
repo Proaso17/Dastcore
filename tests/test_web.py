@@ -188,6 +188,27 @@ async def test_diff_missing_scan_is_404(client: httpx.AsyncClient) -> None:
     assert resp.status_code == 404
 
 
+async def test_dashboard_counts_reflect_triage(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+    async with client:
+        resp = await client.post(
+            "/scans",
+            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            follow_redirects=False,
+        )
+        scan_id = resp.headers["location"].rsplit("/", 1)[-1]
+        await _wait_done(client, scan_id)
+
+        before = await client.get("/")
+        assert "aceptado(s)" not in before.text
+
+        # accept the SQLi rule -> the dashboard row now shows it as accepted, off the count
+        await client.post(
+            "/suppress", data={"rule_id": "sqli-injection", "reason": "fp", "scan_id": scan_id}
+        )
+        after = await client.get("/")
+        assert "aceptado(s)" in after.text
+
+
 async def test_suppress_without_selector_is_ignored(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.post("/suppress", data={"reason": "nada"}, follow_redirects=False)

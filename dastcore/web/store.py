@@ -76,6 +76,7 @@ class ScanRow:
     error: str | None = None
     kind: str = "scan"  # scan | retest
     parent_id: str | None = None
+    accepted: int = 0  # display-only: findings hidden by triage (not persisted)
 
 
 @dataclass
