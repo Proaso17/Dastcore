@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline core permissions for the dastcore desktop shell. The window content is the local dastcore server, which does not call Tauri APIs, so no plugin permissions are needed.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

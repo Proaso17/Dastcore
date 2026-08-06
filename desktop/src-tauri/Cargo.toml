@@ -1,0 +1,19 @@
+[package]
+name = "dastcore-desktop"
+version = "0.1.0"
+description = "Desktop shell for the dastcore web dashboard"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Blocking HTTP client used only to poll the local server until it is healthy.
+ureq = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

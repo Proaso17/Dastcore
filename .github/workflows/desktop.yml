@@ -1,0 +1,52 @@
+# Build the dastcore desktop app (Tauri) for Windows, macOS and Linux.
+#
+# Manual only: desktop bundles are a release-time artifact, and the build needs
+# app icons to exist first (generate once with `npm run tauri icon <logo.png>` —
+# see desktop/README.md). Runs cargo/tauri build; the resulting installers are
+# uploaded as workflow artifacts.
+name: Desktop build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+          - platform: ubuntu-22.04
+          - platform: windows-latest
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux webview dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Tauri CLI deps
+        working-directory: desktop
+        run: npm install
+
+      - name: Build the app bundle
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: dastcore-desktop-${{ matrix.platform }}
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*
+          if-no-files-found: warn

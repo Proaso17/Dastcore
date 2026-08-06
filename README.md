@@ -440,6 +440,8 @@ docker compose up --build      # http://127.0.0.1:8000
 docker pull ghcr.io/proaso17/dastcore:latest
 ```
 
+**App de escritorio (Tauri)**: [`desktop/`](desktop/) contiene un shell nativo (Tauri v2) que envuelve el mismo `dastcore serve` — lanza el servidor local como proceso hijo y lo muestra en una ventana nativa (comparte historial con la CLI). Es un scaffold listo para compilar con Rust + Node (`cd desktop && npm install && npm run tauri icon <logo.png> && npm run tauri dev`); ver [`desktop/README.md`](desktop/README.md). El workflow `desktop.yml` (manual) genera los instaladores para Windows/macOS/Linux.
+
 ## Pulido operativo
 
 Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
