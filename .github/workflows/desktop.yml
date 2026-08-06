@@ -1,9 +1,9 @@
-# Build the dastcore desktop app (Tauri) for Windows, macOS and Linux.
+# Build the dastcore desktop app (Tauri) for Windows, macOS and Linux, bundling
+# the PyInstaller sidecar so the app needs no Python at runtime.
 #
 # Manual only: desktop bundles are a release-time artifact, and the build needs
 # app icons to exist first (generate once with `npm run tauri icon <logo.png>` —
-# see desktop/README.md). Runs cargo/tauri build; the resulting installers are
-# uploaded as workflow artifacts.
+# see desktop/README.md). The resulting installers are uploaded as artifacts.
 name: Desktop build
 
 on:
@@ -29,6 +29,16 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the dastcore sidecar (PyInstaller)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[web]" pyinstaller
+          python desktop/sidecar/build_sidecar.py
 
       - uses: actions/setup-node@v4
         with:

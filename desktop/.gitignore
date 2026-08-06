@@ -2,3 +2,7 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+# Built sidecar binaries (produced by sidecar/build_sidecar.py).
+src-tauri/binaries/
+sidecar/dist/
+sidecar/build/

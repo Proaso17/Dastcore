@@ -5,6 +5,7 @@
   "description": "Desktop shell for the dastcore web dashboard (Tauri v2)",
   "scripts": {
     "tauri": "tauri",
+    "sidecar": "python sidecar/build_sidecar.py",
     "dev": "tauri dev",
     "build": "tauri build"
   },

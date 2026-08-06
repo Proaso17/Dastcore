@@ -14,6 +14,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::thread;
@@ -32,10 +33,30 @@ fn free_port() -> u16 {
         .expect("could not reserve a local port")
 }
 
+/// The bundled sidecar, if present. Tauri's `externalBin` places it next to the
+/// app executable (as `dastcore` / `dastcore.exe`) in a packaged build.
+fn bundled_sidecar() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let name = if cfg!(windows) { "dastcore.exe" } else { "dastcore" };
+    let path = dir.join(name);
+    path.exists().then_some(path)
+}
+
+/// Which `dastcore` to run: an explicit override, else the bundled sidecar, else
+/// whatever is on PATH (dev, or a plain `pip install dastcore[web]`).
+fn resolve_program() -> String {
+    if let Ok(cmd) = std::env::var("DASTCORE_CMD") {
+        return cmd;
+    }
+    if let Some(path) = bundled_sidecar() {
+        return path.to_string_lossy().into_owned();
+    }
+    "dastcore".to_string()
+}
+
 /// Start `dastcore serve` bound to the given port.
 fn spawn_server(port: u16) -> std::io::Result<Child> {
-    let program = std::env::var("DASTCORE_CMD").unwrap_or_else(|_| "dastcore".to_string());
-    let mut command = Command::new(program);
+    let mut command = Command::new(resolve_program());
     command.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()]);
     #[cfg(windows)]
     {
