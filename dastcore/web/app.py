@@ -171,8 +171,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
             return HTMLResponse("<h1>404</h1><p>Escaneo no encontrado.</p>", status_code=404)
         if authorization != "on":
             return HTMLResponse(
-                f"<p>Debes confirmar la autorización para reverificar. "
-                f'<a href="/scans/{scan_id}">Volver</a></p>',
+                f'<p>Debes confirmar la autorización para reverificar. <a href="/scans/{scan_id}">Volver</a></p>',
                 status_code=400,
             )
         new_id = manager.start_retest(
@@ -295,9 +294,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
 
     @app.get("/schedules", response_class=HTMLResponse)
     def schedules_page(error: str = "") -> HTMLResponse:
-        return render(
-            "schedules.html.j2", schedules=store.list_schedules(), intervals=_INTERVALS, error=error
-        )
+        return render("schedules.html.j2", schedules=store.list_schedules(), intervals=_INTERVALS, error=error)
 
     @app.post("/schedules")
     def add_schedule(

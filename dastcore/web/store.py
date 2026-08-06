@@ -253,9 +253,7 @@ class Store:
 
     def list_scans(self, limit: int = 100) -> list[ScanRow]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM scans ORDER BY created_at DESC LIMIT ?", (limit,)
-            ).fetchall()
+            rows = self._conn.execute("SELECT * FROM scans ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [self._row_to_scan(row) for row in rows]
 
     def get_scan(self, scan_id: str) -> ScanRow | None:
@@ -289,7 +287,14 @@ class Store:
             self._conn.execute(
                 "INSERT INTO suppressions (rule_id, finding_id, url, reason, expires, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (rule_id or None, finding_id or None, url or None, reason, expires or None, _dt.datetime.now().timestamp()),
+                (
+                    rule_id or None,
+                    finding_id or None,
+                    url or None,
+                    reason,
+                    expires or None,
+                    _dt.datetime.now().timestamp(),
+                ),
             )
 
     def list_suppressions(self) -> list[SuppressionRow]:
@@ -371,9 +376,7 @@ class Store:
 
     def due_schedules(self, now: float) -> list[ScheduleRow]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM schedules WHERE enabled=1 AND next_run_at<=?", (now,)
-            ).fetchall()
+            rows = self._conn.execute("SELECT * FROM schedules WHERE enabled=1 AND next_run_at<=?", (now,)).fetchall()
         return [self._row_to_schedule(row) for row in rows]
 
     def mark_ran(self, schedule_id: int, last_run_at: float, next_run_at: float) -> None:
@@ -398,9 +401,7 @@ class Store:
             try:
                 expires = _dt.date.fromisoformat(row.expires) if row.expires else None
                 result.append(
-                    Suppression(
-                        id=row.finding_id, rule_id=row.rule_id, url=row.url, reason=row.reason, expires=expires
-                    )
+                    Suppression(id=row.finding_id, rule_id=row.rule_id, url=row.url, reason=row.reason, expires=expires)
                 )
             except ValueError:
                 continue  # bad date or no selector at all — ignore rather than crash the view

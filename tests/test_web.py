@@ -202,9 +202,7 @@ async def test_dashboard_counts_reflect_triage(client: httpx.AsyncClient, vuln_a
         assert "aceptado(s)" not in before.text
 
         # accept the SQLi rule -> the dashboard row now shows it as accepted, off the count
-        await client.post(
-            "/suppress", data={"rule_id": "sqli-injection", "reason": "fp", "scan_id": scan_id}
-        )
+        await client.post("/suppress", data={"rule_id": "sqli-injection", "reason": "fp", "scan_id": scan_id})
         after = await client.get("/")
         assert "aceptado(s)" in after.text
 

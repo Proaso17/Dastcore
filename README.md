@@ -418,16 +418,26 @@ La Fase 8 entrega el pulido y empaquetado:
 - **Perfiles de escaneo**: `--profile quick|full|api` fijan defaults sensatos (motor, `max-pages`, oast). Cualquier flag explícito **siempre gana** (resuelto por la fuente del parámetro, no por comparación de valores).
 - **Reanudación**: `--resume <archivo>` persiste el progreso por request (firmas completadas + hallazgos) tras cada petición; si el escaneo se interrumpe, se reanuda saltando lo ya hecho.
 - **Resumen `rich`**: panel final con conteo por severidad, total y duración.
-- **`Dockerfile`** (con Chromium + extras) y **`.dockerignore`**.
-- **GitHub Action** de ejemplo en [`examples/github-action.yml`](examples/github-action.yml): escanea staging y sube el SARIF a *code scanning*.
+- **`Dockerfile`** (Chromium + extras `headless,oast,web` → CLI **y** panel en la misma imagen) y **`.dockerignore`**.
+- **`docker-compose.yml`** para levantar el panel con historial persistente (volumen) y healthcheck.
+- **GitHub Actions**: `.github/workflows/ci.yml` (lint + tipos + tests del propio repo), `release.yml` (publica a PyPI en tags vía OIDC), `docker.yml` (build + push de la imagen a **GHCR** en `main`/tags), y el ejemplo de uso en [`examples/github-action.yml`](examples/github-action.yml) (escanea staging → SARIF → *code scanning*).
 - Docs: [RULES.md](RULES.md), [SECURITY.md](SECURITY.md).
 
 ```powershell
 .venv\Scripts\pytest tests/test_cli_phase8.py -v
 
-# Docker
+# Docker — escaneo one-shot (SARIF a stdout/volumen)
 docker build -t dastcore .
 docker run --rm dastcore scan https://staging.example.com --i-have-authorization --profile full -f sarif
+
+# Docker — panel web (bind 0.0.0.0 dentro del contenedor, publicado solo en localhost)
+docker run --rm -p 127.0.0.1:8000:8000 dastcore serve --host 0.0.0.0
+
+# …o con compose (historial persistente en un volumen):
+docker compose up --build      # http://127.0.0.1:8000
+
+# Imagen publicada en GHCR:
+docker pull ghcr.io/proaso17/dastcore:latest
 ```
 
 ## Pulido operativo

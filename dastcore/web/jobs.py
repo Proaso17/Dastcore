@@ -154,7 +154,9 @@ class ScanManager:
 
     # --- retest ------------------------------------------------------------------------
 
-    def start_retest(self, parent_id: str, *, auth_bearer: str = "", auth_cookie: str = "", rps: float = 5.0) -> str | None:
+    def start_retest(
+        self, parent_id: str, *, auth_bearer: str = "", auth_cookie: str = "", rps: float = 5.0
+    ) -> str | None:
         """Launch a retest of a finished scan's findings. Returns the new run id, or
         None if the parent has no findings / no usable target to re-scan."""
         prior = self._store.get_findings(parent_id)

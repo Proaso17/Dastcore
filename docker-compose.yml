@@ -1,0 +1,26 @@
+# Run the dastcore web dashboard with a persistent scan history.
+#   docker compose up --build         # http://127.0.0.1:8000
+# Scan history + schedules live in the named volume, so they survive restarts.
+#
+# The dashboard can launch active, intrusive scans. Keep it bound to localhost
+# (the published port below maps only 127.0.0.1) and behind your own network
+# controls — never expose it to an untrusted network.
+services:
+  dashboard:
+    build: .
+    image: dastcore:local
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - dastcore-data:/home/dast/.dastcore
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  dastcore-data:

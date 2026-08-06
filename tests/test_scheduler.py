@@ -87,8 +87,14 @@ async def test_disabled_schedule_does_not_fire(app, vuln_app_url: str) -> None:
     scheduler = app.state.scheduler
     now = time.time()
     store.add_schedule(
-        target=vuln_app_url, engine="http", profile=None, rps=50,
-        auth_bearer="", auth_cookie="", interval_minutes=60, now=now,
+        target=vuln_app_url,
+        engine="http",
+        profile=None,
+        rps=50,
+        auth_bearer="",
+        auth_cookie="",
+        interval_minutes=60,
+        now=now,
     )
     store.set_schedule_enabled(store.list_schedules()[0].id, False)
     assert await scheduler.tick(now=now + 3700) == 0
