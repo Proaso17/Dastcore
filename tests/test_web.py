@@ -155,6 +155,39 @@ async def test_triage_accepts_finding_and_exports_ignore_file(client: httpx.Asyn
         assert "sqli-injection" not in (await client.get("/suppressions")).text
 
 
+async def test_diff_two_scans_of_unchanged_target(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+    async with client:
+        ids = []
+        for _ in range(2):
+            resp = await client.post(
+                "/scans",
+                data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+                follow_redirects=False,
+            )
+            sid = resp.headers["location"].rsplit("/", 1)[-1]
+            await _wait_done(client, sid)
+            ids.append(sid)
+
+        base, head = ids
+        # the newer scan's detail offers a compare control against the older one
+        detail = await client.get(f"/scans/{head}")
+        assert "Comparar" in detail.text
+        assert base in detail.text
+
+        diff = await client.get(f"/diff?base={base}&head={head}")
+        assert diff.status_code == 200
+        # unchanged target -> identical id sets -> everything persistent, nothing new/fixed
+        assert "nuevos: 0" in diff.text
+        assert "corregidos: 0" in diff.text
+        assert "Nada nuevo respecto al escaneo base." in diff.text
+
+
+async def test_diff_missing_scan_is_404(client: httpx.AsyncClient) -> None:
+    async with client:
+        resp = await client.get("/diff?base=nope&head=nada")
+    assert resp.status_code == 404
+
+
 async def test_suppress_without_selector_is_ignored(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.post("/suppress", data={"reason": "nada"}, follow_redirects=False)

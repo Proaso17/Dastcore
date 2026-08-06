@@ -15,9 +15,12 @@ from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from dastcore.core.models import Finding
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate
+from dastcore.severity import severity_rank
 from dastcore.suppressions import apply_suppressions
+from dastcore.web.diff import diff_findings, location_label
 from dastcore.web.jobs import ScanManager, ScanRequest
 from dastcore.web.store import ScanRow, Store
 
@@ -151,7 +154,13 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         if scan is None:
             return HTMLResponse("<h1>404</h1><p>Escaneo no encontrado.</p>", status_code=404)
         ctx, done = panel_context(scan)
-        return render("scan_detail.html.j2", done=done, **ctx)
+        # Other finished plain scans of the same target — candidates to diff against.
+        others = [
+            s
+            for s in store.list_scans()
+            if s.id != scan.id and s.kind == "scan" and s.status == "done" and s.target == scan.target
+        ]
+        return render("scan_detail.html.j2", done=done, others=others, **ctx)
 
     @app.get("/scans/{scan_id}/panel", response_class=HTMLResponse)
     def scan_panel(scan_id: str) -> Response:
@@ -216,6 +225,34 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
             body,
             media_type="application/yaml",
             headers={"Content-Disposition": 'attachment; filename=".dastcore-ignore"'},
+        )
+
+    def active_findings(scan_id: str) -> list[Finding]:
+        """A scan's findings with current triage applied, keeping only the active ones."""
+        findings = store.get_findings(scan_id)
+        apply_suppressions(findings, store.build_suppressions())
+        return [f for f in findings if not f.suppressed]
+
+    def _diff_rows(findings: list[Finding]) -> list[dict[str, str]]:
+        return [
+            {"severity": f.severity, "name": f.name, "location": location_label(f)}
+            for f in sorted(findings, key=lambda x: severity_rank(x.severity), reverse=True)
+        ]
+
+    @app.get("/diff", response_class=HTMLResponse)
+    def diff_page(base: str, head: str) -> Response:
+        base_scan, head_scan = store.get_scan(base), store.get_scan(head)
+        if base_scan is None or head_scan is None:
+            return HTMLResponse("<h1>404</h1><p>Escaneo no encontrado.</p>", status_code=404)
+        result = diff_findings(active_findings(base), active_findings(head))
+        return render(
+            "diff.html.j2",
+            base=base_scan,
+            head=head_scan,
+            counts=result.counts,
+            new=_diff_rows(result.new),
+            fixed=_diff_rows(result.fixed),
+            persistent=_diff_rows(result.persistent),
         )
 
     @app.get("/scans/{scan_id}/report", response_class=HTMLResponse)

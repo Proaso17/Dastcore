@@ -16,6 +16,24 @@
     <div id="result">{% include "_panel.html.j2" %}</div>
   </div>
 
+  {% if done and scan.kind == 'scan' and others %}
+  <div class="panel">
+    <h2>Comparar</h2>
+    <form method="get" action="/diff" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap">
+      <input type="hidden" name="head" value="{{ scan.id }}">
+      <div style="flex:1; min-width:240px">
+        <label for="base">Ver cambios desde un escaneo anterior hasta este</label>
+        <select id="base" name="base">
+          {% for o in others %}
+          <option value="{{ o.id }}">{{ o.created_at | datetime }} · {{ o.num_findings }} hallazgo(s)</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit">Comparar</button>
+    </form>
+  </div>
+  {% endif %}
+
   <script>
     (function () {
       var done = {{ 'true' if done else 'false' }};

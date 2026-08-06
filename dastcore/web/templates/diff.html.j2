@@ -1,0 +1,51 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · diff{% endblock %}
+{% macro rows(items, empty) %}
+  {% if items %}
+  <div class="overflow">
+    <table>
+      <thead><tr><th>Severidad</th><th>Issue</th><th>Ubicación</th></tr></thead>
+      <tbody>
+        {% for r in items %}
+        <tr>
+          <td><span class="badge sev-{{ r.severity }}">{{ r.severity }}</span></td>
+          <td>{{ r.name }}</td>
+          <td class="muted">{{ r.location }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">{{ empty }}</div>{% endif %}
+{% endmacro %}
+{% block body %}
+  <div class="panel">
+    <h2 style="word-break:break-all">Diff · {{ head.target }}</h2>
+    <div class="muted">
+      desde <a href="/scans/{{ base.id }}">{{ base.created_at | datetime }}</a>
+      hasta <a href="/scans/{{ head.id }}">{{ head.created_at | datetime }}</a>
+    </div>
+    <p style="margin-top:12px">
+      <span class="rt-open">nuevos: {{ counts.new }}</span> ·
+      <span class="rt-fixed">corregidos: {{ counts.fixed }}</span> ·
+      <span class="muted">persistentes: {{ counts.persistent }}</span>
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2 class="rt-open" style="color:var(--bad)">Nuevos ({{ counts.new }})</h2>
+    <p class="muted" style="margin-top:-8px">Aparecieron o reaparecieron (posibles regresiones).</p>
+    {{ rows(new, "Nada nuevo respecto al escaneo base.") }}
+  </div>
+
+  <div class="panel">
+    <h2 style="color:var(--ok)">Corregidos ({{ counts.fixed }})</h2>
+    <p class="muted" style="margin-top:-8px">Estaban en el escaneo base y ya no aparecen.</p>
+    {{ rows(fixed, "No se corrigió nada respecto al escaneo base.") }}
+  </div>
+
+  <div class="panel">
+    <h2 class="muted">Persistentes ({{ counts.persistent }})</h2>
+    {{ rows(persistent, "Sin hallazgos comunes.") }}
+  </div>
+{% endblock %}
