@@ -1,9 +1,11 @@
-# Build the dastcore container image and publish it to the GitHub Container
+# Build the dastcore container images and publish them to the GitHub Container
 # Registry (GHCR). Runs on version tags and on pushes to main (a `:main` tag),
-# and builds without pushing on pull requests so the Dockerfile stays green.
+# and builds without pushing on pull requests so the Dockerfiles stay green.
 #
-# The image lands at ghcr.io/<owner>/dastcore. Pull with:
-#   docker pull ghcr.io/proaso17/dastcore:latest
+# Two images:
+#   ghcr.io/<owner>/dastcore        — full scanner (CLI + dashboard + runner)
+#   ghcr.io/<owner>/dastcore-cloud  — slim control-plane (API + UI, no browser)
+# Pull with, e.g.:  docker pull ghcr.io/proaso17/dastcore:latest
 name: Docker
 
 on:
@@ -19,6 +21,14 @@ jobs:
     permissions:
       contents: read
       packages: write # required to push to GHCR
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: dastcore
+            dockerfile: Dockerfile
+          - image: dastcore-cloud
+            dockerfile: Dockerfile.cloud
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +48,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/dastcore
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -49,8 +59,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

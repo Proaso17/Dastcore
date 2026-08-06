@@ -1338,13 +1338,16 @@ def cloud_serve(
         )
         raise typer.Exit(code=1) from exc
 
+    import os as _os
     import secrets as _secrets
     from pathlib import Path as _Path
 
     _print_banner()
-    resolved_db = db_path or str(_Path.home() / ".dastcore" / "cloud.db")
-    token = admin_token or ("admin_" + _secrets.token_urlsafe(24))
-    if not admin_token:
+    resolved_db = db_path or _os.environ.get("DASTCORE_DB", "") or str(_Path.home() / ".dastcore" / "cloud.db")
+    # Precedence: --admin-token flag > DASTCORE_ADMIN_TOKEN env (for container deploys) > generated.
+    provided_token = admin_token or _os.environ.get("DASTCORE_ADMIN_TOKEN", "")
+    token = provided_token or ("admin_" + _secrets.token_urlsafe(24))
+    if not provided_token:
         console.print(
             f"\n[yellow]Admin token generado:[/yellow] [bold]{token}[/bold]  [dim](úsalo para crear proyectos)[/dim]"
         )

@@ -524,6 +524,24 @@ curl -X POST http://127.0.0.1:8800/api/jobs -H "Authorization: Bearer <API_KEY>"
 .venv\Scripts\dastcore runner http://127.0.0.1:8800 --project-key <API_KEY> --i-have-authorization
 ```
 
+### Deploy del control-plane
+
+El control-plane **no escanea** (solo encola/almacena), así que su imagen es **slim** (`Dockerfile.cloud`: solo el extra `web`, sin navegador ni cryptography). Los **runners** sí escanean y usan la imagen completa (`Dockerfile`).
+
+```powershell
+# Control-plane con compose (historial en un volumen, healthcheck en /api/health)
+$env:DASTCORE_ADMIN_TOKEN = "<secreto-fuerte>"
+docker compose -f docker-compose.cloud.yml up --build        # API + UI en http://127.0.0.1:8800
+
+# …o la imagen publicada en GHCR
+docker run -e DASTCORE_ADMIN_TOKEN=<secreto> -p 127.0.0.1:8800:8800 -v dast-cloud:/data ghcr.io/proaso17/dastcore-cloud:latest
+
+# Runner en la red del objetivo (imagen completa; se registra con la API key del proyecto)
+docker run --rm ghcr.io/proaso17/dastcore:latest runner https://cloud.example.com --project-key <API_KEY> --i-have-authorization
+```
+
+`cloud-serve` lee `DASTCORE_ADMIN_TOKEN` y `DASTCORE_DB` del entorno (para contenedores). En producción, pon el control-plane detrás de un proxy con TLS y restringe el acceso.
+
 ```powershell
 .venv\Scripts\pytest tests/test_cloud.py -v
 ```

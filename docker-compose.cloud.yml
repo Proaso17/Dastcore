@@ -1,0 +1,30 @@
+# Deploy the dastcore control-plane (cloud SaaS API + UI).
+#   DASTCORE_ADMIN_TOKEN=<strong-secret> docker compose -f docker-compose.cloud.yml up --build
+# The API + UI are served on :8800; scan jobs, results and schedules persist in the
+# named volume. Runners (self-hosted, in the target network) connect to this server.
+#
+# In production put a TLS-terminating reverse proxy in front and restrict who can
+# reach it. The port below is published only on localhost by default.
+services:
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud
+    image: dastcore-cloud:local
+    environment:
+      # Provide a strong admin token; if unset, the container generates and logs one.
+      DASTCORE_ADMIN_TOKEN: ${DASTCORE_ADMIN_TOKEN:-}
+    ports:
+      - "127.0.0.1:8800:8800"
+    volumes:
+      - dastcore-cloud-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8800/api/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  dastcore-cloud-data:

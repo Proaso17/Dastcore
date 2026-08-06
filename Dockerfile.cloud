@@ -1,0 +1,31 @@
+# dastcore control-plane — the cloud SaaS API + UI.
+#
+# The control plane only queues jobs and stores results; it never scans, so it
+# needs just the `web` extra (FastAPI/uvicorn/Jinja) — no Playwright/Chromium or
+# cryptography. That keeps this image small and its attack surface minimal.
+# Runners (which DO scan) use the full `Dockerfile` image instead.
+FROM python:3.11-slim
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DASTCORE_DB=/data/cloud.db
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY dastcore ./dastcore
+
+RUN pip install --upgrade pip && pip install ".[web]"
+
+# Non-root; /data holds the SQLite DB (mount a volume there to persist it).
+RUN useradd --create-home --uid 10001 dast \
+    && mkdir -p /data && chown -R dast:dast /data
+USER dast
+
+EXPOSE 8800
+
+# Set DASTCORE_ADMIN_TOKEN to a strong secret; otherwise one is generated and logged.
+# Bind 0.0.0.0 so the port is reachable from outside the container (put TLS/a proxy in front).
+ENTRYPOINT ["dastcore"]
+CMD ["cloud-serve", "--host", "0.0.0.0", "--port", "8800"]
