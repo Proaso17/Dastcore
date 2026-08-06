@@ -451,6 +451,18 @@ Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
 - **Verbosidad**: `--verbose/-v` (log DEBUG de cada petición HTTP) y `--quiet/-q` (silencia la salida decorativa; emite solo el reporte, ideal para pipelines: `dastcore scan ... -q -f sarif > out.sarif`).
 - **Descubrimiento por `robots.txt` + `sitemap.xml`**: el crawler siembra la cola con rutas de `Disallow`/`Allow` y `<loc>` del sitemap (a menudo endpoints "ocultos"). Desactivable en la API con `use_robots=False`.
 - **Más detectores pasivos**: divulgación de tecnología/versión (Server/X-Powered-By), CSP ausente, y directory listing habilitado.
+- **Retest (verificación de correcciones)**: `dastcore retest hallazgos.json` toma el JSON de un escaneo previo (`scan -f json`) y **reescanea solo las peticiones de esos hallazgos**, reaplicando las mismas reglas. Cada hallazgo previo se clasifica como:
+  - **ABIERTO** — volvió a dispararse (sigue vulnerable); el reporte de salida lleva el hallazgo *fresco* (nueva evidencia/respuesta).
+  - **CORREGIDO** — se reemitió la petición y ya no aparece.
+  - **SIN VERIFICAR** — clase out-of-band (SSRF/RCE/XXE ciego) sin colector OAST activo: la ausencia de callback no prueba que esté corregido, así que no se marca como tal (usa `--oast local|interactsh` para reverificarlos de verdad).
+
+  El emparejamiento es por `Finding.id` (`regla:método:ruta:ubicación:nombre`), estable entre ejecuciones. El objetivo y el scope se derivan de las URLs de los hallazgos previos (o pásalos con `--allow-domain`). Emite un reporte (json/sarif/html) **solo de los que siguen abiertos** y respeta `--fail-on` (exit 2 si algún hallazgo sigue abierto por encima del umbral), ideal para un ticket de "confirmar el fix" en CI. Reusa los mismos flags de auth que `scan` (`--auth-cookie`, `--auth-bearer`, `--login-url`, OAuth2…).
+  ```powershell
+  # 1) escaneo inicial -> JSON de hallazgos
+  .venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization --rps 50 -f json -o hallazgos.json
+  # 2) tras aplicar correcciones, reverifica solo esos hallazgos
+  .venv\Scripts\dastcore retest hallazgos.json --i-have-authorization --rps 50 --fail-on high -o abiertos.json
+  ```
 
 ## Correr toda la suite
 

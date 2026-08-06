@@ -54,6 +54,14 @@ from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate, deduplicate
+from dastcore.retest import (
+    RetestOutcome,
+    base_requests_for,
+    classify,
+    load_prior_findings,
+    open_findings,
+    summarize,
+)
 from dastcore.severity import meets_threshold
 from dastcore.suppressions import Suppression, apply_suppressions, resolve_suppressions
 
@@ -453,6 +461,33 @@ async def _run_scan(
     return active_passive + dom_findings + authz_findings
 
 
+async def _run_retest(
+    config: ScanConfig,
+    prior_findings: list[Finding],
+    oast_mode: str,
+    oast_server: str,
+    budget: _Budget,
+) -> list[Finding]:
+    """Re-issue only the prior findings' requests and re-run the same rules over them.
+
+    Returns every finding this fresh scan produced; the caller lines them up against
+    the prior set by id to decide what's still open vs fixed.
+    """
+    rules = load_rules()
+    base_requests = base_requests_for(prior_findings)
+    oast = _build_oast_provider(oast_mode, oast_server)
+    if oast is not None:
+        await oast.start()
+    try:
+        async with AsyncExitStack() as stack:
+            client = await _open_authenticated_client(stack, config, config.auth, budget)
+            scanner = Scanner(client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency)
+            return await scanner.scan(base_requests)
+    finally:
+        if oast is not None:
+            await oast.stop()
+
+
 async def _scan_with_optional_resume(
     scanner: Scanner,
     requests: list[HttpRequest],
@@ -517,6 +552,69 @@ def _print_findings_table(findings: list[Finding]) -> None:
             locations,
         )
     console.print(table)
+
+
+_RETEST_STATUS_STYLE = {"open": "bold red", "unverified": "yellow", "fixed": "green"}
+_RETEST_STATUS_LABEL = {"open": "ABIERTO", "unverified": "SIN VERIFICAR", "fixed": "CORREGIDO"}
+_RETEST_STATUS_ORDER = {"open": 0, "unverified": 1, "fixed": 2}
+
+
+def _retest_scope_and_target(
+    prior_findings: list[Finding], allow_domain: list[str], deny_domain: list[str]
+) -> tuple[ScopeConfig, str]:
+    """Derive scope + a representative target from the prior findings' request URLs.
+
+    The allowlist defaults to every host seen in the prior findings (so the retest can
+    only reach the endpoints it's re-verifying); an explicit --allow-domain overrides it.
+    """
+    from urllib.parse import urlsplit
+
+    hosts: list[str] = []
+    target = ""
+    for finding in prior_findings:
+        parts = urlsplit(finding.request.url)
+        if not target and parts.scheme and parts.netloc:
+            target = f"{parts.scheme}://{parts.netloc}"
+        if parts.hostname and parts.hostname not in hosts:
+            hosts.append(parts.hostname)
+    scope = ScopeConfig(allow_domains=list(allow_domain) or hosts, deny_domains=list(deny_domain))
+    return scope, target
+
+
+def _print_retest_table(outcomes: list[RetestOutcome]) -> None:
+    """One row per prior finding, ordered open → unverified → fixed."""
+    table = Table(title=f"Retest · {len(outcomes)} hallazgo(s) previo(s)")
+    table.add_column("Estado")
+    table.add_column("Severidad")
+    table.add_column("Issue")
+    table.add_column("Ubicación")
+    ordered = sorted(outcomes, key=lambda o: (_RETEST_STATUS_ORDER[o.status], o.prior.name))
+    for outcome in ordered:
+        prior = outcome.prior
+        style = _RETEST_STATUS_STYLE[outcome.status]
+        sev_style = _SEVERITY_STYLE.get(prior.severity, "")
+        table.add_row(
+            f"[{style}]{_RETEST_STATUS_LABEL[outcome.status]}[/{style}]",
+            f"[{sev_style}]{prior.severity}[/{sev_style}]",
+            prior.name,
+            f"{prior.injection_point.location}:{prior.injection_point.name}",
+        )
+    console.print(table)
+
+
+def _print_retest_summary(counts: dict[str, int], duration_s: float) -> None:
+    body = (
+        f"[bold red]abiertos: {counts['open']}[/bold red]  ·  "
+        f"[green]corregidos: {counts['fixed']}[/green]  ·  "
+        f"[yellow]sin verificar: {counts['unverified']}[/yellow]"
+    )
+    console.print(
+        Panel(
+            f"{body}\n\nDuración: [bold]{duration_s:.1f}s[/bold]",
+            title="Resumen del retest",
+            border_style="cyan",
+        )
+    )
 
 
 @app.command("scan")
@@ -844,6 +942,160 @@ def _emit_report_and_gate(
         if blocking:
             console.print(
                 f"\n[bold red]{len(blocking)} hallazgo(s) con severidad >= {fail_on}.[/bold red] "
+                f"Saliendo con código {EXIT_FINDINGS_OVER_THRESHOLD} (--fail-on)."
+            )
+            raise typer.Exit(code=EXIT_FINDINGS_OVER_THRESHOLD)
+
+
+@app.command("retest")
+def retest(
+    findings_file: str = typer.Argument(..., help="JSON de un escaneo previo (salida de `scan -f json`)."),
+    i_have_authorization: bool = typer.Option(
+        False, "--i-have-authorization", help="Confirma que tienes autorización para reescanear el objetivo."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Log de cada petición HTTP (DEBUG)."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Silencia la salida decorativa; solo emite el reporte."),
+    allow_domain: list[str] = typer.Option(
+        [], "--allow-domain", help="Scope permitido (repetible). Por defecto, los hosts de los hallazgos previos."
+    ),
+    deny_domain: list[str] = typer.Option([], "--deny-domain", help="Dominio(s) fuera de scope (repetible)."),
+    oast_mode: str = typer.Option(
+        "off", "--oast", help="OAST para reverificar hallazgos ciegos (OOB): off | local | interactsh."
+    ),
+    oast_server: str = typer.Option("oast.fun", "--oast-server", help="Servidor Interactsh cuando --oast interactsh."),
+    requests_per_second: float = typer.Option(5.0, "--rps", help="Límite de requests por segundo."),
+    concurrency: int = typer.Option(5, "--concurrency", help="Peticiones en paralelo."),
+    max_requests: int = typer.Option(0, "--max-requests", help="Presupuesto total de peticiones (0 = sin límite)."),
+    time_budget: float = typer.Option(0.0, "--time-budget", help="Presupuesto de tiempo en segundos (0 = sin límite)."),
+    output_format: str = typer.Option("json", "--format", "-f", help="Formato del reporte: json | sarif | html."),
+    output_path: str = typer.Option("", "--output", "-o", help="Ruta del reporte de hallazgos aún abiertos."),
+    fail_on: str = typer.Option(
+        "high", "--fail-on", help="Umbral que hace fallar el proceso (exit 2) si sigue abierto: ... | none."
+    ),
+    auth_cookie: list[str] = typer.Option([], "--auth-cookie", help="Cookie estática 'nombre=valor' (repetible)."),
+    auth_header: list[str] = typer.Option([], "--auth-header", help="Cabecera estática 'Nombre=valor' (repetible)."),
+    auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer estático (cabecera Authorization)."),
+    login_url: str = typer.Option("", "--login-url", help="Form-login: URL a la que POSTear credenciales."),
+    login_field: list[str] = typer.Option(
+        [], "--login-field", help="Form-login: campo de credenciales 'clave=valor' (repetible)."
+    ),
+    oauth_token_url: str = typer.Option("", "--oauth-token-url", help="OAuth2: URL del token endpoint."),
+    oauth_client_id: str = typer.Option("", "--oauth-client-id", help="OAuth2: client_id."),
+    oauth_client_secret: str = typer.Option("", "--oauth-client-secret", help="OAuth2: client_secret."),
+    oauth_scope: str = typer.Option("", "--oauth-scope", help="OAuth2: scope opcional."),
+) -> None:
+    """Reverifica los hallazgos de un escaneo previo: reescanea SOLO sus peticiones y
+    marca cada uno como ABIERTO (sigue vulnerable), CORREGIDO o SIN VERIFICAR (OOB sin
+    OAST). Emite un reporte de los que siguen abiertos y falla (exit 2) según --fail-on."""
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    if not quiet:
+        _print_banner()
+
+    if not i_have_authorization:
+        console.print("\n[bold red]ABORTADO[/bold red]: se requiere [bold]--i-have-authorization[/bold].")
+        raise typer.Exit(code=1)
+
+    output_format = output_format.lower()
+    if output_format not in ("json", "sarif", "html"):
+        console.print(f"[bold red]Formato inválido:[/bold red] {output_format!r} (usa json | sarif | html).")
+        raise typer.Exit(code=1)
+    oast_mode = oast_mode.lower()
+    if oast_mode not in ("off", "local", "interactsh"):
+        console.print(f"[bold red]--oast inválido:[/bold red] {oast_mode!r} (usa off | local | interactsh).")
+        raise typer.Exit(code=1)
+    fail_on = fail_on.lower()
+    valid_fail_on = ("info", "low", "medium", "high", "critical", "none")
+    if fail_on not in valid_fail_on:
+        console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r} (usa {' | '.join(valid_fail_on)}).")
+        raise typer.Exit(code=1)
+
+    try:
+        prior_findings = load_prior_findings(_json.loads(Path(findings_file).read_text(encoding="utf-8")))
+    except (OSError, ValueError, ValidationError) as exc:
+        console.print(f"[bold red]JSON de hallazgos inválido:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not prior_findings:
+        console.print("[yellow]El reporte previo no contiene hallazgos que reverificar.[/yellow]")
+        raise typer.Exit(code=0)
+
+    scope, derived_target = _retest_scope_and_target(prior_findings, allow_domain, deny_domain)
+    if not derived_target:
+        console.print("[bold red]No pude derivar el objetivo:[/bold red] los hallazgos no traen URLs válidas.")
+        raise typer.Exit(code=1)
+
+    try:
+        auth = _build_auth_config(
+            auth_cookie=auth_cookie,
+            auth_header=auth_header,
+            auth_bearer=auth_bearer,
+            login_url=login_url,
+            login_field=login_field,
+            oauth_token_url=oauth_token_url,
+            oauth_client_id=oauth_client_id,
+            oauth_client_secret=oauth_client_secret,
+            oauth_scope=oauth_scope,
+        )
+        config = ScanConfig(
+            target=derived_target,  # type: ignore[arg-type]
+            scope=scope,
+            auth=auth,
+            rate_limit=RateLimitConfig(requests_per_second=requests_per_second, max_concurrency=concurrency),
+            output=OutputConfig(format=output_format, path=output_path or None),
+            i_have_authorization=i_have_authorization,
+        )
+    except (ValidationError, typer.BadParameter) as exc:
+        console.print(f"[bold red]Configuración inválida:[/bold red]\n{exc}")
+        raise typer.Exit(code=1) from exc
+
+    budget = _Budget(max_requests or None, time_budget or None)
+
+    if not quiet:
+        console.print(f"\n[green]Autorización confirmada.[/green] Objetivo: [bold]{derived_target}[/bold]")
+        console.print(
+            f"Reverificando [bold]{len(prior_findings)}[/bold] hallazgo(s) previo(s) sobre "
+            f"[bold]{len(base_requests_for(prior_findings))}[/bold] petición(es)…\n"
+        )
+
+    started_at = time.monotonic()
+    try:
+        new_findings = asyncio.run(_run_retest(config, prior_findings, oast_mode, oast_server, budget))
+    except SessionLoginError as exc:
+        console.print(f"\n[bold red]Error de autenticación:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except httpx.HTTPError as exc:
+        console.print(f"\n[bold red]Error de red al reverificar:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    outcomes = classify(prior_findings, new_findings, oast_attempted=oast_mode != "off")
+    still_open = open_findings(outcomes)
+    counts = summarize(outcomes)
+
+    if not quiet:
+        console.print()
+        _print_retest_table(outcomes)
+        _print_retest_summary(counts, time.monotonic() - started_at)
+
+    if output_format == "html":
+        report = render_html(still_open, target=derived_target, title="dastcore — Retest Report")
+    else:
+        report = _RENDERERS[output_format](still_open)
+    if output_path:
+        Path(output_path).write_text(report, encoding="utf-8")
+        if not quiet:
+            console.print(f"\n[green]Reporte {output_format.upper()} (abiertos) escrito en {output_path}[/green]")
+    else:
+        if not quiet and output_format != "html":
+            console.print(f"\n[bold]{output_format.upper()}:[/bold]")
+        print(report)
+
+    if fail_on != "none":
+        blocking = [f for f in still_open if meets_threshold(f.severity, fail_on)]  # type: ignore[arg-type]
+        if blocking:
+            console.print(
+                f"\n[bold red]{len(blocking)} hallazgo(s) siguen abiertos con severidad >= {fail_on}.[/bold red] "
                 f"Saliendo con código {EXIT_FINDINGS_OVER_THRESHOLD} (--fail-on)."
             )
             raise typer.Exit(code=EXIT_FINDINGS_OVER_THRESHOLD)

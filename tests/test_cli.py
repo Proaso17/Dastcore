@@ -99,3 +99,54 @@ def test_scan_rejects_invalid_format(vuln_app_url: str) -> None:
     result = runner.invoke(app, ["scan", vuln_app_url, "--i-have-authorization", "--format", "pdf"])
     assert result.exit_code == 1
     assert "Formato inválido" in result.stdout
+
+
+def test_retest_aborts_without_authorization_flag(tmp_path) -> None:
+    prior = tmp_path / "prior.json"
+    prior.write_text("[]", encoding="utf-8")
+    result = runner.invoke(app, ["retest", str(prior)])
+    assert result.exit_code == 1
+    assert "ABORTADO" in result.stdout
+
+
+def test_retest_reverifies_prior_findings_against_unchanged_target(vuln_app_url: str, tmp_path) -> None:
+    # First: a normal scan whose JSON becomes the retest input.
+    prior = tmp_path / "prior.json"
+    scan_result = runner.invoke(
+        app,
+        ["scan", vuln_app_url, "--i-have-authorization", "--rps", "50", "--fail-on", "none", "-o", str(prior)],
+    )
+    assert scan_result.exit_code == 0
+
+    out = tmp_path / "open.json"
+    result = runner.invoke(
+        app,
+        ["retest", str(prior), "--i-have-authorization", "--rps", "50", "--fail-on", "none", "-o", str(out)],
+    )
+    assert result.exit_code == 0
+    assert "Reverificando" in result.stdout
+    assert "ABIERTO" in result.stdout  # target unchanged -> findings still open
+    still_open = json.loads(out.read_text(encoding="utf-8"))
+    assert still_open  # the report lists the still-vulnerable findings
+
+
+def test_retest_fail_on_high_exits_2_when_still_open(vuln_app_url: str, tmp_path) -> None:
+    prior = tmp_path / "prior.json"
+    runner.invoke(
+        app,
+        ["scan", vuln_app_url, "--i-have-authorization", "--rps", "50", "--fail-on", "none", "-o", str(prior)],
+    )
+    result = runner.invoke(
+        app,
+        ["retest", str(prior), "--i-have-authorization", "--rps", "50", "--fail-on", "high"],
+    )
+    assert result.exit_code == 2  # SQLi (high) is still open on the untouched target
+    assert "siguen abiertos" in result.stdout
+
+
+def test_retest_rejects_invalid_findings_file(tmp_path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    result = runner.invoke(app, ["retest", str(bad), "--i-have-authorization"])
+    assert result.exit_code == 1
+    assert "inválido" in result.stdout.lower()
