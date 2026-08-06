@@ -120,6 +120,10 @@ class ScanManager:
         )
         return config, engine, max_pages
 
+    def validate(self, req: ScanRequest) -> None:
+        """Raise (pydantic ValidationError) if the request can't form a valid scan config."""
+        self._build_config(req)
+
     def start(self, req: ScanRequest) -> str:
         """Validate + persist a new run and launch it in the background. Returns its id."""
         config, engine, max_pages = self._build_config(req)

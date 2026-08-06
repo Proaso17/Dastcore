@@ -8,12 +8,16 @@ JS/CSS assets, so the whole UI is self-contained like the rest of dastcore.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pydantic import ValidationError
 
 from dastcore.core.models import Finding
 from dastcore.report import render_html, render_json, render_sarif
@@ -22,7 +26,11 @@ from dastcore.severity import severity_rank
 from dastcore.suppressions import apply_suppressions
 from dastcore.web.diff import diff_findings, location_label
 from dastcore.web.jobs import ScanManager, ScanRequest
+from dastcore.web.scheduler import Scheduler
 from dastcore.web.store import ScanRow, Store, severity_counts
+
+# Recurring-scan interval presets shown in the UI (minutes).
+_INTERVALS = [(60, "cada hora"), (360, "cada 6 h"), (720, "cada 12 h"), (1440, "diario"), (10080, "semanal")]
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -41,11 +49,23 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
     store = Store(db_path)
     store.mark_interrupted_running()  # a scan can't survive a restart
     manager = ScanManager(store)
+    scheduler = Scheduler(store, manager)
     env = _build_env()
 
-    app = FastAPI(title="dastcore", docs_url=None, redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Under uvicorn this starts the recurring-scan loop; ASGITransport tests skip
+        # lifespan and drive scheduler.tick() directly instead.
+        task = asyncio.create_task(scheduler.run_forever())
+        try:
+            yield
+        finally:
+            task.cancel()
+
+    app = FastAPI(title="dastcore", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.store = store
     app.state.manager = manager
+    app.state.scheduler = scheduler
 
     def render(name: str, **ctx: object) -> HTMLResponse:
         return HTMLResponse(env.get_template(name).render(**ctx))
@@ -272,6 +292,89 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
             fixed=_diff_rows(result.fixed),
             persistent=_diff_rows(result.persistent),
         )
+
+    @app.get("/schedules", response_class=HTMLResponse)
+    def schedules_page(error: str = "") -> HTMLResponse:
+        return render(
+            "schedules.html.j2", schedules=store.list_schedules(), intervals=_INTERVALS, error=error
+        )
+
+    @app.post("/schedules")
+    def add_schedule(
+        target: str = Form(...),
+        engine: str = Form("http"),
+        profile: str = Form(""),
+        rps: float = Form(5.0),
+        interval_minutes: int = Form(1440),
+        auth_bearer: str = Form(""),
+        auth_cookie: str = Form(""),
+        authorization: str = Form(""),
+    ) -> Response:
+        target = target.strip()
+        if authorization != "on":
+            return render(
+                "schedules.html.j2",
+                schedules=store.list_schedules(),
+                intervals=_INTERVALS,
+                error="Debes confirmar la autorización: los escaneos programados también son intrusivos.",
+            )
+        req = ScanRequest(
+            target=target,
+            engine=engine if engine in ("http", "headless", "both") else "http",
+            profile=profile if profile in ("quick", "full", "api") else "",
+            rps=rps if rps > 0 else 5.0,
+            auth_bearer=auth_bearer.strip(),
+            auth_cookie=auth_cookie.strip(),
+        )
+        try:
+            manager.validate(req)
+        except ValidationError:
+            return render(
+                "schedules.html.j2",
+                schedules=store.list_schedules(),
+                intervals=_INTERVALS,
+                error=f"Objetivo inválido: {target!r}",
+            )
+        store.add_schedule(
+            target=req.target,
+            engine=req.engine,
+            profile=req.profile or None,
+            rps=req.rps,
+            auth_bearer=req.auth_bearer,
+            auth_cookie=req.auth_cookie,
+            interval_minutes=max(1, interval_minutes),
+            now=time.time(),
+        )
+        return RedirectResponse("/schedules", status_code=303)
+
+    @app.post("/schedules/{schedule_id}/toggle")
+    def toggle_schedule(schedule_id: int) -> Response:
+        sched = store.get_schedule(schedule_id)
+        if sched is not None:
+            store.set_schedule_enabled(schedule_id, not sched.enabled)
+        return RedirectResponse("/schedules", status_code=303)
+
+    @app.post("/schedules/{schedule_id}/delete")
+    def delete_schedule(schedule_id: int) -> Response:
+        store.delete_schedule(schedule_id)
+        return RedirectResponse("/schedules", status_code=303)
+
+    @app.post("/schedules/{schedule_id}/run")
+    async def run_schedule_now(schedule_id: int) -> Response:
+        sched = store.get_schedule(schedule_id)
+        if sched is not None:
+            manager.start(
+                ScanRequest(
+                    target=sched.target,
+                    engine=sched.engine,
+                    profile=sched.profile or "",
+                    rps=sched.rps,
+                    auth_bearer=sched.auth_bearer or "",
+                    auth_cookie=sched.auth_cookie or "",
+                )
+            )
+            store.mark_ran(schedule_id, time.time(), sched.next_run_at)
+        return RedirectResponse("/", status_code=303)
 
     @app.get("/scans/{scan_id}/report", response_class=HTMLResponse)
     def scan_report(scan_id: str) -> Response:

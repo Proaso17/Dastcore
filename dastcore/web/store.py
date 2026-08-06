@@ -49,6 +49,21 @@ CREATE TABLE IF NOT EXISTS suppressions (
     expires     TEXT,
     created_at  REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS schedules (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    target           TEXT NOT NULL,
+    engine           TEXT NOT NULL DEFAULT 'http',
+    profile          TEXT,
+    rps              REAL NOT NULL DEFAULT 5.0,
+    auth_bearer      TEXT,
+    auth_cookie      TEXT,
+    interval_minutes INTEGER NOT NULL,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    created_at       REAL NOT NULL,
+    last_run_at      REAL,
+    next_run_at      REAL NOT NULL
+);
 """
 
 # Columns added after the initial release; applied to pre-existing DBs on open.
@@ -77,6 +92,25 @@ class ScanRow:
     kind: str = "scan"  # scan | retest
     parent_id: str | None = None
     accepted: int = 0  # display-only: findings hidden by triage (not persisted)
+
+
+@dataclass
+class ScheduleRow:
+    """A recurring scan definition. Auth material is persisted here (local DB, single
+    operator) so scheduled runs can reach authenticated targets unattended."""
+
+    id: int
+    target: str
+    engine: str
+    profile: str | None
+    rps: float
+    auth_bearer: str | None
+    auth_cookie: str | None
+    interval_minutes: int
+    enabled: bool
+    created_at: float
+    last_run_at: float | None
+    next_run_at: float
 
 
 @dataclass
@@ -277,6 +311,85 @@ class Store:
     def delete_suppression(self, row_id: int) -> None:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM suppressions WHERE id=?", (row_id,))
+
+    # --- schedules ---------------------------------------------------------------------
+
+    def _row_to_schedule(self, row: sqlite3.Row) -> ScheduleRow:
+        return ScheduleRow(
+            id=row["id"],
+            target=row["target"],
+            engine=row["engine"],
+            profile=row["profile"],
+            rps=row["rps"],
+            auth_bearer=row["auth_bearer"],
+            auth_cookie=row["auth_cookie"],
+            interval_minutes=row["interval_minutes"],
+            enabled=bool(row["enabled"]),
+            created_at=row["created_at"],
+            last_run_at=row["last_run_at"],
+            next_run_at=row["next_run_at"],
+        )
+
+    def add_schedule(
+        self,
+        *,
+        target: str,
+        engine: str,
+        profile: str | None,
+        rps: float,
+        auth_bearer: str,
+        auth_cookie: str,
+        interval_minutes: int,
+        now: float,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO schedules (target, engine, profile, rps, auth_bearer, auth_cookie, "
+                "interval_minutes, enabled, created_at, next_run_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (
+                    target,
+                    engine,
+                    profile,
+                    rps,
+                    auth_bearer or None,
+                    auth_cookie or None,
+                    interval_minutes,
+                    now,
+                    now + interval_minutes * 60,  # wait one interval before the first run
+                ),
+            )
+
+    def list_schedules(self) -> list[ScheduleRow]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM schedules ORDER BY created_at DESC").fetchall()
+        return [self._row_to_schedule(row) for row in rows]
+
+    def get_schedule(self, schedule_id: int) -> ScheduleRow | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM schedules WHERE id=?", (schedule_id,)).fetchone()
+        return self._row_to_schedule(row) if row else None
+
+    def due_schedules(self, now: float) -> list[ScheduleRow]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM schedules WHERE enabled=1 AND next_run_at<=?", (now,)
+            ).fetchall()
+        return [self._row_to_schedule(row) for row in rows]
+
+    def mark_ran(self, schedule_id: int, last_run_at: float, next_run_at: float) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE schedules SET last_run_at=?, next_run_at=? WHERE id=?",
+                (last_run_at, next_run_at, schedule_id),
+            )
+
+    def set_schedule_enabled(self, schedule_id: int, enabled: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE schedules SET enabled=? WHERE id=?", (1 if enabled else 0, schedule_id))
+
+    def delete_schedule(self, schedule_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM schedules WHERE id=?", (schedule_id,))
 
     def build_suppressions(self) -> list[Suppression]:
         """Domain `Suppression` objects for applying/exporting (skips malformed rows)."""

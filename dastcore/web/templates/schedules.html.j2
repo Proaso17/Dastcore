@@ -1,0 +1,90 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · programados{% endblock %}
+{% block body %}
+  <div class="panel legal">
+    Los escaneos programados son <strong>activos e intrusivos</strong> y se lanzan sin supervisión.
+    Prográmalos solo contra objetivos para los que tienes autorización permanente.
+  </div>
+
+  <div class="panel">
+    <h2>Escaneos programados ({{ schedules | length }})</h2>
+    {% if schedules %}
+    <div class="overflow">
+      <table>
+        <thead><tr><th>Objetivo</th><th>Motor</th><th>Cada</th><th>Estado</th><th>Última</th><th>Próxima</th><th></th></tr></thead>
+        <tbody>
+          {% for s in schedules %}
+          <tr>
+            <td style="word-break:break-all">{{ s.target }}</td>
+            <td class="muted">{{ s.engine }}{% if s.profile %} · {{ s.profile }}{% endif %}</td>
+            <td class="muted">
+              {% set mins = s.interval_minutes %}
+              {% if mins % 1440 == 0 %}{{ mins // 1440 }} día(s){% elif mins % 60 == 0 %}{{ mins // 60 }} h{% else %}{{ mins }} min{% endif %}
+            </td>
+            <td><span class="status {{ 'st-done' if s.enabled else 'st-interrupted' }}">{{ 'activo' if s.enabled else 'pausado' }}</span></td>
+            <td class="muted">{{ (s.last_run_at | datetime) if s.last_run_at else '—' }}</td>
+            <td class="muted">{{ s.next_run_at | datetime }}</td>
+            <td>
+              <div style="display:flex; gap:6px">
+                <form method="post" action="/schedules/{{ s.id }}/run" style="margin:0">
+                  <button type="submit" style="padding:5px 10px;font-size:12px">Ejecutar</button>
+                </form>
+                <form method="post" action="/schedules/{{ s.id }}/toggle" style="margin:0">
+                  <button type="submit" style="padding:5px 10px;font-size:12px">{{ 'Pausar' if s.enabled else 'Reanudar' }}</button>
+                </form>
+                <form method="post" action="/schedules/{{ s.id }}/delete" style="margin:0">
+                  <button type="submit" class="danger" style="padding:5px 10px;font-size:12px">Borrar</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty">Sin escaneos programados. Crea uno abajo.</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Nuevo programado</h2>
+    {% if error %}<div class="panel err" style="margin:0 0 14px">{{ error }}</div>{% endif %}
+    <form method="post" action="/schedules">
+      <label for="target">URL objetivo</label>
+      <input id="target" name="target" placeholder="https://staging.example.com" required>
+      <div class="row3">
+        <div>
+          <label for="engine">Motor</label>
+          <select id="engine" name="engine">
+            <option value="http">http</option><option value="headless">headless</option><option value="both">both</option>
+          </select>
+        </div>
+        <div>
+          <label for="profile">Perfil</label>
+          <select id="profile" name="profile">
+            <option value="">(personalizado)</option><option value="quick">quick</option>
+            <option value="full">full</option><option value="api">api</option>
+          </select>
+        </div>
+        <div>
+          <label for="interval_minutes">Frecuencia</label>
+          <select id="interval_minutes" name="interval_minutes">
+            {% for mins, label in intervals %}
+            <option value="{{ mins }}" {% if mins == 1440 %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div><label for="auth_bearer">Bearer token (opcional)</label><input id="auth_bearer" name="auth_bearer" placeholder="eyJ…"></div>
+        <div><label for="auth_cookie">Cookie (opcional)</label><input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123"></div>
+      </div>
+      <div class="check">
+        <input id="authorization" name="authorization" type="checkbox" value="on">
+        <label for="authorization" style="margin:0">Tengo autorización permanente para escanear este objetivo.</label>
+      </div>
+      <button type="submit">Programar</button>
+    </form>
+  </div>
+{% endblock %}
