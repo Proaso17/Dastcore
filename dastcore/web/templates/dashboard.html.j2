@@ -1,0 +1,86 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · escaneos{% endblock %}
+{% block body %}
+  <div class="panel legal">
+    Herramienta de pentesting <strong>activa e intrusiva</strong>. Úsala solo contra sistemas para los que
+    tienes autorización explícita y por escrito. El escaneo no arranca sin marcar la casilla de autorización.
+  </div>
+
+  <div class="panel">
+    <h2>Nuevo escaneo</h2>
+    {% if error %}<div class="panel err" style="margin:0 0 14px">{{ error }}</div>{% endif %}
+    <form method="post" action="/scans">
+      <label for="target">URL objetivo</label>
+      <input id="target" name="target" placeholder="https://staging.example.com" value="{{ target or '' }}" required>
+      <div class="row3">
+        <div>
+          <label for="engine">Motor</label>
+          <select id="engine" name="engine">
+            <option value="http">http (estático)</option>
+            <option value="headless">headless (SPA)</option>
+            <option value="both">both</option>
+          </select>
+        </div>
+        <div>
+          <label for="profile">Perfil</label>
+          <select id="profile" name="profile">
+            <option value="">(personalizado)</option>
+            <option value="quick">quick</option>
+            <option value="full">full</option>
+            <option value="api">api</option>
+          </select>
+        </div>
+        <div>
+          <label for="rps">Requests/segundo</label>
+          <input id="rps" name="rps" type="number" step="0.5" min="0.5" value="5">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="auth_bearer">Bearer token (opcional)</label>
+          <input id="auth_bearer" name="auth_bearer" placeholder="eyJ…">
+        </div>
+        <div>
+          <label for="auth_cookie">Cookie (opcional)</label>
+          <input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123">
+        </div>
+      </div>
+      <div class="check">
+        <input id="authorization" name="authorization" type="checkbox" value="on">
+        <label for="authorization" style="margin:0">Tengo autorización explícita para escanear este objetivo.</label>
+      </div>
+      <button type="submit">Iniciar escaneo</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>Historial</h2>
+    {% if scans %}
+    <div class="overflow">
+      <table>
+        <thead><tr><th>Objetivo</th><th>Motor</th><th>Estado</th><th>Hallazgos</th><th>Cuándo</th></tr></thead>
+        <tbody>
+          {% for s in scans %}
+          <tr>
+            <td><a href="/scans/{{ s.id }}">{{ s.target }}</a></td>
+            <td class="muted">{{ s.engine }}{% if s.profile %} · {{ s.profile }}{% endif %}</td>
+            <td><span class="status st-{{ s.status }}">{{ s.status }}</span></td>
+            <td>
+              {% if s.status == 'done' %}
+                <strong>{{ s.num_findings }}</strong>
+                {% for sev in ['critical','high','medium','low'] %}
+                  {% if s.severity_counts.get(sev) %}<span class="badge sev-{{ sev }}">{{ s.severity_counts[sev] }}</span>{% endif %}
+                {% endfor %}
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td class="muted">{{ s.created_at | datetime }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty">Aún no hay escaneos. Lanza el primero arriba.</div>
+    {% endif %}
+  </div>
+{% endblock %}

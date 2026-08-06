@@ -1280,5 +1280,38 @@ def ai(
     )
 
 
+@app.command("serve")
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Interfaz donde escuchar. 127.0.0.1 = solo local."),
+    port: int = typer.Option(8000, "--port", help="Puerto del panel web."),
+    db_path: str = typer.Option(
+        "", "--db", help="Ruta del SQLite con el historial (por defecto ~/.dastcore/dastcore.db)."
+    ),
+) -> None:
+    """Lanza el panel web local (dashboard): iniciar escaneos desde un formulario,
+    ver el progreso en vivo y navegar el historial de hallazgos, reusando el motor."""
+    try:
+        from dastcore.web.server import default_db_path, run_server
+    except ModuleNotFoundError as exc:
+        console.print(
+            f"[bold red]El panel web requiere dependencias extra:[/bold red] {exc.name}.\n"
+            "Instálalas con: [bold]pip install 'dastcore[web]'[/bold]"
+        )
+        raise typer.Exit(code=1) from exc
+
+    _print_banner()
+    resolved_db = db_path or str(default_db_path())
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        console.print(
+            f"\n[bold yellow]Aviso:[/bold yellow] escuchando en [bold]{host}[/bold] (no solo local). "
+            "El panel puede lanzar escaneos intrusivos: exponlo solo en redes de confianza."
+        )
+    console.print(
+        f"\n[green]Panel dastcore en[/green] [bold]http://{host}:{port}[/bold]  ·  "
+        f"historial: [dim]{resolved_db}[/dim]\n[dim]Ctrl+C para detener.[/dim]\n"
+    )
+    run_server(host, port, resolved_db)
+
+
 if __name__ == "__main__":
     app()

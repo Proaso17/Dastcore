@@ -1,0 +1,47 @@
+{% if running %}
+  <div class="status st-running">Escaneando…</div>
+  <p class="muted">{{ phase }}</p>
+  {% if total %}
+    <div class="progress"><span style="width: {{ (100 * completed / total) | round(1) }}%"></span></div>
+    <p class="muted">{{ completed }} / {{ total }} peticiones</p>
+  {% else %}
+    <div class="progress"><span style="width: 8%"></span></div>
+  {% endif %}
+{% elif scan.status == 'error' %}
+  <div class="status st-error">Error</div>
+  <div class="panel err" style="margin-top:10px">{{ scan.error }}</div>
+{% elif scan.status == 'interrupted' %}
+  <div class="status st-interrupted">Interrumpido</div>
+  <p class="muted">El escaneo no terminó (probablemente el servidor se reinició).</p>
+{% else %}
+  <div class="status st-done">Completado</div>
+  <p class="muted">
+    {{ scan.num_findings }} hallazgo(s) · {{ issues | length }} issue(s)
+    {% if scan.duration_s %}· {{ scan.duration_s | round(1) }}s{% endif %}
+  </p>
+  {% if issues %}
+  <div class="overflow">
+    <table>
+      <thead><tr><th>Severidad</th><th>CVSS</th><th>Issue</th><th>Inst.</th><th>Ubicaciones</th></tr></thead>
+      <tbody>
+        {% for i in issues %}
+        <tr>
+          <td><span class="badge sev-{{ i.severity }}">{{ i.severity }}</span></td>
+          <td>{{ '%.1f' | format(i.cvss_score) }}</td>
+          <td>{{ i.name }}</td>
+          <td>{{ i.count }}</td>
+          <td class="muted">{{ i.locations[:3] | join(', ') }}{% if i.locations | length > 3 %} …{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="empty">Sin hallazgos. 🎉</div>
+  {% endif %}
+  <div class="actions">
+    <a href="/scans/{{ scan.id }}/report" target="_blank">Ver reporte HTML</a>
+    <a href="/scans/{{ scan.id }}/findings.json">Descargar JSON</a>
+    <a href="/scans/{{ scan.id }}/findings.sarif">Descargar SARIF</a>
+  </div>
+{% endif %}

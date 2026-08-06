@@ -464,6 +464,27 @@ Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
   .venv\Scripts\dastcore retest hallazgos.json --i-have-authorization --rps 50 --fail-on high -o abiertos.json
   ```
 
+## Panel web local (`dastcore serve`)
+
+Una UI **local, self-contained** sobre el mismo motor de escaneo, para quien prefiere no vivir en la terminal. Corre **donde tú la lanzas** → mantiene alcance a objetivos internos/staging y el tráfico intrusivo se queda en tu máquina (a diferencia de un SaaS multi-tenant).
+
+- **`dastcore/web/app.py`** — app **FastAPI** con Jinja2 server-rendered (autoescape ON: los payloads capturados se muestran inertes), sin dependencias de JS/CSS externas. El **progreso en vivo** se hace con ~15 líneas de JS vanilla que consultan un fragmento HTML (`/scans/{id}/panel`), sin CDNs.
+- **`dastcore/web/jobs.py`** — `ScanManager`: cada escaneo corre como una `asyncio.Task` en el loop del servidor y **reusa `_run_scan` del motor** vía un *progress sink*. Sin workers ni colas externas (el motor ya es async e I/O-bound).
+- **`dastcore/web/store.py`** — historial persistente en **SQLite** (stdlib, sin ORM): un registro por escaneo con sus findings como el mismo JSON del reporte. Sobrevive reinicios; un escaneo cortado por un reinicio se marca `interrupted`.
+- Qué da la UI que la CLI no: **historial** por objetivo, tabla de issues correlacionada, y **descarga** de reporte HTML / JSON / SARIF de cualquier ejecución pasada. El gate de autorización sigue vigente: el escaneo no arranca sin marcar la casilla.
+
+```powershell
+# instala el extra web una vez
+.venv\Scripts\pip install -e ".[web]"
+# lanza el panel (solo local por defecto)
+.venv\Scripts\dastcore serve                 # http://127.0.0.1:8000
+.venv\Scripts\dastcore serve --port 9000 --db C:\ruta\historial.db
+```
+
+```powershell
+.venv\Scripts\pytest tests/test_web.py -v
+```
+
 ## Correr toda la suite
 
 ```powershell

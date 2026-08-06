@@ -53,12 +53,16 @@ dependencies = [
 headless = ["playwright>=1.42.0"]
 api = ["openapi-core>=0.19.0"]
 oast = ["cryptography>=42.0.0"]
+web = ["fastapi>=0.110.0", "uvicorn>=0.29.0", "python-multipart>=0.0.9"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.5",
     "flask>=3.0.0",
     "playwright>=1.42.0",
     "cryptography>=42.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "python-multipart>=0.0.9",
     "ruff>=0.6.0",
     "mypy>=1.10.0",
 ]
@@ -75,7 +79,7 @@ dastcore = "dastcore.cli:app"
 include = ["dastcore*"]
 
 [tool.setuptools.package-data]
-dastcore = ["rules/*.yaml", "ai_rules/*.yaml", "ai_rules/wordlists/*.txt", "report/templates/*.j2"]
+dastcore = ["rules/*.yaml", "ai_rules/*.yaml", "ai_rules/wordlists/*.txt", "report/templates/*.j2", "web/templates/*.j2"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

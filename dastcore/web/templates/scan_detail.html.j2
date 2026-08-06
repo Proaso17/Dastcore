@@ -1,0 +1,33 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · {{ scan.target }}{% endblock %}
+{% block body %}
+  <div class="panel">
+    <h2 style="word-break:break-all">{{ scan.target }}</h2>
+    <div class="muted">
+      Motor <strong>{{ scan.engine }}</strong>{% if scan.profile %} · perfil <strong>{{ scan.profile }}</strong>{% endif %}
+      · iniciado {{ scan.created_at | datetime }}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div id="result">{% include "_panel.html.j2" %}</div>
+  </div>
+
+  <script>
+    (function () {
+      var done = {{ 'true' if done else 'false' }};
+      if (done) return;
+      var id = {{ scan.id | tojson }};
+      function poll() {
+        fetch("/scans/" + id + "/panel").then(function (r) {
+          var finished = r.headers.get("X-Scan-Done") === "1";
+          return r.text().then(function (html) {
+            document.getElementById("result").innerHTML = html;
+            if (!finished) setTimeout(poll, 1500);
+          });
+        }).catch(function () { setTimeout(poll, 3000); });
+      }
+      setTimeout(poll, 1200);
+    })();
+  </script>
+{% endblock %}
