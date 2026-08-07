@@ -81,6 +81,8 @@ def _build_result(finding: Finding) -> dict:
             "security-severity": f"{finding.cvss_score:.1f}",
             "cvss": finding.cvss_vector,
             "cvss_score": finding.cvss_score,
+            "confidence": finding.confidence,
+            "confidence_score": finding.confidence_score,
             "evidence": [ev.model_dump(mode="json") for ev in finding.evidence],
             "repro": finding.request.to_curl(),
         },

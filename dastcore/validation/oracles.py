@@ -123,10 +123,11 @@ def evaluate_oracle(
 ) -> list[Evidence]:
     """Runs every check in `oracle` and returns the evidence that confirms the rule.
 
-    `any_of` short-circuits on the first match. `all_of` requires every check to
-    produce evidence; if even one doesn't, no evidence is returned at all. When a
-    `baseline` is given, timing checks use its median + jitter instead of a single
-    base sample, so they don't fire on a noisy target.
+    Every check runs (they all read the same responses, no extra requests), so a
+    finding carries *all* the signals that agreed — the raw material for confidence
+    scoring. `any_of` fires if at least one matched; `all_of` requires every check to
+    match, or returns nothing. When a `baseline` is given, timing checks use its
+    median + jitter instead of a single base sample, so they don't fire on noise.
     """
     evidences: list[Evidence] = []
     for check in oracle.checks:
@@ -139,11 +140,7 @@ def evaluate_oracle(
         )
         if evidence is not None:
             evidences.append(evidence)
-            if oracle.type == "any_of":
-                return evidences
 
-    if oracle.type == "all_of" and len(evidences) == len(oracle.checks):
-        return evidences
-    if oracle.type == "all_of":
+    if oracle.type == "all_of" and len(evidences) != len(oracle.checks):
         return []
-    return []
+    return evidences

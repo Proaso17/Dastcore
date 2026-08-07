@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from dastcore.config import Severity
-from dastcore.core.models import Finding
+from dastcore.core.models import Confidence, Finding
 from dastcore.severity import severity_rank
 
 
@@ -41,6 +41,8 @@ class IssueGroup:
     cvss_score: float = 0.0
     count: int = 0
     locations: list[str] = field(default_factory=list)
+    confidence: Confidence = "low"
+    confidence_score: float = 0.0
 
 
 def _location_label(finding: Finding) -> str:
@@ -65,6 +67,9 @@ def correlate(findings: list[Finding]) -> list[IssueGroup]:
             )
             groups[finding.rule_id] = group
         group.count += 1
+        if finding.confidence_score > group.confidence_score:  # keep the strongest instance's confidence
+            group.confidence_score = finding.confidence_score
+            group.confidence = finding.confidence
         label = _location_label(finding)
         if label not in group.locations:
             group.locations.append(label)

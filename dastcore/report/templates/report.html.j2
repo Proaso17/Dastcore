@@ -94,12 +94,13 @@
 
   {% if issues %}
   <table class="issues">
-    <thead><tr><th>Severidad</th><th>CVSS</th><th>Issue</th><th>CWE / OWASP</th><th>Instancias</th></tr></thead>
+    <thead><tr><th>Severidad</th><th>CVSS</th><th>Confianza</th><th>Issue</th><th>CWE / OWASP</th><th>Instancias</th></tr></thead>
     <tbody>
     {% for issue in issues %}
       <tr>
         <td><span class="badge b-{{ issue.severity }}">{{ issue.severity }}</span></td>
         <td class="num">{{ "%.1f"|format(issue.cvss_score) }}</td>
+        <td>{{ issue.confidence }}</td>
         <td>{{ issue.name }} <code class="rid">{{ issue.rule_id }}</code></td>
         <td>{{ issue.cwe }} · {{ issue.owasp }}</td>
         <td class="num">{{ issue.count }}</td>
@@ -118,6 +119,7 @@
       <dl class="kv">
         <dt>Rule</dt><dd><code>{{ f.rule_id }}</code></dd>
         <dt>CVSS</dt><dd><strong>{{ "%.1f"|format(f.cvss_score) }}</strong> <code>{{ f.cvss_vector }}</code></dd>
+        <dt>Confianza</dt><dd><strong>{{ f.confidence }}</strong> ({{ "%.2f"|format(f.confidence_score) }})</dd>
         <dt>CWE</dt><dd>{{ f.cwe }}</dd>
         <dt>OWASP</dt><dd>{{ f.owasp }}</dd>
         <dt>Injection point</dt>

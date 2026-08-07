@@ -145,3 +145,19 @@ class Finding(BaseModel):
         from dastcore.cvss import base_score
 
         return base_score(self.cvss_vector)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def confidence(self) -> Confidence:
+        """How trustworthy this finding is, from the agreement of its evidence signals."""
+        from dastcore.validation.confidence import score_confidence
+
+        return score_confidence(self.evidence)[0]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def confidence_score(self) -> float:
+        """Numeric confidence (0.0–1.0) backing the `confidence` label."""
+        from dastcore.validation.confidence import score_confidence
+
+        return score_confidence(self.evidence)[1]

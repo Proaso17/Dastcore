@@ -96,6 +96,8 @@ _SEVERITY_STYLE = {
     "info": "dim",
 }
 
+_CONFIDENCE_STYLE = {"high": "bold green", "medium": "yellow", "low": "dim"}
+
 # Scan profiles set convenient defaults; any flag the user passes explicitly still wins.
 _PROFILES: dict[str, dict[str, object]] = {
     "quick": {"engine": "http", "max_pages": 40, "oast": "off"},
@@ -538,15 +540,18 @@ def _print_findings_table(findings: list[Finding]) -> None:
     table = Table(title=f"{len(findings)} hallazgo(s) · {len(issues)} issue(s)")
     table.add_column("Severidad")
     table.add_column("CVSS", justify="right")
+    table.add_column("Confianza")
     table.add_column("Issue")
     table.add_column("Instancias", justify="right")
     table.add_column("Ubicaciones")
     for issue in issues:
         style = _SEVERITY_STYLE.get(issue.severity, "")
+        conf_style = _CONFIDENCE_STYLE.get(issue.confidence, "")
         locations = ", ".join(issue.locations[:3]) + (" …" if len(issue.locations) > 3 else "")
         table.add_row(
             f"[{style}]{issue.severity}[/{style}]",
             f"{issue.cvss_score:.1f}",
+            f"[{conf_style}]{issue.confidence}[/{conf_style}]",
             issue.name,
             str(issue.count),
             locations,
