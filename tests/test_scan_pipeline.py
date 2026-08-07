@@ -45,6 +45,8 @@ async def test_all_planted_vulnerabilities_are_detected(vuln_app_url: str) -> No
 
     lfi = _by_rule_prefix(findings, "path-traversal-lfi:")
     assert any(f.injection_point.name == "name" and "/file" in f.request.url for f in lfi), lfi
+    # Soft-404 guard: /download is a catch-all (same page for any filename) -> no LFI FP.
+    assert not any("/download" in f.request.url for f in lfi), lfi
 
     # Additional classes discovered via the sitemap and scanned end to end.
     rule_ids = {f.rule_id for f in findings}

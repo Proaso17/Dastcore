@@ -91,6 +91,7 @@ def create_app() -> Flask:
             "<url><loc>/render?name=guest</loc></url>"
             "<url><loc>/api/nosql?filter=all</loc></url>"
             "<url><loc>/api/item?id=1</loc></url>"
+            "<url><loc>/download?file=guide.txt</loc></url>"
             "<url><loc>/reset</loc></url>"
             "<url><loc>/api/cors</loc></url>"
             "<url><loc>/api/log?msg=hello</loc></url>"
@@ -164,6 +165,16 @@ def create_app() -> Flask:
             if name in base:
                 return Response(base[name], mimetype="text/plain")
             return Response("not found", status=404, mimetype="text/plain")
+
+    @app.get("/download")
+    def download() -> Response:
+        """NOT vulnerable: a catch-all that ignores `file` and always returns the same
+        help page — which happens to contain '[build-system]'. Without a soft-404 guard
+        the LFI signature would false-positive here; the guard must suppress it."""
+        return Response(
+            "<h1>Descargas</h1><pre>[build-system]\nEjemplo de configuración de la app.</pre>",
+            mimetype="text/html",
+        )
 
     @app.post("/login")
     def login() -> Response:

@@ -15,6 +15,7 @@ correlated interaction actually arrived. No callback, no finding.
 from __future__ import annotations
 
 import asyncio
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -189,6 +190,9 @@ class Scanner:
             if not evidence:
                 continue
 
+            if rule.catch_all_guard and await self._is_catch_all(point, mutated_response, baseline):
+                continue  # endpoint returns the same thing for junk — a soft-404, not a hit
+
             if rule.confirm_reproducible:
                 confirm_response = await self._send(mutated_request)
                 if confirm_response is None:
@@ -207,6 +211,17 @@ class Scanner:
             return self._build_finding(rule, point, evidence, mutated_request, mutated_response)
 
         return None
+
+    @staticmethod
+    def _junk_value() -> str:
+        """A value that shouldn't match any real file/id, to learn the catch-all response."""
+        return "dastcore-missing-" + secrets.token_hex(6)
+
+    async def _is_catch_all(self, point, mutated_response: HttpResponse, baseline: BaselineProfile) -> bool:
+        """True if the endpoint returns essentially the same response for a random junk
+        value — i.e. it ignores this parameter, so the oracle hit is a soft-404 artifact."""
+        junk = await self._send(build_mutated_request(point, self._junk_value()))
+        return junk is not None and responses_similar(mutated_response, junk, baseline)
 
     async def _try_boolean(self, rule: Rule, point, baseline: BaselineProfile) -> Finding | None:
         """Boolean-based blind confirmation: send a TRUE and a FALSE condition and report

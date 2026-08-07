@@ -19,6 +19,7 @@ oracle:
         - "root:.*:0:0:"
         - "\\[build-system\\]"
 confirm_reproducible: true
+catch_all_guard: true   # ignore endpoints that return the same page for any filename
 remediation: >-
   Never build filesystem paths directly from user input. Resolve against a
   fixed base directory, canonicalize, and reject any path that escapes it —

@@ -43,6 +43,9 @@ class Rule(BaseModel):
     oracle: OracleSpec | None = None
     boolean_pairs: list[BooleanPair] = Field(default_factory=list)
     confirm_reproducible: bool = True
+    # Soft-404 guard: drop a hit when the endpoint returns the same response for a
+    # random junk value (a catch-all that ignores the parameter). For file/id rules.
+    catch_all_guard: bool = False
     remediation: str
     cvss: str | None = None
 
