@@ -18,6 +18,17 @@ from dastcore.validation.oracles import OracleSpec
 DEFAULT_RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 
 
+class BooleanPair(BaseModel):
+    """A pair of logically-opposite conditions for boolean-based blind detection.
+
+    ``{{base}}`` is replaced with the injection point's original value, so the TRUE
+    condition should behave like the untouched request and the FALSE one differ.
+    """
+
+    when_true: str
+    when_false: str
+
+
 class Rule(BaseModel):
     """A single declarative detector, parsed straight from a rules/*.yaml file."""
 
@@ -29,7 +40,8 @@ class Rule(BaseModel):
     owasp: str
     inject_into: list[InjectionLocation]
     payloads: list[str] = Field(default_factory=list)
-    oracle: OracleSpec
+    oracle: OracleSpec | None = None
+    boolean_pairs: list[BooleanPair] = Field(default_factory=list)
     confirm_reproducible: bool = True
     remediation: str
     cvss: str | None = None
@@ -37,7 +49,12 @@ class Rule(BaseModel):
     @property
     def is_oob(self) -> bool:
         """True if this rule is confirmed out-of-band (has an `oob` oracle check)."""
-        return any(check.type == "oob" for check in self.oracle.checks)
+        return self.oracle is not None and any(check.type == "oob" for check in self.oracle.checks)
+
+    @property
+    def is_boolean(self) -> bool:
+        """True if this rule is confirmed by a boolean TRUE/FALSE differential."""
+        return bool(self.boolean_pairs)
 
 
 _OAST_PLACEHOLDERS = ("{{oast_url}}", "{{oast_domain}}", "{{oast_token}}")
@@ -69,7 +86,7 @@ def applicable_payloads(rule: Rule) -> list[Payload]:
     """Every payload this rule will try: the declared `payloads`, plus any oracle
     check's own templated `payload` (e.g. a time-based SLEEP() probe)."""
     values: list[str] = list(rule.payloads)
-    for check in rule.oracle.checks:
+    for check in rule.oracle.checks if rule.oracle else []:
         if check.payload:
             rendered = render_payload_template(check.payload, delay=check.delay)
             if rendered not in values:

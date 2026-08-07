@@ -1,0 +1,23 @@
+id: sqli-boolean-blind
+name: SQL Injection (boolean-based blind)
+family: sqli
+severity: high
+cwe: CWE-89
+owasp: WSTG-INPV-05
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
+inject_into: [query, body, json]
+# No response oracle: confirmation is the TRUE/FALSE differential below. Each pair
+# appends a logically-true and a logically-false condition to the original value;
+# a hit needs TRUE to behave like the baseline and FALSE to diverge.
+boolean_pairs:
+  - when_true: "{{base}} AND 1=1"
+    when_false: "{{base}} AND 1=2"
+  - when_true: "{{base}}' AND '1'='1"
+    when_false: "{{base}}' AND '1'='2"
+  - when_true: "{{base}}) AND (1=1"
+    when_false: "{{base}}) AND (1=2"
+confirm_reproducible: true
+remediation: >-
+  Use parameterized queries / prepared statements. Never build SQL by string
+  interpolation of user input, even when the query result isn't shown — blind
+  injection is still exploitable one bit at a time.

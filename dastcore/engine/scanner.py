@@ -28,7 +28,7 @@ from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
 from dastcore.engine.oast import OastProvider, substitute_oast
 from dastcore.engine.rule_engine import Rule, applicable_payloads, build_mutated_request, oob_payload_templates
-from dastcore.validation.baseline import BaselineProfile, build_baseline
+from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import evaluate_oracle
 
 
@@ -68,7 +68,9 @@ class Scanner:
         self._baseline_samples = max(1, baseline_samples)
         # Extra baseline samples only pay off for timing oracles (to measure jitter);
         # skip them entirely when no rule is time-based, keeping request volume down.
-        self._needs_baseline = any(check.type == "time_based" for rule in rules for check in rule.oracle.checks)
+        self._needs_baseline = any(
+            check.type == "time_based" for rule in rules if rule.oracle for check in rule.oracle.checks
+        )
 
     async def _send(self, request: HttpRequest) -> HttpResponse | None:
         try:
@@ -110,7 +112,11 @@ class Scanner:
             for rule in self._rules:
                 if rule.is_oob or point.location not in rule.inject_into:
                     continue
-                finding = await self._try_rule(rule, point, baseline)
+                finding = (
+                    await self._try_boolean(rule, point, baseline)
+                    if rule.is_boolean
+                    else await self._try_rule(rule, point, baseline)
+                )
                 if finding is not None:
                     findings.append(finding)
 
@@ -201,6 +207,53 @@ class Scanner:
             return self._build_finding(rule, point, evidence, mutated_request, mutated_response)
 
         return None
+
+    async def _try_boolean(self, rule: Rule, point, baseline: BaselineProfile) -> Finding | None:
+        """Boolean-based blind confirmation: send a TRUE and a FALSE condition and report
+        only when the TRUE one behaves like the baseline while the FALSE one differs."""
+        base = baseline.primary
+        for pair in rule.boolean_pairs:
+            true_value = pair.when_true.replace("{{base}}", point.base_value)
+            false_value = pair.when_false.replace("{{base}}", point.base_value)
+            true_request = build_mutated_request(point, true_value)
+            false_request = build_mutated_request(point, false_value)
+            true_response = await self._send(true_request)
+            false_response = await self._send(false_request)
+            if true_response is None or false_response is None:
+                continue
+            if not self._boolean_confirms(base, true_response, false_response, baseline):
+                continue
+
+            if rule.confirm_reproducible:
+                retry_true = await self._send(true_request)
+                retry_false = await self._send(false_request)
+                if (
+                    retry_true is None
+                    or retry_false is None
+                    or not self._boolean_confirms(base, retry_true, retry_false, baseline)
+                ):
+                    continue
+
+            evidence = [
+                Evidence(
+                    type="differential",
+                    data=(
+                        f"boolean-based blind: TRUE ({true_value!r}) matches the baseline "
+                        f"while FALSE ({false_value!r}) diverges"
+                    )[:200],
+                    confidence="high",
+                )
+            ]
+            return self._build_finding(rule, point, evidence, true_request, true_response)
+        return None
+
+    @staticmethod
+    def _boolean_confirms(
+        base: HttpResponse, true_response: HttpResponse, false_response: HttpResponse, baseline: BaselineProfile
+    ) -> bool:
+        return responses_similar(base, true_response, baseline) and not responses_similar(
+            base, false_response, baseline
+        )
 
     # --- OOB ---------------------------------------------------------------------------
 

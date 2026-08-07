@@ -94,6 +94,25 @@ class BaselineProfile:
         return len({self.normalize(r.text) for r in self.responses}) == 1
 
 
+def similarity_ratio(a_text: str, b_text: str, extra_masks: Iterable[str] = ()) -> float:
+    """How similar two bodies are (0..1) after volatile normalization."""
+    a, b = normalize_body(a_text, extra_masks), normalize_body(b_text, extra_masks)
+    if a == b:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def responses_similar(a: HttpResponse, b: HttpResponse, baseline: BaselineProfile, *, threshold: float = 0.95) -> bool:
+    """Whether two responses are effectively the same page (same status + similar body).
+
+    Used by boolean-based blind detection to tell a TRUE condition (behaves like the
+    baseline) from a FALSE one (differs), ignoring the app's own volatile noise.
+    """
+    if a.status_code != b.status_code:
+        return False
+    return similarity_ratio(a.text, b.text, baseline.extra_masks) >= threshold
+
+
 def build_baseline(responses: list[HttpResponse]) -> BaselineProfile:
     """Build a profile from one or more samples of the same base request."""
     times = [r.elapsed_ms for r in responses]

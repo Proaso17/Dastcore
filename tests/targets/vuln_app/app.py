@@ -90,6 +90,7 @@ def create_app() -> Flask:
             "<url><loc>/go?url=/</loc></url>"
             "<url><loc>/render?name=guest</loc></url>"
             "<url><loc>/api/nosql?filter=all</loc></url>"
+            "<url><loc>/api/item?id=1</loc></url>"
             "<url><loc>/reset</loc></url>"
             "<url><loc>/api/cors</loc></url>"
             "<url><loc>/api/log?msg=hello</loc></url>"
@@ -125,6 +126,18 @@ def create_app() -> Flask:
             )
         items = "".join(f"<li>{name} - ${price}</li>" for _id, name, price in rows)
         return Response(f"<h1>Results for {query}</h1><ul>{items}</ul>", mimetype="text/html")
+
+    @app.get("/api/item")
+    def item_lookup() -> Response:
+        """Boolean-based blind SQLi: the page differs on whether an injected condition
+        is TRUE or FALSE, but it never leaks a DB error and never echoes the input —
+        only the true/false behaviour distinguishes the two responses."""
+        raw = request.args.get("id", "1")
+        cond = re.search(r"and\s+'?(\w+)'?\s*=\s*'?(\w+)'?", raw, re.IGNORECASE)
+        condition_true = (cond.group(1) == cond.group(2)) if cond else True
+        if condition_true:
+            return Response("<h1>Producto</h1><p>Teclado mecánico — 49.99, en stock.</p>", mimetype="text/html")
+        return Response("<h1>Producto</h1><p>No se encontró el producto.</p>", mimetype="text/html")
 
     @app.get("/greet")
     def greet() -> Response:

@@ -48,6 +48,7 @@ async def test_all_planted_vulnerabilities_are_detected(vuln_app_url: str) -> No
 
     # Additional classes discovered via the sitemap and scanned end to end.
     rule_ids = {f.rule_id for f in findings}
+    assert "sqli-boolean-blind" in rule_ids, rule_ids  # boolean blind SQLi at /api/item
     assert "ssti-inband" in rule_ids, rule_ids  # SSTI at /render
     assert "nosqli-error" in rule_ids, rule_ids  # NoSQLi at /api/nosql
     assert "host-header-injection" in rule_ids, rule_ids  # Host header at /reset
