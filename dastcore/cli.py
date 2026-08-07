@@ -45,6 +45,7 @@ from dastcore.core.session import SessionManager
 from dastcore.detectors.active_checks import check_graphql_introspection, probe_sensitive_files
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
+from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
@@ -446,6 +447,9 @@ async def _run_scan(
 
             progress.status("Probando ficheros sensibles…")
             extra_findings.extend(await probe_sensitive_files(client, target))
+
+            progress.status("Fingerprint de tecnología + WAF…")
+            extra_findings.extend(await fingerprint_and_waf(client, target))
 
             scanner = Scanner(client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency)
             all_requests = list(discovered.values())
