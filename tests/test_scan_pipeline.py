@@ -62,6 +62,10 @@ async def test_all_planted_vulnerabilities_are_detected(vuln_app_url: str) -> No
     assert "nosqli-error" in rule_ids, rule_ids  # NoSQLi at /api/nosql
     assert "host-header-injection" in rule_ids, rule_ids  # Host header at /reset
     assert "active-cors-reflected-origin" in rule_ids, rule_ids  # CORS at /api/cors
+    assert "cmdi-inband" in rule_ids, rule_ids  # in-band OS command injection at /api/ping
+    assert "xpath-injection" in rule_ids, rule_ids  # XPath injection at /api/xpath
+    assert "ldap-injection" in rule_ids, rule_ids  # LDAP injection at /api/ldap
+    assert "secret-exposure" in rule_ids, rule_ids  # leaked AWS key at /api/build-info
 
     # every finding carries reproducible evidence, remediation, CWE and an OWASP/WSTG reference
     for finding in findings:

@@ -26,11 +26,14 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra) para **web, API
 
 | Clase | Cómo | CWE / OWASP |
 |---|---|---|
-| SQL Injection (error + blind time-based) | regla YAML | CWE-89 / WSTG-INPV-05 |
+| SQL Injection (error + **boolean-blind TRUE/FALSE** + blind time-based) | regla YAML | CWE-89 / WSTG-INPV-05 |
 | NoSQL Injection (error-based) | regla YAML | CWE-943 / WSTG-INPV-05 |
-| XSS reflejado (múltiples contextos) + DOM-based | regla YAML + headless | CWE-79 / WSTG-INPV-01 |
+| **XPath Injection** (error-based) | regla YAML | CWE-643 / WSTG-INPV-09 |
+| **LDAP Injection** (error-based) | regla YAML | CWE-90 / WSTG-INPV-06 |
+| XSS reflejado (múltiples contextos) + DOM-based + **almacenado/2º orden** (`--stored`) | regla YAML + headless | CWE-79 / WSTG-INPV-01/02 |
 | SSTI (in-band `7*7` + blind OAST) | regla YAML | CWE-1336 / WSTG-INPV-18 |
-| Command injection (blind, OAST) | regla YAML | CWE-78 / WSTG-INPV-12 |
+| Command injection (**in-band por output** + blind OAST) | regla YAML | CWE-78 / WSTG-INPV-12 |
+| **Exposición de secretos en respuestas** (AWS/Google/Stripe/GitHub/Slack keys, private keys) | pasivo | CWE-312 / WSTG-CONF-06 |
 | **Log4Shell / JNDI** (blind, OAST, incl. headers) | regla YAML | CWE-502 |
 | SSRF (blind, OAST) | regla YAML | CWE-918 / WSTG-INPV-19 |
 | XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |

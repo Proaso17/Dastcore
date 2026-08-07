@@ -1,0 +1,29 @@
+id: xpath-injection
+name: XPath Injection
+family: xpath
+severity: high
+cwe: CWE-643
+owasp: WSTG-INPV-09
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+inject_into: [query, body, json]
+payloads:
+  - "' or '1'='1"
+  - "']"
+  - "\") or (\"1\"=\"1"
+  - "count(//*)"
+  - "']|//*['"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns:
+        - "XPath(?:Exception)?\\b"
+        - "Invalid predicate"
+        - "XPST\\d{4}"
+        - "unterminated (?:string|expression)"
+        - "javax\\.xml\\.xpath"
+confirm_reproducible: true
+remediation: >-
+  Don't build XPath expressions from user input. Use parameterized/precompiled
+  XPath with variable binding, and validate input against an allowlist.

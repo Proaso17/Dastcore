@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+from dastcore.detectors.secrets import check_exposed_secrets
 
 _ERROR_DISCLOSURE_PATTERNS = [
     r"Traceback \(most recent call last\)",
@@ -274,4 +275,5 @@ def run_passive_checks(request: HttpRequest, response: HttpResponse) -> list[Fin
     findings.extend(check_technology_disclosure(request, response))
     findings.extend(check_missing_csp(request, response))
     findings.extend(check_directory_listing(request, response))
+    findings.extend(check_exposed_secrets(request, response))
     return findings

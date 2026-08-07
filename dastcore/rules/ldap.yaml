@@ -1,0 +1,29 @@
+id: ldap-injection
+name: LDAP Injection
+family: ldap
+severity: high
+cwe: CWE-90
+owasp: WSTG-INPV-06
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
+inject_into: [query, body, json]
+payloads:
+  - "*)(uid=*"
+  - "*)(|(uid=*"
+  - "admin)(&)"
+  - "*)((|"
+  - "*"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns:
+        - "LDAP(?:Error|Exception)?[^a-z]"
+        - "invalid (?:DN |filter|search filter)"
+        - "bad search filter"
+        - "LDAP: error code \\d+"
+        - "javax\\.naming"
+confirm_reproducible: true
+remediation: >-
+  Escape LDAP special characters (RFC 4515) in every user-supplied filter value,
+  or use a parameterized LDAP API; validate input against an allowlist.

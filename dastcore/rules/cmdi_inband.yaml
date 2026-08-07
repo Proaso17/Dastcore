@@ -1,0 +1,32 @@
+id: cmdi-inband
+name: OS Command Injection (in-band)
+family: cmdi
+severity: critical
+cwe: CWE-78
+owasp: WSTG-INPV-12
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+inject_into: [query, body, json]
+# Confirmed by *command output* in the response (uid=…, /etc/passwd, Windows dir),
+# never by the payload merely reflecting — so an echoed separator is not a hit.
+payloads:
+  - "; id"
+  - "| id"
+  - "& whoami"
+  - "`id`"
+  - "$(id)"
+  - "; cat /etc/passwd"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns:
+        - "uid=\\d+\\([a-z_][a-z0-9_-]*\\)\\s+gid=\\d+"
+        - "root:.*:0:0:"
+        - "Volume Serial Number is"
+confirm_reproducible: true
+catch_all_guard: true
+remediation: >-
+  Never pass user input to a shell. Use the language's process API with an
+  argument array (no shell interpolation), validate against a strict allowlist,
+  and drop shell metacharacters entirely.

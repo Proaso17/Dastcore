@@ -92,6 +92,10 @@ def create_app() -> Flask:
             "<url><loc>/api/nosql?filter=all</loc></url>"
             "<url><loc>/api/item?id=1</loc></url>"
             "<url><loc>/api/user?id=1</loc></url>"
+            "<url><loc>/api/ping?host=localhost</loc></url>"
+            "<url><loc>/api/xpath?q=x</loc></url>"
+            "<url><loc>/api/ldap?user=x</loc></url>"
+            "<url><loc>/api/build-info</loc></url>"
             "<url><loc>/download?file=guide.txt</loc></url>"
             "<url><loc>/guestbook</loc></url>"
             "<url><loc>/reset</loc></url>"
@@ -141,6 +145,48 @@ def create_app() -> Flask:
         if condition_true:
             return Response("<h1>Producto</h1><p>Teclado mecánico — 49.99, en stock.</p>", mimetype="text/html")
         return Response("<h1>Producto</h1><p>No se encontró el producto.</p>", mimetype="text/html")
+
+    @app.get("/api/ping")
+    def ping() -> Response:
+        """OS command injection (in-band): host is passed to a shell `ping`. A command
+        separator + `id`/`cat` runs the command and its output appears in the response."""
+        host = request.args.get("host", "localhost")
+        out = "PING: 56 data bytes\n64 bytes: icmp_seq=0 ttl=64 time=0.1 ms"
+        cmd = re.search(r"[;&|`$(]+\s*(id|whoami|cat\s+/etc/passwd)", host, re.IGNORECASE)
+        if cmd:
+            token = cmd.group(1).lower()
+            if token == "id":
+                out += "\nuid=0(root) gid=0(root) groups=0(root)"
+            elif token == "whoami":
+                out += "\nroot"
+            else:
+                out += "\nroot:x:0:0:root:/root:/bin/bash"
+        return Response(f"<pre>{out}</pre>", mimetype="text/html")
+
+    @app.get("/api/xpath")
+    def xpath_search() -> Response:
+        """XPath injection (error-based): user input breaks a server-side XPath expression."""
+        q = request.args.get("q", "")
+        if any(c in q for c in ("'", '"', "]", "(")):
+            return Response(
+                "XPathException: Invalid predicate — unterminated string in expression",
+                status=500,
+                mimetype="text/plain",
+            )
+        return jsonify({"results": []})
+
+    @app.get("/api/ldap")
+    def ldap_search() -> Response:
+        """LDAP injection (error-based): user input breaks a search filter."""
+        user = request.args.get("user", "")
+        if any(c in user for c in ("(", ")", "*", "\\", "|")):
+            return Response("LDAPError: invalid filter — bad search filter (LDAP: error code 87)", status=500)
+        return jsonify({"found": False})
+
+    @app.get("/api/build-info")
+    def build_info() -> Response:
+        """Secret exposure: build metadata leaks a cloud API key into the response."""
+        return jsonify({"version": "1.2.3", "commit": "abc1234", "aws_key": "AKIAIOSFODNN7EXAMPLE"})
 
     @app.get("/api/user")
     def user_lookup() -> Response:
