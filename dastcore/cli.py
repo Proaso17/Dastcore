@@ -54,7 +54,7 @@ from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 from dastcore.report import render_html, render_json, render_sarif
-from dastcore.report.correlation import correlate, deduplicate
+from dastcore.report.correlation import correlate, cross_correlate, deduplicate
 from dastcore.retest import (
     RetestOutcome,
     base_requests_for,
@@ -467,7 +467,8 @@ async def _run_scan(
         progress.status("Pruebas de autorización (BOLA/BFLA)…")
         authz_findings = await _run_authz(config, list(discovered.values()), budget)
 
-    return active_passive + dom_findings + authz_findings
+    # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
+    return cross_correlate(active_passive + dom_findings + authz_findings)
 
 
 async def _run_retest(

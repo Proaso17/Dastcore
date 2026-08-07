@@ -29,6 +29,7 @@ from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
 from dastcore.engine.oast import OastInteraction, OastProvider, substitute_oast
 from dastcore.engine.rule_engine import Rule, applicable_payloads, build_mutated_request, oob_payload_templates
+from dastcore.report.correlation import cross_correlate
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import evaluate_oracle
 from dastcore.validation.reflection import analyze_reflection
@@ -169,11 +170,12 @@ class Scanner:
         *,
         on_request_done: Callable[[HttpRequest, list[Finding]], None] | None = None,
     ) -> list[Finding]:
-        """Full scan: concurrent in-band + passive, then OOB and (optional) stored correlation."""
+        """Full scan: concurrent in-band + passive, then OOB and (optional) stored correlation,
+        finally cross-technique correlation over the whole set."""
         findings = await self.scan_inband(requests, on_request_done=on_request_done)
         findings.extend(await self.run_oob(requests))
         findings.extend(await self.run_stored(requests))
-        return findings
+        return cross_correlate(findings)
 
     async def run_oob(self, requests: list[HttpRequest]) -> list[Finding]:
         """Probe every request's OOB rules and report only those with a correlated callback."""
@@ -414,6 +416,7 @@ class Scanner:
             cwe="CWE-79",
             owasp="WSTG-INPV-02",
             cvss="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:N",
+            family="xss",
             injection_point=probe.point,
             evidence=[
                 Evidence(
@@ -451,4 +454,5 @@ class Scanner:
             response=response,
             remediation=rule.remediation,
             cvss=rule.cvss,
+            family=rule.family,
         )

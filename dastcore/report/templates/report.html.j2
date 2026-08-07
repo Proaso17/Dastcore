@@ -120,6 +120,7 @@
         <dt>Rule</dt><dd><code>{{ f.rule_id }}</code></dd>
         <dt>CVSS</dt><dd><strong>{{ "%.1f"|format(f.cvss_score) }}</strong> <code>{{ f.cvss_vector }}</code></dd>
         <dt>Confianza</dt><dd><strong>{{ f.confidence }}</strong> ({{ "%.2f"|format(f.confidence_score) }})</dd>
+        {% if f.corroborated_by %}<dt>Corroborado por</dt><dd>{{ f.corroborated_by | join(", ") }}</dd>{% endif %}
         <dt>CWE</dt><dd>{{ f.cwe }}</dd>
         <dt>OWASP</dt><dd>{{ f.owasp }}</dd>
         <dt>Injection point</dt>

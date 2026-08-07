@@ -83,6 +83,7 @@ def _build_result(finding: Finding) -> dict:
             "cvss_score": finding.cvss_score,
             "confidence": finding.confidence,
             "confidence_score": finding.confidence_score,
+            "corroborated_by": finding.corroborated_by,
             "evidence": [ev.model_dump(mode="json") for ev in finding.evidence],
             "repro": finding.request.to_curl(),
         },

@@ -22,13 +22,14 @@ _SELF_SUFFICIENT = {"oob", "dom_execution"}
 _EVIDENCE_WEIGHT = {"low": 0.35, "medium": 0.55, "high": 0.75}
 
 
-def score_confidence(evidences: list[Evidence]) -> tuple[Confidence, float]:
+def score_confidence(evidences: list[Evidence], *, corroborated: int = 0) -> tuple[Confidence, float]:
     """Return (label, score in 0..1) for a finding's evidence.
 
     - out-of-band / DOM-execution evidence → high (0.98).
     - otherwise: start from the strongest single evidence, add for each *extra* distinct
-      signal type that agreed (independent corroboration), and add for reproduction
-      (the same signal type seen more than once = confirmed on a second request).
+      signal type that agreed, add for reproduction (same type seen twice), and add when
+      the same scenario is confirmed by another *independent technique/rule* at the same
+      injection point (``corroborated`` = how many other rules cross-confirmed it).
     """
     if not evidences:
         return "low", 0.3
@@ -45,6 +46,8 @@ def score_confidence(evidences: list[Evidence]) -> tuple[Confidence, float]:
         score += 0.2  # independent signals agree
     if reproduced:
         score += 0.1
+    if corroborated >= 1:
+        score += 0.2  # a second technique/rule confirmed the same scenario
     score = min(round(score, 2), 0.97)
 
     label: Literal["low", "medium", "high"] = "high" if score >= 0.75 else "medium" if score >= 0.5 else "low"

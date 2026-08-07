@@ -91,6 +91,7 @@ def create_app() -> Flask:
             "<url><loc>/render?name=guest</loc></url>"
             "<url><loc>/api/nosql?filter=all</loc></url>"
             "<url><loc>/api/item?id=1</loc></url>"
+            "<url><loc>/api/user?id=1</loc></url>"
             "<url><loc>/download?file=guide.txt</loc></url>"
             "<url><loc>/guestbook</loc></url>"
             "<url><loc>/reset</loc></url>"
@@ -140,6 +141,20 @@ def create_app() -> Flask:
         if condition_true:
             return Response("<h1>Producto</h1><p>Teclado mecánico — 49.99, en stock.</p>", mimetype="text/html")
         return Response("<h1>Producto</h1><p>No se encontró el producto.</p>", mimetype="text/html")
+
+    @app.get("/api/user")
+    def user_lookup() -> Response:
+        """SQL injection confirmable by *two* techniques at once: a quote triggers a DB
+        error (error-based), and a true/false condition changes the page without echoing
+        the input (boolean-based blind). Cross-correlation should merge them."""
+        raw = request.args.get("id", "1")
+        if "'" in raw or '"' in raw:
+            return Response("<pre>SQLite3::error near: unrecognized token</pre>", status=500, mimetype="text/html")
+        cond = re.search(r"and\s+'?(\w+)'?\s*=\s*'?(\w+)'?", raw, re.IGNORECASE)
+        condition_true = (cond.group(1) == cond.group(2)) if cond else True
+        if condition_true:
+            return Response("<h1>Usuario</h1><p>alice — cuenta activa</p>", mimetype="text/html")
+        return Response("<h1>Usuario</h1><p>Usuario no encontrado.</p>", mimetype="text/html")
 
     @app.get("/greet")
     def greet() -> Response:

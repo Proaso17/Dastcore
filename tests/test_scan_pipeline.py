@@ -51,6 +51,13 @@ async def test_all_planted_vulnerabilities_are_detected(vuln_app_url: str) -> No
     # Additional classes discovered via the sitemap and scanned end to end.
     rule_ids = {f.rule_id for f in findings}
     assert "sqli-boolean-blind" in rule_ids, rule_ids  # boolean blind SQLi at /api/item
+
+    # Cross-technique correlation: /api/user is confirmed by error-based AND boolean-blind
+    # SQLi at the same point; each finding should name the other as corroboration.
+    user_sqli = [f for f in findings if f.family == "sqli" and "/api/user" in f.request.url]
+    assert user_sqli, [f.rule_id for f in findings]
+    assert any(f.corroborated_by for f in user_sqli), user_sqli
+    assert all(f.confidence == "high" for f in user_sqli)
     assert "ssti-inband" in rule_ids, rule_ids  # SSTI at /render
     assert "nosqli-error" in rule_ids, rule_ids  # NoSQLi at /api/nosql
     assert "host-header-injection" in rule_ids, rule_ids  # Host header at /reset

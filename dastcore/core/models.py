@@ -123,6 +123,8 @@ class Finding(BaseModel):
     cvss: str | None = None  # explicit CVSS 3.1 base vector; falls back to a severity default
     suppressed: bool = False  # triaged as accepted/false-positive via a .dastcore-ignore rule
     suppression_reason: str | None = None
+    family: str = ""  # vulnerability family (from the rule); groups cross-technique confirmations
+    corroborated_by: list[str] = Field(default_factory=list)  # other rules confirming the same scenario
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -149,10 +151,11 @@ class Finding(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def confidence(self) -> Confidence:
-        """How trustworthy this finding is, from the agreement of its evidence signals."""
+        """How trustworthy this finding is, from the agreement of its evidence signals
+        plus any cross-technique corroboration at the same injection point."""
         from dastcore.validation.confidence import score_confidence
 
-        return score_confidence(self.evidence)[0]
+        return score_confidence(self.evidence, corroborated=len(self.corroborated_by))[0]
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -160,4 +163,4 @@ class Finding(BaseModel):
         """Numeric confidence (0.0–1.0) backing the `confidence` label."""
         from dastcore.validation.confidence import score_confidence
 
-        return score_confidence(self.evidence)[1]
+        return score_confidence(self.evidence, corroborated=len(self.corroborated_by))[1]

@@ -29,6 +29,38 @@ def deduplicate(findings: list[Finding]) -> list[Finding]:
     return unique
 
 
+def _scenario_key(finding: Finding) -> tuple[str, str, str, str, str] | None:
+    """The vulnerability *scenario* a finding belongs to: same family + injection point,
+    regardless of which rule/technique found it. None for findings that can't correlate."""
+    if not finding.family:
+        return None
+    path = urlsplit(finding.request.url).path or "/"
+    point = finding.injection_point
+    return (finding.family, finding.request.method, path, point.location, point.name)
+
+
+def cross_correlate(findings: list[Finding]) -> list[Finding]:
+    """Cross-technique confirmation: when the *same* injection point is confirmed by more
+    than one rule of the same family (e.g. SQLi by both an error string and a boolean
+    differential), annotate each finding with the other techniques that corroborate it.
+    That raises its confidence — one vuln confirmed several independent ways.
+
+    Pure and idempotent: returns copies with ``corroborated_by`` recomputed from scratch.
+    """
+    by_scenario: dict[tuple[str, str, str, str, str], set[str]] = {}
+    for finding in findings:
+        key = _scenario_key(finding)
+        if key is not None:
+            by_scenario.setdefault(key, set()).add(finding.rule_id)
+
+    result: list[Finding] = []
+    for finding in findings:
+        key = _scenario_key(finding)
+        others = sorted(by_scenario.get(key, set()) - {finding.rule_id}) if key is not None else []
+        result.append(finding.model_copy(update={"corroborated_by": others}))
+    return result
+
+
 @dataclass
 class IssueGroup:
     """One logical issue (a rule) and every place it was confirmed."""
