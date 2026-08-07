@@ -92,6 +92,7 @@ def create_app() -> Flask:
             "<url><loc>/api/nosql?filter=all</loc></url>"
             "<url><loc>/api/item?id=1</loc></url>"
             "<url><loc>/download?file=guide.txt</loc></url>"
+            "<url><loc>/guestbook</loc></url>"
             "<url><loc>/reset</loc></url>"
             "<url><loc>/api/cors</loc></url>"
             "<url><loc>/api/log?msg=hello</loc></url>"
@@ -165,6 +166,32 @@ def create_app() -> Flask:
             if name in base:
                 return Response(base[name], mimetype="text/plain")
             return Response("not found", status=404, mimetype="text/plain")
+
+    _GUESTBOOK: list[str] = []
+
+    @app.get("/guestbook")
+    def guestbook() -> Response:
+        """Stored-XSS entry point: a comment form (POST /comment) + a link to the page
+        that renders stored comments unescaped."""
+        return Response(
+            "<!doctype html><html><body><h1>Libro de visitas</h1>"
+            '<form action="/comment" method="post"><input name="text" value=""><button>Enviar</button></form>'
+            '<a href="/comments">Ver comentarios</a>'
+            "</body></html>",
+            mimetype="text/html",
+        )
+
+    @app.post("/comment")
+    def add_comment() -> Response:
+        payload = request.get_json(silent=True) or request.form
+        _GUESTBOOK.append(payload.get("text", ""))
+        return jsonify({"status": "saved"})
+
+    @app.get("/comments")
+    def comments() -> Response:
+        """Vulnerable: stored comments rendered without escaping (stored/second-order XSS)."""
+        items = "".join(f"<div class='c'>{c}</div>" for c in _GUESTBOOK)
+        return Response(f"<h1>Comentarios</h1>{items}", mimetype="text/html")
 
     @app.get("/download")
     def download() -> Response:

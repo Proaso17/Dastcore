@@ -403,6 +403,7 @@ async def _run_scan(
     state: _ResumeState | None = None,
     budget: _Budget | None = None,
     progress: _ProgressAdapter | None = None,
+    stored_scan: bool = False,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -451,7 +452,9 @@ async def _run_scan(
             progress.status("Fingerprint de tecnología + WAF…")
             extra_findings.extend(await fingerprint_and_waf(client, target))
 
-            scanner = Scanner(client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency)
+            scanner = Scanner(
+                client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency, stored_scan=stored_scan
+            )
             all_requests = list(discovered.values())
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
@@ -512,9 +515,10 @@ async def _scan_with_optional_resume(
         progress.tick()
 
     in_band = await scanner.scan_inband(to_scan, on_request_done=_on_done)
-    # OOB is idempotent and gated by the provider; run it over the full set every time.
+    # OOB and stored are idempotent and self-gated; run them over the full set every time.
     oob = await scanner.run_oob(requests)
-    return prior + in_band + oob
+    stored = await scanner.run_stored(requests)
+    return prior + in_band + oob + stored
 
 
 async def _run_headless(
@@ -671,6 +675,11 @@ def scan(
     ),
     openapi_url: str = typer.Option("", "--openapi", help="URL de un documento OpenAPI/Swagger a ingerir."),
     graphql_url: str = typer.Option("", "--graphql", help="URL de un endpoint GraphQL a introspeccionar."),
+    stored: bool = typer.Option(
+        False,
+        "--stored",
+        help="Detección de XSS almacenado/segundo orden: inyecta canarios y re-crawlea (más lento).",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -876,6 +885,7 @@ def scan(
                     state,
                     budget,
                     _ProgressAdapter(progress),
+                    stored_scan=stored,
                 )
             )
     except SessionLoginError as exc:

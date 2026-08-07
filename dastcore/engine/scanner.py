@@ -31,6 +31,7 @@ from dastcore.engine.oast import OastProvider, substitute_oast
 from dastcore.engine.rule_engine import Rule, applicable_payloads, build_mutated_request, oob_payload_templates
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import evaluate_oracle
+from dastcore.validation.reflection import analyze_reflection
 
 
 @dataclass
@@ -42,6 +43,16 @@ class _OobProbe:
     point: InjectionPoint
     request: HttpRequest
     response: HttpResponse
+
+
+@dataclass
+class _StoredProbe:
+    """A canary XSS payload injected at one point, to look for later on other pages."""
+
+    token: str
+    payload: str
+    origin: HttpRequest
+    point: InjectionPoint
 
 
 class Scanner:
@@ -58,6 +69,7 @@ class Scanner:
         oob_poll_attempts: int = 4,
         oob_poll_delay: float = 0.5,
         baseline_samples: int = 2,
+        stored_scan: bool = False,
     ) -> None:
         self._http = http_client
         self._rules = rules
@@ -67,6 +79,7 @@ class Scanner:
         self._oob_poll_attempts = oob_poll_attempts
         self._oob_poll_delay = oob_poll_delay
         self._baseline_samples = max(1, baseline_samples)
+        self._stored_scan = stored_scan
         # Extra baseline samples only pay off for timing oracles (to measure jitter);
         # skip them entirely when no rule is time-based, keeping request volume down.
         self._needs_baseline = any(
@@ -156,9 +169,10 @@ class Scanner:
         *,
         on_request_done: Callable[[HttpRequest, list[Finding]], None] | None = None,
     ) -> list[Finding]:
-        """Full scan: concurrent in-band + passive, then OOB correlation."""
+        """Full scan: concurrent in-band + passive, then OOB and (optional) stored correlation."""
         findings = await self.scan_inband(requests, on_request_done=on_request_done)
         findings.extend(await self.run_oob(requests))
+        findings.extend(await self.run_stored(requests))
         return findings
 
     async def run_oob(self, requests: list[HttpRequest]) -> list[Finding]:
@@ -327,6 +341,89 @@ class Scanner:
             ]
             findings.append(self._build_finding(probe.rule, probe.point, evidence, probe.request, probe.response))
         return findings
+
+    # --- stored / second-order ---------------------------------------------------------
+
+    async def run_stored(self, requests: list[HttpRequest]) -> list[Finding]:
+        """Inject unique XSS canaries everywhere, then re-fetch pages and report any that
+        surface — i.e. input persisted server-side and rendered on another request (stored
+        XSS). A single-response oracle can't see this; re-crawling is what confirms it.
+
+        A no-op unless the scanner was built with ``stored_scan=True`` (it is expensive:
+        it injects a canary at every point and re-fetches every page)."""
+        if not self._stored_scan:
+            return []
+        probes = await self._probe_stored(requests)
+        if not probes:
+            return []
+        return await self._correlate_stored(probes, requests)
+
+    async def _probe_stored(self, requests: list[HttpRequest]) -> list[_StoredProbe]:
+        probes: list[_StoredProbe] = []
+        for request in requests:
+            for point in extract_injection_points(request, include_headers=False):
+                token = "dcstored" + secrets.token_hex(6)
+                payload = f'"><svg onload=alert(1)>{token}'
+                if await self._send(build_mutated_request(point, payload)) is not None:
+                    probes.append(_StoredProbe(token=token, payload=payload, origin=request, point=point))
+        return probes
+
+    async def _correlate_stored(self, probes: list[_StoredProbe], requests: list[HttpRequest]) -> list[Finding]:
+        findings: list[Finding] = []
+        emitted: set[str] = set()
+        for page in requests:
+            if page.method != "GET":
+                continue
+            # Re-fetch the page with its *original* values — no payload in this request,
+            # so a canary in the body can only be there because it was stored.
+            response = await self._send(page)
+            if response is None:
+                continue
+            for probe in probes:
+                if probe.token not in response.text:
+                    continue
+                # Only report when the stored payload actually executes in the page's context.
+                info = analyze_reflection(response.text, probe.payload)
+                if not info.executable:
+                    continue
+                key = f"{probe.point.location}:{probe.point.name}->{page.signature()}"
+                if key in emitted:
+                    continue
+                emitted.add(key)
+                findings.append(self._build_stored_finding(probe, page, response, info.context))
+        return findings
+
+    @staticmethod
+    def _build_stored_finding(probe: _StoredProbe, page: HttpRequest, response: HttpResponse, context: str) -> Finding:
+        origin_path = urlsplit(probe.origin.url).path or "/"
+        surfaced_path = urlsplit(page.url).path or "/"
+        injected = build_mutated_request(probe.point, probe.payload)
+        return Finding(
+            id=f"stored-xss:{probe.origin.method}:{origin_path}:{probe.point.location}:{probe.point.name}->{surfaced_path}",
+            rule_id="stored-xss",
+            name="Stored / Second-Order Cross-Site Scripting (XSS)",
+            severity="high",
+            cwe="CWE-79",
+            owasp="WSTG-INPV-02",
+            cvss="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:N",
+            injection_point=probe.point,
+            evidence=[
+                Evidence(
+                    type="reflected",
+                    data=(
+                        f"input at {probe.origin.method} {origin_path} ({probe.point.name}) persisted and "
+                        f"executes at GET {surfaced_path} ({context} context)"
+                    )[:200],
+                    confidence="high",
+                )
+            ],
+            request=injected,
+            response=response,
+            remediation=(
+                "Escapa/valida la entrada del usuario al *renderizarla*, no solo al guardarla: aplica "
+                "output encoding contextual en cada punto donde se muestra el dato almacenado."
+            ),
+        )
 
     # --- shared ------------------------------------------------------------------------
 
