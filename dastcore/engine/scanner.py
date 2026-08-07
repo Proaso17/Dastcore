@@ -28,6 +28,7 @@ from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
 from dastcore.engine.oast import OastProvider, substitute_oast
 from dastcore.engine.rule_engine import Rule, applicable_payloads, build_mutated_request, oob_payload_templates
+from dastcore.validation.baseline import BaselineProfile, build_baseline
 from dastcore.validation.oracles import evaluate_oracle
 
 
@@ -55,6 +56,7 @@ class Scanner:
         active_checks: bool = True,
         oob_poll_attempts: int = 4,
         oob_poll_delay: float = 0.5,
+        baseline_samples: int = 2,
     ) -> None:
         self._http = http_client
         self._rules = rules
@@ -63,6 +65,10 @@ class Scanner:
         self._active_checks = active_checks
         self._oob_poll_attempts = oob_poll_attempts
         self._oob_poll_delay = oob_poll_delay
+        self._baseline_samples = max(1, baseline_samples)
+        # Extra baseline samples only pay off for timing oracles (to measure jitter);
+        # skip them entirely when no rule is time-based, keeping request volume down.
+        self._needs_baseline = any(check.type == "time_based" for rule in rules for check in rule.oracle.checks)
 
     async def _send(self, request: HttpRequest) -> HttpResponse | None:
         try:
@@ -92,11 +98,19 @@ class Scanner:
 
         findings = run_passive_checks(request, base_response)
 
+        samples = [base_response]
+        if self._needs_baseline:
+            for _ in range(self._baseline_samples - 1):
+                extra = await self._send(request)
+                if extra is not None:
+                    samples.append(extra)
+        baseline = build_baseline(samples)
+
         for point in extract_injection_points(request):
             for rule in self._rules:
                 if rule.is_oob or point.location not in rule.inject_into:
                     continue
-                finding = await self._try_rule(rule, point, base_response)
+                finding = await self._try_rule(rule, point, baseline)
                 if finding is not None:
                     findings.append(finding)
 
@@ -151,7 +165,8 @@ class Scanner:
             return []
         return await self._correlate_oob(pending_oob)
 
-    async def _try_rule(self, rule: Rule, point, base_response: HttpResponse) -> Finding | None:
+    async def _try_rule(self, rule: Rule, point, baseline: BaselineProfile) -> Finding | None:
+        base_response = baseline.primary
         for payload in applicable_payloads(rule):
             mutated_request = build_mutated_request(point, payload.value)
             mutated_response = await self._send(mutated_request)
@@ -159,7 +174,11 @@ class Scanner:
                 continue
 
             evidence = evaluate_oracle(
-                rule.oracle, base_response=base_response, mutated_response=mutated_response, payload=payload.value
+                rule.oracle,
+                base_response=base_response,
+                mutated_response=mutated_response,
+                payload=payload.value,
+                baseline=baseline,
             )
             if not evidence:
                 continue
@@ -169,7 +188,11 @@ class Scanner:
                 if confirm_response is None:
                     continue
                 confirm_evidence = evaluate_oracle(
-                    rule.oracle, base_response=base_response, mutated_response=confirm_response, payload=payload.value
+                    rule.oracle,
+                    base_response=base_response,
+                    mutated_response=confirm_response,
+                    payload=payload.value,
+                    baseline=baseline,
                 )
                 if not confirm_evidence:
                     continue

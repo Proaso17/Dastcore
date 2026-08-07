@@ -14,8 +14,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from dastcore.core.models import Evidence, HttpResponse
+from dastcore.validation.baseline import BaselineProfile
+from dastcore.validation.reflection import check_reflected_xss
 
-OracleCheckType = Literal["reflected", "response_match", "differential", "time_based", "oob"]
+OracleCheckType = Literal["reflected", "reflected_xss", "response_match", "differential", "time_based", "oob"]
 OraclePart = Literal["body", "headers"]
 
 
@@ -67,12 +69,18 @@ def check_differential(base: HttpResponse, mutated: HttpResponse) -> Evidence | 
     return None
 
 
-def check_time_based(mutated: HttpResponse, threshold_ms: float, baseline_ms: float = 0.0) -> Evidence | None:
+def check_time_based(
+    mutated: HttpResponse, threshold_ms: float, baseline_ms: float = 0.0, jitter_ms: float = 0.0
+) -> Evidence | None:
+    """Flags a mutated response slower than baseline by more than the configured
+    threshold — *and* by more than the app's natural timing jitter, so network noise
+    on a variable target doesn't masquerade as a time-based injection."""
     delta = mutated.elapsed_ms - baseline_ms
-    if delta >= threshold_ms:
+    if delta >= threshold_ms and delta >= 3 * jitter_ms:
+        note = f" (jitter {jitter_ms:.0f}ms)" if jitter_ms else ""
         return Evidence(
             type="time_based",
-            data=f"{delta:.0f}ms slower than baseline (threshold {threshold_ms:.0f}ms)",
+            data=f"{delta:.0f}ms slower than baseline (threshold {threshold_ms:.0f}ms){note}",
             confidence="medium",
         )
     return None
@@ -84,15 +92,20 @@ def _run_check(
     base_response: HttpResponse,
     mutated_response: HttpResponse,
     payload: str,
+    baseline: BaselineProfile | None,
 ) -> Evidence | None:
     if check.type == "response_match":
         return check_response_match(mutated_response, check.patterns, check.part)
     if check.type == "reflected":
         return check_reflected(mutated_response, payload)
+    if check.type == "reflected_xss":
+        return check_reflected_xss(mutated_response, payload)
     if check.type == "differential":
         return check_differential(base_response, mutated_response)
     if check.type == "time_based":
-        return check_time_based(mutated_response, check.threshold_ms or 0.0, baseline_ms=base_response.elapsed_ms)
+        expected = baseline.expected_ms if baseline else base_response.elapsed_ms
+        jitter = baseline.jitter_ms if baseline else 0.0
+        return check_time_based(mutated_response, check.threshold_ms or 0.0, baseline_ms=expected, jitter_ms=jitter)
     if check.type == "oob":
         # OOB confirmation is out-of-band: it can't be judged from this single response.
         # The scanner correlates callbacks against the OAST provider instead.
@@ -106,15 +119,24 @@ def evaluate_oracle(
     base_response: HttpResponse,
     mutated_response: HttpResponse,
     payload: str,
+    baseline: BaselineProfile | None = None,
 ) -> list[Evidence]:
     """Runs every check in `oracle` and returns the evidence that confirms the rule.
 
     `any_of` short-circuits on the first match. `all_of` requires every check to
-    produce evidence; if even one doesn't, no evidence is returned at all.
+    produce evidence; if even one doesn't, no evidence is returned at all. When a
+    `baseline` is given, timing checks use its median + jitter instead of a single
+    base sample, so they don't fire on a noisy target.
     """
     evidences: list[Evidence] = []
     for check in oracle.checks:
-        evidence = _run_check(check, base_response=base_response, mutated_response=mutated_response, payload=payload)
+        evidence = _run_check(
+            check,
+            base_response=base_response,
+            mutated_response=mutated_response,
+            payload=payload,
+            baseline=baseline,
+        )
         if evidence is not None:
             evidences.append(evidence)
             if oracle.type == "any_of":

@@ -15,7 +15,7 @@ payloads:
 oracle:
   type: any_of
   checks:
-    - type: reflected
+    - type: reflected_xss   # context-aware: only fires on an *executable* reflection
 confirm_reproducible: true
 remediation: >-
   HTML-encode all user input before rendering it into HTML (contextual output
