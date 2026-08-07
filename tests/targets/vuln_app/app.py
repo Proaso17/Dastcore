@@ -227,6 +227,17 @@ def create_app() -> Flask:
             return jsonify({"error": "not found"}), 404
         return jsonify(order)
 
+    _PRODUCTS = {1: {"id": 1, "name": "Laptop", "price": 999.99}, 2: {"id": 2, "name": "Mouse", "price": 19.99}}
+
+    @app.get("/api/products/<int:product_id>")
+    def get_product(product_id: int) -> Response:
+        """NOT a BOLA: object-scoped and authenticated, but the object is a *public*
+        product with no owner — so returning it to every user is correct, not a leak."""
+        if request.cookies.get("session_user_id") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        product = _PRODUCTS.get(product_id)
+        return jsonify(product) if product else (jsonify({"error": "not found"}), 404)
+
     # --- Phase 3: authenticated areas -------------------------------------------------
     # Server-side session/token validity so tests can simulate an expired session and
     # exercise dastcore's automatic re-login. Not linked from '/', so the unauthenticated

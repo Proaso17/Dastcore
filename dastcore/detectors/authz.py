@@ -32,6 +32,21 @@ _SENSITIVE_PATH = re.compile(r"(admin|internal|config|secret|token|password|priv
 _OBJECT_SEGMENT = re.compile(r"^(\d+|[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,})$")
 _ID_PARAM = re.compile(r"(^|_)(id|uuid|guid)$", re.IGNORECASE)
 
+# Fields/values that mark a body as *someone's owned data* rather than a public
+# resource — the difference between a BOLA and a legitimately-shared object.
+_OWNERSHIP_MARKERS = re.compile(
+    r"\b(owner|owner_id|user_id|userid|account|account_id|customer|customer_id|email|"
+    r"first_name|last_name|full_name|username|phone|address|ssn|dob|balance|iban|card)\b"
+    r"|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+    re.IGNORECASE,
+)
+
+
+def _ownership_marker(body: str) -> str | None:
+    """The owner-identifying field/value in a response, if any (else None)."""
+    match = _OWNERSHIP_MARKERS.search(body)
+    return match.group(0) if match else None
+
 
 @dataclass
 class Identity:
@@ -77,7 +92,7 @@ async def _send(client: HttpClient, request: HttpRequest) -> HttpResponse | None
         return None
 
 
-def _bola_finding(request: HttpRequest, response: HttpResponse, identities: list[str]) -> Finding:
+def _bola_finding(request: HttpRequest, response: HttpResponse, identities: list[str], marker: str) -> Finding:
     path = urlsplit(request.url).path or "/"
     return Finding(
         id=f"authz-bola:{request.method}:{path}",
@@ -90,7 +105,10 @@ def _bola_finding(request: HttpRequest, response: HttpResponse, identities: list
         evidence=[
             Evidence(
                 type="differential",
-                data=f"identical object returned to multiple identities: {', '.join(identities)}",
+                data=(
+                    f"identical owned object (contains '{marker}') returned to multiple "
+                    f"identities: {', '.join(identities)}"
+                ),
                 confidence="high",
             )
         ],
@@ -179,8 +197,12 @@ async def run_authz_checks(
                 by_body.setdefault(body, []).append(identity)
                 resp_by_body.setdefault(body, response)
             for body, ids in by_body.items():
-                if len(ids) >= 2:
-                    findings.append(_bola_finding(probe, resp_by_body[body], [i.name for i in ids]))
+                # Fire only when the shared body is *owned data* (has ownership markers).
+                # An identical body with no owner identifiers is likely a public/shared
+                # resource, not a broken authorization — so we don't flag it.
+                marker = _ownership_marker(body)
+                if len(ids) >= 2 and marker is not None:
+                    findings.append(_bola_finding(probe, resp_by_body[body], [i.name for i in ids], marker))
                     break
 
         # Missing authentication: a sensitive endpoint succeeds with no credentials at all.

@@ -113,3 +113,21 @@ async def test_no_bola_when_only_one_identity_has_access(vuln_app_url: str) -> N
         findings = await run_authz_checks(identities, probes)
 
     assert not any(f.rule_id == "authz-bola" for f in findings)
+
+
+async def test_no_bola_on_shared_public_object(vuln_app_url: str) -> None:
+    """A public product is identical for every user but has no ownership markers -> not BOLA."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/products/1")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice", "bob"])
+        findings = await run_authz_checks(identities, probes)
+
+    assert not any(f.rule_id == "authz-bola" for f in findings)
+
+
+def test_ownership_marker_distinguishes_owned_from_public() -> None:
+    from dastcore.detectors.authz import _ownership_marker
+
+    assert _ownership_marker('{"id":1,"owner_id":7,"item":"Laptop"}') == "owner_id"
+    assert _ownership_marker('{"name":"jane","email":"jane@example.com"}') is not None
+    assert _ownership_marker('{"id":1,"name":"Laptop","price":999.99}') is None  # public product

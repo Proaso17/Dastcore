@@ -76,6 +76,8 @@ async def test_blind_ssrf_confirmed_via_oob(vuln_app_url: str) -> None:
     assert ssrf[0].severity == "high"
     assert ssrf[0].evidence[0].type == "oob"
     assert ssrf[0].injection_point.name == "url"
+    # The callback metadata classifies it as a server-side HTTP fetch (blind SSRF).
+    assert "HTTP" in ssrf[0].evidence[0].data and "server-side fetch" in ssrf[0].evidence[0].data
 
 
 async def test_no_oob_finding_without_a_real_callback(vuln_app_url: str) -> None:

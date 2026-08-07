@@ -27,7 +27,7 @@ from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, I
 from dastcore.detectors.active_checks import check_cors_reflection
 from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
-from dastcore.engine.oast import OastProvider, substitute_oast
+from dastcore.engine.oast import OastInteraction, OastProvider, substitute_oast
 from dastcore.engine.rule_engine import Rule, applicable_payloads, build_mutated_request, oob_payload_templates
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import evaluate_oracle
@@ -312,12 +312,13 @@ class Scanner:
 
     async def _correlate_oob(self, pending: list[_OobProbe]) -> list[Finding]:
         assert self._oast is not None
-        matched: set[str] = set()
+        # token -> the interaction that matched it, so we can classify the callback.
+        matched: dict[str, OastInteraction] = {}
         for attempt in range(self._oob_poll_attempts):
             for interaction in await self._oast.poll():
                 for probe in pending:
                     if probe.token == interaction.token or probe.token in interaction.raw:
-                        matched.add(probe.token)
+                        matched.setdefault(probe.token, interaction)
             if len(matched) >= len(pending):
                 break
             if attempt < self._oob_poll_attempts - 1:
@@ -326,16 +327,23 @@ class Scanner:
         findings: list[Finding] = []
         emitted: set[str] = set()
         for probe in pending:
-            if probe.token not in matched:
+            interaction = matched.get(probe.token)
+            if interaction is None:
                 continue
             key = f"{probe.rule.id}:{urlsplit(probe.request.url).path}:{probe.point.location}:{probe.point.name}"
             if key in emitted:
                 continue
             emitted.add(key)
+            # Classify by protocol: an HTTP callback means the server actually made a
+            # request (a full server-side fetch — SSRF/RCE); a DNS-only lookup is a weaker
+            # but still confirming signal (typical of blind XXE / Log4Shell resolvers).
+            proto = interaction.protocol.upper()
+            source = interaction.remote_addr or "the target"
+            kind = "server-side fetch" if interaction.protocol.lower() == "http" else "DNS resolution"
             evidence = [
                 Evidence(
                     type="oob",
-                    data=f"target made an out-of-band callback correlated to payload token {probe.token}",
+                    data=f"out-of-band {proto} callback ({kind}) from {source} — token {probe.token}"[:200],
                     confidence="high",
                 )
             ]
