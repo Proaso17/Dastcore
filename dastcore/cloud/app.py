@@ -26,7 +26,7 @@ from dastcore.cloud.models import JobResult, JobSpec, ProjectCreate, RunnerCreat
 from dastcore.cloud.scheduler import Scheduler
 from dastcore.cloud.store import JobRow, RunnerRow, ScheduleRow, Store
 from dastcore.core.models import Finding
-from dastcore.httpsec import add_security_headers
+from dastcore.httpsec import add_security_headers, is_https
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Recurring-job interval presets for the UI (minutes).
@@ -233,11 +233,13 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         return render("login.html.j2", error="")
 
     @app.post("/ui/login")
-    def ui_login(api_key: str = Form(...)) -> Response:
+    def ui_login(request: Request, api_key: str = Form(...)) -> Response:
         if store.project_for_key(api_key.strip()) is None:
             return HTMLResponse(env.get_template("login.html.j2").render(error="API key inválida."), status_code=400)
         resp = RedirectResponse("/ui", status_code=303)
-        resp.set_cookie("dast_key", api_key.strip(), httponly=True, samesite="strict")
+        # Secure only over HTTPS so the session cookie can't leak over plain HTTP once
+        # deployed behind TLS — while still working on localhost HTTP for dev.
+        resp.set_cookie("dast_key", api_key.strip(), httponly=True, samesite="strict", secure=is_https(request))
         return resp
 
     @app.post("/ui/logout")

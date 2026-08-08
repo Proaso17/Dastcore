@@ -176,6 +176,18 @@ async def test_control_plane_sets_security_headers(client: httpx.AsyncClient) ->
     assert resp.headers["x-frame-options"] == "DENY"
     assert resp.headers["x-content-type-options"] == "nosniff"
     assert "frame-ancestors 'none'" in resp.headers["content-security-policy"]
+    assert "object-src 'none'" in resp.headers["content-security-policy"]
+    assert "strict-transport-security" not in resp.headers  # not over plain HTTP
+
+
+async def test_https_deploy_gets_hsts_and_secure_cookie(client: httpx.AsyncClient) -> None:
+    https = {"X-Forwarded-Proto": "https"}  # behind a TLS-terminating proxy
+    async with client:
+        key = await _new_project(client)
+        health = await client.get("/api/health", headers=https)
+        assert "max-age" in health.headers.get("strict-transport-security", "")
+        login = await client.post("/ui/login", data={"api_key": key}, headers=https, follow_redirects=False)
+        assert "secure" in login.headers.get("set-cookie", "").lower()
 
 
 async def test_ui_login_and_dashboard(client: httpx.AsyncClient) -> None:
