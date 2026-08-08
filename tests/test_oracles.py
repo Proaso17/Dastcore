@@ -31,6 +31,19 @@ def test_check_response_match_returns_none_when_no_pattern_matches() -> None:
     assert check_response_match(response, ["SQLite3::error", "Traceback"], part="body") is None
 
 
+def test_check_response_match_ignores_echoed_payload() -> None:
+    # An API 422 that echoes our payload — the pattern matched the reflection, not a
+    # server signal, so it must NOT fire.
+    response = _response(text='{"detail":"invalid input","input":"x $where y"}')
+    assert check_response_match(response, ["\\$where"], part="body", payload="a $where b") is None
+    # But a genuine server error (not contained in the payload) still fires.
+    server_err = _response(text="MongoError: unknown top level operator near 'x'")
+    assert check_response_match(server_err, ["MongoError"], part="body", payload="{$ne:1}") is not None
+    # In headers, an echoed payload IS the signal (open redirect via Location), so it fires.
+    redir = _response(headers={"Location": "https://evil.example/"})
+    assert check_response_match(redir, ["evil\\.example"], part="headers", payload="https://evil.example/") is not None
+
+
 def test_check_response_match_searches_headers_when_requested() -> None:
     response = _response(headers={"Location": "https://evil.example/"})
     evidence = check_response_match(response, ["evil\\.example"], part="headers")

@@ -43,12 +43,23 @@ def _headers_haystack(response: HttpResponse) -> str:
     return "\n".join(f"{name}: {value}" for name, value in response.headers.items())
 
 
-def check_response_match(response: HttpResponse, patterns: list[str], part: OraclePart = "body") -> Evidence | None:
+def check_response_match(
+    response: HttpResponse, patterns: list[str], part: OraclePart = "body", payload: str = ""
+) -> Evidence | None:
+    """Fire when the response carries a server-generated signal (a DB/parse error, a
+    disclosure). A match that is merely the *echoed payload* — the app reflecting our
+    input, e.g. in a JSON validation error — is skipped: reflection isn't a signal."""
     haystack = response.text if part == "body" else _headers_haystack(response)
+    payload_lower = payload.lower()
     for pattern in patterns:
-        match = re.search(pattern, haystack, re.IGNORECASE)
-        if match:
-            return Evidence(type="response_match", data=match.group(0)[:200], confidence="high")
+        for match in re.finditer(pattern, haystack, re.IGNORECASE):
+            hit = match.group(0)
+            # In the body, a match that is only the echoed payload is reflection, not a
+            # server signal. In headers it's the opposite: a payload reflected into
+            # Location *is* the signal (open redirect), so the guard is body-only.
+            if payload and part == "body" and hit.lower() in payload_lower:
+                continue
+            return Evidence(type="response_match", data=hit[:200], confidence="high")
     return None
 
 
@@ -95,7 +106,7 @@ def _run_check(
     baseline: BaselineProfile | None,
 ) -> Evidence | None:
     if check.type == "response_match":
-        return check_response_match(mutated_response, check.patterns, check.part)
+        return check_response_match(mutated_response, check.patterns, check.part, payload)
     if check.type == "reflected":
         return check_reflected(mutated_response, payload)
     if check.type == "reflected_xss":

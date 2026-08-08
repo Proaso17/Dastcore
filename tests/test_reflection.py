@@ -80,3 +80,16 @@ def test_oracle_fires_on_executable_and_not_on_inert() -> None:
     assert check_reflected_xss(_resp(f"<h1>{SCRIPT}</h1>"), SCRIPT) is not None
     assert check_reflected_xss(_resp(f"<!-- {SCRIPT} -->"), SCRIPT) is None
     assert check_reflected_xss(_resp("nothing here"), SCRIPT) is None
+
+
+def test_oracle_ignores_reflection_in_non_html_response() -> None:
+    # A script echoed in a JSON body (e.g. an API validation error) can't execute -> not XSS.
+    json_resp = HttpResponse(
+        status_code=422, headers={"Content-Type": "application/json"}, text=f'{{"input":"{SCRIPT}"}}', url="http://x/"
+    )
+    assert check_reflected_xss(json_resp, SCRIPT) is None
+    # The same body served as text/html would be executable.
+    html_resp = HttpResponse(
+        status_code=200, headers={"Content-Type": "text/html"}, text=f"<div>{SCRIPT}</div>", url="http://x/"
+    )
+    assert check_reflected_xss(html_resp, SCRIPT) is not None

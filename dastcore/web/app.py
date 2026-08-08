@@ -20,6 +20,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 
 from dastcore.core.models import Finding
+from dastcore.httpsec import add_security_headers
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate
 from dastcore.severity import severity_rank
@@ -63,6 +64,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
             task.cancel()
 
     app = FastAPI(title="dastcore", docs_url=None, redoc_url=None, lifespan=lifespan)
+    add_security_headers(app)
     app.state.store = store
     app.state.manager = manager
     app.state.scheduler = scheduler

@@ -117,9 +117,22 @@ def analyze_reflection(body: str, payload: str) -> ReflectionInfo:
     return ReflectionInfo(True, last_context, False)
 
 
+def _executes_as_html(response: HttpResponse) -> bool:
+    """Whether a reflected script could actually run — i.e. the browser renders the body
+    as HTML. A reflection in a JSON/plain/CSS/JS response (e.g. an API validation error
+    that echoes the input) can't execute, so it isn't XSS."""
+    content_type = next((v for k, v in response.headers.items() if k.lower() == "content-type"), "").lower()
+    if not content_type:
+        return True  # no Content-Type: a browser may sniff the body as HTML
+    return "html" in content_type or "xml" in content_type
+
+
 def check_reflected_xss(response: HttpResponse, payload: str) -> Evidence | None:
     """Reflected-XSS oracle: fires only when the payload reflects unescaped into a
-    context where it actually executes. Escaped or inert reflections produce nothing."""
+    context where it actually executes. Escaped or inert reflections, and reflections
+    in a non-HTML response body, produce nothing."""
+    if not _executes_as_html(response):
+        return None
     info = analyze_reflection(response.text, payload)
     if info.reflected and info.executable:
         return Evidence(

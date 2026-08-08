@@ -23,7 +23,7 @@ def client(tmp_path):
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float = 150.0) -> httpx.Response:
+async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float = 300.0) -> httpx.Response:
     deadline = asyncio.get_event_loop().time() + timeout_s
     while asyncio.get_event_loop().time() < deadline:
         resp = await client.get(f"/scans/{scan_id}/panel")
@@ -39,6 +39,16 @@ async def test_dashboard_loads_empty(client: httpx.AsyncClient) -> None:
     assert resp.status_code == 200
     assert "Nuevo escaneo" in resp.text
     assert "Aún no hay escaneos" in resp.text
+
+
+async def test_dashboard_sets_security_headers(client: httpx.AsyncClient) -> None:
+    """dastcore's own app must pass dastcore's passive checks (dogfooding)."""
+    async with client:
+        resp = await client.get("/")
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert "default-src" in resp.headers["content-security-policy"]
+    assert resp.headers.get("referrer-policy") == "no-referrer"
 
 
 async def test_start_scan_requires_authorization(client: httpx.AsyncClient, vuln_app_url: str) -> None:

@@ -170,6 +170,14 @@ async def test_scheduler_enqueues_due_jobs(app, client: httpx.AsyncClient) -> No
 # --- UI ----------------------------------------------------------------------------------
 
 
+async def test_control_plane_sets_security_headers(client: httpx.AsyncClient) -> None:
+    async with client:
+        resp = await client.get("/api/health")
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert "frame-ancestors 'none'" in resp.headers["content-security-policy"]
+
+
 async def test_ui_login_and_dashboard(client: httpx.AsyncClient) -> None:
     async with client:
         key = await _new_project(client)
