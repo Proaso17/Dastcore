@@ -14,6 +14,6 @@ oracle:
     - type: reflected
 confirm_reproducible: true
 remediation: >-
-  No construyas URLs, enlaces de reseteo de contraseña ni claves de caché a partir
-  de la cabecera Host. Usa un allowlist de hosts esperados o un valor de dominio
-  canónico configurado en el servidor.
+  Do not build URLs, password-reset links or cache keys from the Host header.
+  Validate it against an allowlist of expected hostnames, or generate links from a
+  canonical base URL configured on the server.

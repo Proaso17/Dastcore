@@ -16,6 +16,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from dastcore import __version__
 from dastcore.core.models import Finding
 from dastcore.report.correlation import correlate
+from dastcore.report.remediation import guide_for
 from dastcore.severity import SEVERITY_ORDER, severity_rank
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -24,6 +25,7 @@ _env = Environment(
     loader=FileSystemLoader(str(_TEMPLATES_DIR)),
     autoescape=select_autoescape(["html", "j2", "html.j2"], default=True, default_for_string=True),
 )
+_env.globals["remediation_guide"] = guide_for
 
 
 def _severity_counts(findings: list[Finding]) -> dict[str, int]:

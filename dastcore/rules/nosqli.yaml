@@ -25,6 +25,6 @@ oracle:
         - "MongoNetworkError"
 confirm_reproducible: true
 remediation: >-
-  Trata el input del usuario como datos, no como operadores de consulta. Valida y
-  castea tipos, rechaza claves que empiecen por '$', y usa consultas parametrizadas
-  del driver en vez de construir filtros a partir de input crudo.
+  Treat user input as data, not as query operators. Validate and cast types, reject
+  keys beginning with '$', and use the driver's parameterized query building instead
+  of constructing filters from raw request input.

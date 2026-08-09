@@ -9,12 +9,18 @@
     --bg: #0f1420; --panel: #1a2130; --panel-2: #141a26; --text: #e6e9ef;
     --muted: #9aa4b2; --border: #2a3446; --accent: #4da3ff;
     --critical: #ff4d6d; --high: #ff784e; --medium: #ffc247; --low: #4da3ff; --info: #8b95a5;
+    --fix: #35d0a5; --fix-soft: rgba(53,208,165,.12); --fix-border: rgba(53,208,165,.4);
+    --bad: #ff6b81; --bad-soft: rgba(255,77,109,.09); --bad-border: rgba(255,77,109,.35);
+    --good: #35d0a5; --good-soft: rgba(53,208,165,.09); --good-border: rgba(53,208,165,.35);
   }
   @media (prefers-color-scheme: light) {
     :root {
       --bg: #f5f7fa; --panel: #ffffff; --panel-2: #eef1f6; --text: #1a2130;
       --muted: #5b6472; --border: #d5dbe6; --accent: #1f6feb;
       --critical: #d1243b; --high: #c1440e; --medium: #9a6b00; --low: #1f6feb; --info: #5b6472;
+      --fix: #0f9d76; --fix-soft: rgba(15,157,118,.08); --fix-border: rgba(15,157,118,.3);
+      --bad: #c02338; --bad-soft: rgba(209,36,59,.06); --bad-border: rgba(209,36,59,.28);
+      --good: #0f9d76; --good-soft: rgba(15,157,118,.07); --good-border: rgba(15,157,118,.3);
     }
   }
   * { box-sizing: border-box; }
@@ -55,8 +61,40 @@
   .evidence li { font-size: 13px; padding: 6px 10px; background: var(--panel-2);
     border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
   .evidence .etype { font-weight: 700; color: var(--accent); }
-  .remediation { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
-    background: var(--panel-2); font-size: 13.5px; margin-top: 6px; }
+  /* --- How to fix panel ------------------------------------------------------ */
+  .fix { margin-top: 8px; border: 1px solid var(--fix-border); border-radius: 12px;
+    background: var(--fix-soft); overflow: hidden; }
+  .fix-head { display: flex; align-items: center; gap: 9px; padding: 10px 14px;
+    background: linear-gradient(90deg, var(--fix-soft), transparent);
+    border-bottom: 1px solid var(--fix-border); }
+  .fix-head .ico { flex: none; width: 26px; height: 26px; border-radius: 7px;
+    display: grid; place-items: center; background: var(--fix); color: #06231b; }
+  .fix-head .ico svg { width: 15px; height: 15px; }
+  .fix-head .t { font-weight: 700; font-size: 14px; letter-spacing: .2px; }
+  .fix-body { padding: 12px 14px 14px; }
+  .fix-summary { font-size: 13.5px; margin: 0 0 8px; }
+  ol.fix-steps { margin: 4px 0 0; padding-left: 0; list-style: none; counter-reset: step; }
+  ol.fix-steps li { position: relative; padding: 4px 0 4px 30px; font-size: 13px;
+    counter-increment: step; }
+  ol.fix-steps li::before { content: counter(step); position: absolute; left: 0; top: 3px;
+    width: 20px; height: 20px; border-radius: 50%; background: var(--fix); color: #06231b;
+    font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+  .code-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 4px; }
+  @media (max-width: 620px) { .code-compare { grid-template-columns: 1fr; } }
+  .code-col { border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+  .code-col .tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .5px; padding: 5px 10px; display: flex; align-items: center; gap: 6px; }
+  .code-col.bad { border-color: var(--bad-border); }
+  .code-col.bad .tag { background: var(--bad-soft); color: var(--bad); }
+  .code-col.good { border-color: var(--good-border); }
+  .code-col.good .tag { background: var(--good-soft); color: var(--good); }
+  .code-col pre { border: none; border-radius: 0; background: var(--panel-2); }
+  .code-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; font-style: italic; }
+  .refs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .refs a { font-size: 12px; text-decoration: none; color: var(--accent);
+    border: 1px solid var(--border); background: var(--panel-2); border-radius: 999px;
+    padding: 4px 11px; transition: border-color .15s; }
+  .refs a:hover { border-color: var(--accent); }
   .empty { text-align: center; color: var(--muted); padding: 48px 0; }
   code { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 12.5px; }
   footer { color: var(--muted); font-size: 12px; margin-top: 32px; text-align: center; }
@@ -156,8 +194,46 @@ json: {{ f.request.json_body }}
       <div class="section-label">Reproducir (curl)</div>
       <pre class="repro">{{ f.repro_curl }}</pre>
 
-      <div class="section-label">Remediation</div>
-      <div class="remediation">{{ f.remediation }}</div>
+      {% set g = remediation_guide(f) %}
+      <div class="fix">
+        <div class="fix-head">
+          <span class="ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>
+            </svg>
+          </span>
+          <span class="t">How to fix</span>
+        </div>
+        <div class="fix-body">
+          <p class="fix-summary">{{ g.summary }}</p>
+          {% if g.steps %}
+          <ol class="fix-steps">
+            {% for step in g.steps %}<li>{{ step }}</li>{% endfor %}
+          </ol>
+          {% endif %}
+          {% if g.example %}
+          <div class="code-compare">
+            <div class="code-col bad">
+              <div class="tag">✗ Vulnerable</div>
+              <pre>{{ g.example.bad }}</pre>
+            </div>
+            <div class="code-col good">
+              <div class="tag">✓ Secure</div>
+              <pre>{{ g.example.good }}</pre>
+            </div>
+          </div>
+          {% if g.example.note %}<p class="code-note">{{ g.example.note }}</p>{% endif %}
+          {% endif %}
+          {% if g.references %}
+          <div class="refs">
+            {% for ref in g.references %}
+            <a href="{{ ref.url }}" target="_blank" rel="noopener noreferrer">{{ ref.label }} ↗</a>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
     </article>
   {% endmacro %}
 
