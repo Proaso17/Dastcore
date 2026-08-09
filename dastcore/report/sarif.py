@@ -13,6 +13,7 @@ import re
 
 from dastcore import __version__
 from dastcore.core.models import Finding
+from dastcore.report.remediation import RemediationGuide, guide_for
 from dastcore.severity import sarif_level
 
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
@@ -35,14 +36,49 @@ def _evidence_text(finding: Finding) -> str:
     return "; ".join(f"{ev.type}: {ev.data}" for ev in finding.evidence)
 
 
+def _help_text(guide: RemediationGuide) -> str:
+    """Plain-text remediation (SARIF `help.text`, the required fallback)."""
+    lines = [guide.summary]
+    for i, step in enumerate(guide.steps, 1):
+        lines.append(f"{i}. {step}")
+    if guide.example:
+        lines.append(f"Vulnerable: {guide.example.bad}")
+        lines.append(f"Secure: {guide.example.good}")
+        if guide.example.note:
+            lines.append(guide.example.note)
+    for ref in guide.references:
+        lines.append(f"{ref.label}: {ref.url}")
+    return "\n".join(lines)
+
+
+def _help_markdown(guide: RemediationGuide) -> str:
+    """Rich remediation as Markdown — GitHub code scanning renders this in the alert."""
+    blocks = [f"### How to fix\n\n{guide.summary}"]
+    if guide.steps:
+        steps = "\n".join(f"{i}. {step}" for i, step in enumerate(guide.steps, 1))
+        blocks.append(steps)
+    if guide.example:
+        lang = guide.example.lang or ""
+        blocks.append(
+            f"**Vulnerable**\n\n```{lang}\n{guide.example.bad}\n```\n\n"
+            f"**Secure**\n\n```{lang}\n{guide.example.good}\n```"
+            + (f"\n\n_{guide.example.note}_" if guide.example.note else "")
+        )
+    if guide.references:
+        refs = "\n".join(f"- [{ref.label}]({ref.url})" for ref in guide.references)
+        blocks.append(f"**References**\n\n{refs}")
+    return "\n\n".join(blocks)
+
+
 def _build_rule(finding: Finding) -> dict:
+    guide = guide_for(finding)
     return {
         "id": finding.rule_id,
         "name": finding.name,
         "shortDescription": {"text": finding.name},
         "fullDescription": {"text": finding.remediation},
         "helpUri": _help_uri(finding),
-        "help": {"text": finding.remediation},
+        "help": {"text": _help_text(guide), "markdown": _help_markdown(guide)},
         "defaultConfiguration": {"level": sarif_level(finding.severity)},
         "properties": {
             "cwe": finding.cwe,

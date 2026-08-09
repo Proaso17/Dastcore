@@ -29,6 +29,7 @@ def _xss_finding() -> Finding:
         request=request,
         response=response,
         remediation="HTML-encode all user input before rendering.",
+        family="xss",
     )
 
 
@@ -49,6 +50,7 @@ def _second_xss_finding() -> Finding:
         request=request,
         response=response,
         remediation="HTML-encode all user input before rendering.",
+        family="xss",
     )
 
 
@@ -164,6 +166,29 @@ def test_sarif_rule_help_uri_points_to_cwe() -> None:
     doc = build_sarif([_xss_finding()])
     rule = doc["runs"][0]["tool"]["driver"]["rules"][0]
     assert rule["helpUri"] == "https://cwe.mitre.org/data/definitions/79.html"
+
+
+def test_sarif_rule_help_markdown_carries_full_remediation_guide() -> None:
+    """GitHub code scanning renders help.markdown: it should hold steps, code and refs."""
+    doc = build_sarif([_xss_finding()])
+    help_block = doc["runs"][0]["tool"]["driver"]["rules"][0]["help"]
+    md = help_block["markdown"]
+    assert "HTML-encode all user input" in md  # the rule's own summary line
+    assert "1." in md  # numbered steps
+    assert "```" in md  # a fenced code example
+    assert "**Vulnerable**" in md and "**Secure**" in md
+    assert "cheatsheetseries.owasp.org" in md  # an OWASP reference link
+    # the required plain-text fallback exists and is not markdown-fenced
+    assert help_block["text"]
+    assert "```" not in help_block["text"]
+
+
+def test_sarif_help_text_is_present_even_without_a_known_family() -> None:
+    passive = _passive_finding()  # rule_id passive-missing-x-frame-options -> security_headers guide
+    doc = build_sarif([passive])
+    rule = doc["runs"][0]["tool"]["driver"]["rules"][0]
+    assert rule["help"]["text"].startswith("Set X-Frame-Options")  # summary preserved
+    assert "Secure Headers" in rule["help"]["markdown"]  # detector finding still gets guidance
 
 
 # --- HTML -----------------------------------------------------------------------------
