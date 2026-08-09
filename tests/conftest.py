@@ -43,6 +43,20 @@ def vuln_app_url() -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
+def mini_target_url() -> Iterator[str]:
+    """A tiny, fast, deterministic vulnerable target for the dashboard/UI tests."""
+    from tests.targets.mini.app import create_app as create_mini_app
+
+    host = "127.0.0.1"
+    port = _free_port()
+    thread = _ServerThread(create_mini_app(), host, port)
+    thread.start()
+    yield f"http://{host}:{port}"
+    thread.shutdown()
+    thread.join(timeout=5)
+
+
+@pytest.fixture(scope="session")
 def benchmark_url() -> Iterator[str]:
     """Serves the labeled accuracy-benchmark target on a free local port."""
     from tests.targets.benchmark.app import create_app as create_benchmark_app

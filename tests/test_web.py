@@ -23,7 +23,7 @@ def client(tmp_path):
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float = 300.0) -> httpx.Response:
+async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float = 120.0) -> httpx.Response:
     deadline = asyncio.get_event_loop().time() + timeout_s
     while asyncio.get_event_loop().time() < deadline:
         resp = await client.get(f"/scans/{scan_id}/panel")
@@ -51,18 +51,18 @@ async def test_dashboard_sets_security_headers(client: httpx.AsyncClient) -> Non
     assert resp.headers.get("referrer-policy") == "no-referrer"
 
 
-async def test_start_scan_requires_authorization(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_start_scan_requires_authorization(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
-        resp = await client.post("/scans", data={"target": vuln_app_url, "engine": "http"})
+        resp = await client.post("/scans", data={"target": mini_target_url, "engine": "http"})
     assert resp.status_code == 400
     assert "autorización" in resp.text.lower()
 
 
-async def test_full_scan_flow_finds_planted_vulns(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_full_scan_flow_finds_planted_vulns(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         resp = await client.post(
             "/scans",
-            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            data={"target": mini_target_url, "engine": "http", "rps": "50", "authorization": "on"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -87,12 +87,12 @@ async def test_full_scan_flow_finds_planted_vulns(client: httpx.AsyncClient, vul
         assert "<title>" in report.text
 
 
-async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         # 1) an initial scan to retest
         resp = await client.post(
             "/scans",
-            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            data={"target": mini_target_url, "engine": "http", "rps": "50", "authorization": "on"},
             follow_redirects=False,
         )
         scan_id = resp.headers["location"].rsplit("/", 1)[-1]
@@ -123,11 +123,11 @@ async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncCli
         assert "retest" in home.text
 
 
-async def test_triage_accepts_finding_and_exports_ignore_file(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_triage_accepts_finding_and_exports_ignore_file(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         resp = await client.post(
             "/scans",
-            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            data={"target": mini_target_url, "engine": "http", "rps": "50", "authorization": "on"},
             follow_redirects=False,
         )
         scan_id = resp.headers["location"].rsplit("/", 1)[-1]
@@ -165,13 +165,13 @@ async def test_triage_accepts_finding_and_exports_ignore_file(client: httpx.Asyn
         assert "sqli-injection" not in (await client.get("/suppressions")).text
 
 
-async def test_diff_two_scans_of_unchanged_target(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_diff_two_scans_of_unchanged_target(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         ids = []
         for _ in range(2):
             resp = await client.post(
                 "/scans",
-                data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+                data={"target": mini_target_url, "engine": "http", "rps": "50", "authorization": "on"},
                 follow_redirects=False,
             )
             sid = resp.headers["location"].rsplit("/", 1)[-1]
@@ -198,11 +198,11 @@ async def test_diff_missing_scan_is_404(client: httpx.AsyncClient) -> None:
     assert resp.status_code == 404
 
 
-async def test_dashboard_counts_reflect_triage(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_dashboard_counts_reflect_triage(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         resp = await client.post(
             "/scans",
-            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            data={"target": mini_target_url, "engine": "http", "rps": "50", "authorization": "on"},
             follow_redirects=False,
         )
         scan_id = resp.headers["location"].rsplit("/", 1)[-1]

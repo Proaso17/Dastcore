@@ -22,36 +22,36 @@ def client(app):
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-async def test_schedules_page_and_auth_gate(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_schedules_page_and_auth_gate(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         empty = await client.get("/schedules")
         assert empty.status_code == 200
         assert "Sin escaneos programados" in empty.text
 
         # without the authorization checkbox the schedule is rejected
-        denied = await client.post("/schedules", data={"target": vuln_app_url, "interval_minutes": "1440"})
+        denied = await client.post("/schedules", data={"target": mini_target_url, "interval_minutes": "1440"})
         assert "autorización" in denied.text.lower()
         assert "Sin escaneos programados" in denied.text
 
         created = await client.post(
             "/schedules",
-            data={"target": vuln_app_url, "interval_minutes": "60", "authorization": "on"},
+            data={"target": mini_target_url, "interval_minutes": "60", "authorization": "on"},
             follow_redirects=False,
         )
         assert created.status_code == 303
         page = await client.get("/schedules")
-        assert vuln_app_url in page.text
+        assert mini_target_url in page.text
         assert "activo" in page.text  # the new schedule row is enabled
         assert "Sin escaneos programados" not in page.text
 
 
-async def test_tick_launches_due_schedule(app, vuln_app_url: str) -> None:
+async def test_tick_launches_due_schedule(app, mini_target_url: str) -> None:
     store = app.state.store
     scheduler = app.state.scheduler
 
     now = time.time()
     store.add_schedule(
-        target=vuln_app_url,
+        target=mini_target_url,
         engine="http",
         profile=None,
         rps=50,
@@ -82,12 +82,12 @@ async def test_tick_launches_due_schedule(app, vuln_app_url: str) -> None:
     assert store.get_scan(scans[0].id).status == "done"
 
 
-async def test_disabled_schedule_does_not_fire(app, vuln_app_url: str) -> None:
+async def test_disabled_schedule_does_not_fire(app, mini_target_url: str) -> None:
     store = app.state.store
     scheduler = app.state.scheduler
     now = time.time()
     store.add_schedule(
-        target=vuln_app_url,
+        target=mini_target_url,
         engine="http",
         profile=None,
         rps=50,

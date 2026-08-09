@@ -123,13 +123,15 @@ async def test_projects_are_isolated(client: httpx.AsyncClient) -> None:
 # --- runner e2e --------------------------------------------------------------------------
 
 
-async def test_runner_scans_target_and_reports(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+async def test_runner_scans_target_and_reports(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         key = await _new_project(client)
         runner_token = await _new_runner(client, key)
         proj_h = {"Authorization": f"Bearer {key}"}
         job_id = (
-            await client.post("/api/jobs", json={"target": vuln_app_url, "engine": "http", "rps": 50}, headers=proj_h)
+            await client.post(
+                "/api/jobs", json={"target": mini_target_url, "engine": "http", "rps": 50}, headers=proj_h
+            )
         ).json()["id"]
 
         assert await run_once(client, runner_token) is True
