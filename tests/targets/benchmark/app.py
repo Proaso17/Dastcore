@@ -17,6 +17,7 @@ import random
 import re
 import time
 import urllib.request
+from urllib.parse import urlsplit
 
 from flask import Flask, Response, jsonify, redirect, request
 
@@ -64,6 +65,8 @@ EXPECTED: dict[str, str | None] = {
     "/b/ssti-literal": None,  # echoes {{1337*1337}} literally (not evaluated)
     "/b/cmdi-echo": None,  # echoes the command separator (escaped), never runs it
     "/b/xpath-generic-500": None,  # 500 on special chars but a generic message
+    "/b/redirect-relative": None,  # sanitizes the target to a same-origin relative path
+    "/b/xss-attr-numeric": None,  # server-side validates the param is numeric (rejects payloads)
 }
 
 _SAMPLES = {
@@ -105,6 +108,8 @@ _SAMPLES = {
     "/b/ssti-literal": "tpl=x",
     "/b/cmdi-echo": "host=x",
     "/b/xpath-generic-500": "q=x",
+    "/b/redirect-relative": "url=/",
+    "/b/xss-attr-numeric": "v=1",
 }
 
 _BOOL = re.compile(r"and\s+'?(\w+)'?\s*=\s*'?(\w+)'?", re.IGNORECASE)
@@ -359,5 +364,18 @@ def create_app() -> Flask:
         if any(c in request.args.get("q", "") for c in ("'", '"', "(")):
             return Response("Query error", status=500, mimetype="text/plain")
         return jsonify({"r": []})
+
+    @app.get("/b/redirect-relative")
+    def redirect_relative() -> Response:
+        # Only ever redirect to a same-origin path — the scheme/host in the input is dropped.
+        path = urlsplit(request.args.get("url", "/")).path or "/"
+        return redirect(path if path.startswith("/") else "/" + path)
+
+    @app.get("/b/xss-attr-numeric")
+    def xss_attr_numeric() -> Response:
+        v = request.args.get("v", "0")
+        if not v.isdigit():  # server-side validation rejects the payload before it's reflected
+            v = "0"
+        return Response(f'<input value="{v}">', mimetype="text/html")
 
     return app
