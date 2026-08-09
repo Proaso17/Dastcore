@@ -558,6 +558,16 @@ docker run --rm ghcr.io/proaso17/dastcore:latest runner https://cloud.example.co
 .venv\Scripts\pytest tests/test_cloud.py -v
 ```
 
+## Benchmark de precisión (accuracy)
+
+Para no "estudiar para el examen que ya conoce", hay un **banco etiquetado** aparte (`tests/targets/benchmark/`) que empareja cada endpoint vulnerable con **decoys** realistas: cosas que *parecen* inyectables pero no lo son (reflexión escapada, reflexión en JSON, LFI catch-all, operadores NoSQL reflejados sin error, boolean estático, redirect fijo, placeholder que parece un secreto). El harness corre un crawl+scan real y puntúa los hallazgos activos contra las etiquetas → **precision / recall / F1** honestos, siendo los decoys las trampas de falso positivo.
+
+Resultado actual (10 vulns + 10 decoys): **precision 1.000 · recall 1.000 · F1 1.000** (0 FP, 0 FN). Es además un **gate de regresión** en CI (falla si aparece cualquier FP o cae el recall).
+
+```powershell
+.venv\Scripts\pytest tests/test_benchmark.py -s    # imprime el scorecard
+```
+
 ## Correr toda la suite
 
 ```powershell

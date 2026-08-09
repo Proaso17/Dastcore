@@ -42,6 +42,20 @@ def vuln_app_url() -> Iterator[str]:
     thread.join(timeout=5)
 
 
+@pytest.fixture(scope="session")
+def benchmark_url() -> Iterator[str]:
+    """Serves the labeled accuracy-benchmark target on a free local port."""
+    from tests.targets.benchmark.app import create_app as create_benchmark_app
+
+    host = "127.0.0.1"
+    port = _free_port()
+    thread = _ServerThread(create_benchmark_app(), host, port)
+    thread.start()
+    yield f"http://{host}:{port}"
+    thread.shutdown()
+    thread.join(timeout=5)
+
+
 @pytest.fixture
 def sample_finding() -> Finding:
     """A representative Finding for report / evidence tests (no network needed)."""
