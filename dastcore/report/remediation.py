@@ -14,10 +14,20 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-
-from dastcore.core.models import Finding
+from typing import Protocol
 
 _CHEATSHEET = "https://cheatsheetseries.owasp.org/cheatsheets/"
+
+
+class RemediationTarget(Protocol):
+    """The minimal surface `guide_for` needs. Both `Finding` and a correlated
+    `IssueGroup` satisfy it, so the HTML report, SARIF and the web UI share one
+    knowledge base."""
+
+    family: str
+    rule_id: str
+    cwe: str
+    remediation: str
 
 
 @dataclass(frozen=True)
@@ -494,29 +504,29 @@ def _cwe_reference(cwe: str) -> Reference | None:
     return Reference(f"CWE-{number}: definition", f"https://cwe.mitre.org/data/definitions/{number}.html")
 
 
-def _resolve_key(finding: Finding) -> str | None:
-    if finding.family and finding.family in _GUIDES:
-        return finding.family
+def _resolve_key(target: RemediationTarget) -> str | None:
+    if target.family and target.family in _GUIDES:
+        return target.family
     for prefix, key in _RULE_PREFIXES:
-        if finding.rule_id.startswith(prefix):
+        if target.rule_id.startswith(prefix):
             return key
     return None
 
 
-def guide_for(finding: Finding) -> RemediationGuide:
-    """Build the rich remediation guide for a finding.
+def guide_for(target: RemediationTarget) -> RemediationGuide:
+    """Build the rich remediation guide for a finding or correlated issue.
 
     The rule's own `remediation` is always the summary; steps, example and references
     come from the knowledge base when the family/rule is recognized. The CWE reference
     is appended automatically so every finding links to its authoritative definition.
     """
-    entry = _GUIDES.get(_resolve_key(finding) or "", {})
+    entry = _GUIDES.get(_resolve_key(target) or "", {})
     references: list[Reference] = list(entry.get("references", ()))
-    cwe_ref = _cwe_reference(finding.cwe)
+    cwe_ref = _cwe_reference(target.cwe)
     if cwe_ref and all(cwe_ref.url != r.url for r in references):
         references.append(cwe_ref)
     return RemediationGuide(
-        summary=finding.remediation,
+        summary=target.remediation,
         steps=tuple(entry.get("steps", ())),
         example=entry.get("example"),
         references=tuple(references),

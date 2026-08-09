@@ -23,6 +23,7 @@ from dastcore.core.models import Finding
 from dastcore.httpsec import add_security_headers
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate
+from dastcore.report.remediation import guide_for
 from dastcore.severity import severity_rank
 from dastcore.suppressions import apply_suppressions
 from dastcore.web.diff import diff_findings, location_label
@@ -42,6 +43,7 @@ def _build_env() -> Environment:
         autoescape=select_autoescape(["html", "j2"]),
     )
     env.filters["datetime"] = lambda ts: _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    env.globals["remediation_guide"] = guide_for
     return env
 
 

@@ -60,7 +60,7 @@
       <thead><tr><th>Severidad</th><th>CVSS</th><th>Issue</th><th>Inst.</th><th>Ubicaciones</th><th>Triaje</th></tr></thead>
       <tbody>
         {% for i in issues %}
-        <tr>
+        <tr class="issue-row">
           <td><span class="badge sev-{{ i.severity }}">{{ i.severity }}</span></td>
           <td>{{ '%.1f' | format(i.cvss_score) }}</td>
           <td>{{ i.name }}</td>
@@ -75,6 +75,32 @@
             </form>
           </td>
         </tr>
+        <tr class="fix-row"><td colspan="6">{% set g = remediation_guide(i) %}
+          <details class="fix">
+            <summary>
+              <svg class="wr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>
+              </svg>Cómo solucionarlo
+            </summary>
+            <div class="fix-body">
+              <p class="fix-sum">{{ g.summary }}</p>
+              {% if g.steps %}<ol class="fix-steps">{% for s in g.steps %}<li>{{ s }}</li>{% endfor %}</ol>{% endif %}
+              {% if g.example %}
+              <div class="code2">
+                <div class="cbox bad"><div class="ctag">✗ Vulnerable</div><pre>{{ g.example.bad }}</pre></div>
+                <div class="cbox good"><div class="ctag">✓ Seguro</div><pre>{{ g.example.good }}</pre></div>
+              </div>
+              {% if g.example.note %}<p class="cnote">{{ g.example.note }}</p>{% endif %}
+              {% endif %}
+              {% if g.references %}
+              <div class="frefs">
+                {% for r in g.references %}<a href="{{ r.url }}" target="_blank" rel="noopener noreferrer">{{ r.label }} ↗</a>{% endfor %}
+              </div>
+              {% endif %}
+            </div>
+          </details>
+        </td></tr>
         {% endfor %}
       </tbody>
     </table>

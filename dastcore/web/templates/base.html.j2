@@ -67,6 +67,38 @@
     .accepted { margin-top: 18px; border-top: 1px dashed var(--border); padding-top: 12px; }
     code { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font-size: 13px; }
     button.danger { background: var(--bad); }
+    /* --- "Cómo solucionarlo" (per-issue remediation guide) --- */
+    tr.issue-row > td { border-bottom: none; }
+    tr.fix-row > td { padding: 0 10px 12px; border-bottom: 1px solid var(--border); }
+    details.fix { border: 1px solid var(--border); border-radius: 10px; background: var(--bg); overflow: hidden; }
+    details.fix > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--ok); user-select: none; }
+    details.fix > summary::-webkit-details-marker { display: none; }
+    details.fix > summary:hover { background: color-mix(in srgb, var(--ok) 8%, transparent); }
+    details.fix .wr { width: 15px; height: 15px; flex: none; }
+    details.fix[open] > summary { border-bottom: 1px solid var(--border); }
+    .fix-body { padding: 12px 14px 14px; }
+    .fix-sum { margin: 0 0 8px; font-size: 13.5px; color: var(--ink); }
+    ol.fix-steps { margin: 6px 0 0; padding: 0; list-style: none; counter-reset: step; }
+    ol.fix-steps li { position: relative; padding: 4px 0 4px 28px; font-size: 13px; counter-increment: step; }
+    ol.fix-steps li::before { content: counter(step); position: absolute; left: 0; top: 3px; width: 19px; height: 19px;
+      border-radius: 50%; background: var(--ok); color: #fff; font-size: 11px; font-weight: 700;
+      display: grid; place-items: center; }
+    .code2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 4px; }
+    @media (max-width: 640px) { .code2 { grid-template-columns: 1fr; } }
+    .cbox { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .cbox.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); }
+    .cbox.good { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+    .ctag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 5px 10px; }
+    .cbox.bad .ctag { color: var(--bad); background: color-mix(in srgb, var(--bad) 9%, transparent); }
+    .cbox.good .ctag { color: var(--ok); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+    .cbox pre { margin: 0; padding: 10px 12px; background: var(--panel); overflow-x: auto; font-size: 12.5px;
+      font-family: "SF Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+    .cnote { font-size: 12px; color: var(--muted); font-style: italic; margin: 8px 0 0; }
+    .frefs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .frefs a { font-size: 12px; border: 1px solid var(--border); background: var(--panel); border-radius: 999px;
+      padding: 3px 11px; text-decoration: none; }
+    .frefs a:hover { border-color: var(--accent); text-decoration: none; }
   </style>
 </head>
 <body>

@@ -71,6 +71,10 @@ async def test_full_scan_flow_finds_planted_vulns(client: httpx.AsyncClient, min
         panel = await _wait_done(client, scan_id)
         assert "Completado" in panel.text
         assert "SQL Injection" in panel.text  # planted vuln surfaced in the results table
+        # each issue carries an inline, actionable remediation guide
+        assert "Cómo solucionarlo" in panel.text
+        assert "parameterized queries" in panel.text  # a concrete fix step
+        assert "cheatsheetseries.owasp.org" in panel.text  # a reference link
 
         # history shows the finished run
         home = await client.get("/")

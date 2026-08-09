@@ -75,6 +75,8 @@ class IssueGroup:
     locations: list[str] = field(default_factory=list)
     confidence: Confidence = "low"
     confidence_score: float = 0.0
+    family: str = ""  # lets guide_for() resolve remediation for this issue
+    remediation: str = ""  # the rule's one-line fix, used as the guide summary
 
 
 def _location_label(finding: Finding) -> str:
@@ -96,6 +98,8 @@ def correlate(findings: list[Finding]) -> list[IssueGroup]:
                 cwe=finding.cwe,
                 owasp=finding.owasp,
                 cvss_score=finding.cvss_score,
+                family=finding.family,
+                remediation=finding.remediation,
             )
             groups[finding.rule_id] = group
         group.count += 1
