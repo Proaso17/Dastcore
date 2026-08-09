@@ -20,7 +20,11 @@ def _free_port() -> int:
 class _ServerThread(threading.Thread):
     def __init__(self, app, host: str, port: int) -> None:
         super().__init__(daemon=True)
-        self._server = make_server(host, port, app)
+        # threaded=True: the scanner/crawler issue concurrent requests; a single-threaded
+        # server serializes them, so under load (e.g. coverage instrumentation) a queued
+        # request can hit the client timeout and a page is silently dropped — the source
+        # of the crawler/quiet-mode flakiness. One thread per request removes the queue.
+        self._server = make_server(host, port, app, threaded=True)
 
     def run(self) -> None:
         self._server.serve_forever()
