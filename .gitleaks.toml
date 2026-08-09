@@ -1,0 +1,21 @@
+title = "dastcore gitleaks config"
+
+# Start from gitleaks' built-in rule set, then narrow it to avoid flagging the
+# things a DAST project legitimately contains: deliberately-vulnerable test/demo
+# targets, the secret-detector's own regexes, and public example credentials.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional fixtures and detector patterns — not real secrets"
+paths = [
+  '''tests/targets/.*''',              # deliberately-vulnerable scan targets
+  '''dastcore/demo/app\.py''',         # the bundled vulnerable demo app
+  '''dastcore/detectors/secrets\.py''', # our secret-detection regexes
+  '''dastcore/ai_rules/.*\.ya?ml''',   # LLM-leak detection patterns
+  '''tests/test_secrets\.py''',
+]
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',          # AWS's public documentation example key
+  '''sk_live_(demo123|hunter2)''',     # fake Stripe keys in the vulnerable targets
+]

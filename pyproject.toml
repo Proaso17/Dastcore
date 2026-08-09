@@ -58,6 +58,8 @@ pg = ["psycopg[binary]>=3.1.0"]  # PostgreSQL backend for the cloud control-plan
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.5",
+    "pytest-cov>=5.0.0",
+    "pip-audit>=2.7.0",
     "flask>=3.0.0",
     "playwright>=1.42.0",
     "cryptography>=42.0.0",
@@ -85,6 +87,28 @@ dastcore = ["rules/*.yaml", "ai_rules/*.yaml", "ai_rules/wordlists/*.txt", "repo
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["dastcore"]
+branch = true
+# The demo target and headless crawler need a browser / bundled fixtures that the
+# default (non-headless) suite doesn't exercise; measured coverage stays honest.
+omit = ["dastcore/discovery/crawler_headless.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+precision = 1
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+    "class .*\\(Protocol\\):",
+    "\\.\\.\\.",
+]
 
 [tool.ruff]
 line-length = 120
