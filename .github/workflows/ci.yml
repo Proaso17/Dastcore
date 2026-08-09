@@ -126,3 +126,36 @@ jobs:
           pip install -e .
       - name: Self-scan (dogfooding gate)
         run: python scripts/self_scan.py
+
+  cloud-pg:
+    # Exercise the control-plane store against a real PostgreSQL backend, not just the
+    # SQLite one — the Postgres-specific claim/requeue paths otherwise only run in prod.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dastcore
+          POSTGRES_PASSWORD: dastcore
+          POSTGRES_DB: dastcore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dastcore"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DASTCORE_TEST_PG_DSN: postgresql://dastcore:dastcore@localhost:5432/dastcore
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install with Postgres + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[web,pg,dev]"
+      - name: Run the Postgres-backed store tests
+        run: pytest -q tests/test_cloud_pg.py

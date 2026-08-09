@@ -6,6 +6,8 @@ which additionally claims with FOR UPDATE SKIP LOCKED for multi-instance safety.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from dastcore.cloud.models import JobSpec
@@ -40,8 +42,8 @@ def test_stale_running_job_is_requeued_for_retry(store: Store) -> None:
     assert store.requeue_stale_jobs(visibility_timeout=1e9) == 0
     assert store.get_job(project_id, job_id).status == "running"
 
-    # a very small timeout makes the claim look abandoned -> back to the queue
-    assert store.requeue_stale_jobs(visibility_timeout=0.0) == 1
+    # a far-future `now` makes the claim look abandoned regardless of clock resolution
+    assert store.requeue_stale_jobs(visibility_timeout=0.0, now=time.time() + 3600) == 1
     job = store.get_job(project_id, job_id)
     assert job.status == "queued" and job.runner is None and job.claimed_at is None
     assert job.attempts == 1  # the attempt still counts
@@ -54,9 +56,10 @@ def test_stale_running_job_is_requeued_for_retry(store: Store) -> None:
 def test_retries_are_exhausted_into_error(store: Store) -> None:
     project_id, job_id = _project_with_job(store)
     # default max_attempts is 3: claim + requeue three times, then it fails
+    future = time.time() + 3600  # force staleness deterministically
     for _ in range(3):
         assert store.claim_job(project_id, "r") is not None
-        store.requeue_stale_jobs(visibility_timeout=0.0)
+        store.requeue_stale_jobs(visibility_timeout=0.0, now=future)
     job = store.get_job(project_id, job_id)
     assert job.status == "error" and "timed out" in (job.error or "")
     # exhausted -> not handed out again
