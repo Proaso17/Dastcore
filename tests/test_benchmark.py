@@ -38,7 +38,8 @@ _ACTIVE_FAMILIES = {
     "ssrf",
     "crlf",
     "host_header",
-    "log4shell",
+    "rce",
+    "cors",
 }
 
 

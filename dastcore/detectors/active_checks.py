@@ -59,6 +59,7 @@ async def check_cors_reflection(client: HttpClient, request: HttpRequest) -> lis
                 severity="high",
                 cwe="CWE-942",
                 owasp="WSTG-CLNT-07",
+                family="cors",
                 injection_point=_point(request, "header", "Origin"),
                 evidence=[
                     Evidence(

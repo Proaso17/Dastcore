@@ -38,7 +38,12 @@ EXPECTED: dict[str, str | None] = {
     "/b/redirect": "open_redirect",  # Location = user input
     "/b/lfi": "lfi",  # path traversal -> /etc/passwd
     "/b/secret": "secret",  # leaked cloud key
+    "/b/nosql-error": "nosqli",  # NoSQL error-based
+    "/b/cors": "cors",  # arbitrary Origin reflected with credentials
     "/b/ssrf": "ssrf",  # blind SSRF (out-of-band)
+    "/b/log4shell": "rce",  # JNDI / Log4Shell (out-of-band)
+    "/b/xxe": "xxe",  # XML external entity (out-of-band, POST body)
+    "/b/cmdi-blind": "cmdi",  # blind OS command injection (out-of-band)
     # --- decoys / true negatives (19) ---
     "/b/xss-escaped": None,  # reflected but HTML-escaped
     "/b/xss-json": None,  # reflected raw but in a JSON body (can't execute)
@@ -76,7 +81,11 @@ _SAMPLES = {
     "/b/redirect": "url=/",
     "/b/lfi": "file=readme.txt",
     "/b/secret": "",
+    "/b/nosql-error": "filter=all",
+    "/b/cors": "",
     "/b/ssrf": "url=http://placeholder/",
+    "/b/log4shell": "q=hello",
+    "/b/cmdi-blind": "host=localhost",
     "/b/xss-escaped": "name=x",
     "/b/xss-json": "name=x",
     "/b/xss-comment": "name=x",
@@ -108,6 +117,14 @@ def _sql_error(value: str) -> bool:
     return any(c in value for c in ("'", '"'))
 
 
+def _oob_fetch(url: str) -> None:
+    """Simulate a server-side fetch (SSRF/RCE/XXE reaching the OAST collector)."""
+    try:
+        urllib.request.urlopen(url, timeout=3).read()  # noqa: S310 (intentional, offline test target)
+    except Exception:
+        pass
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
 
@@ -115,7 +132,10 @@ def create_app() -> Flask:
     def index() -> Response:
         # Links cover the GET endpoints; the POST endpoint is reached via the form.
         links = "".join(f'<a href="{p}{("?" + q) if q else ""}">{p}</a> ' for p, q in _SAMPLES.items())
-        form = '<form action="/b/sqli-post" method="post"><input name="q" value=""></form>'
+        form = (
+            '<form action="/b/sqli-post" method="post"><input name="q" value=""></form>'
+            '<form action="/b/xxe" method="post"><input name="xml" value=""></form>'
+        )
         return Response(
             f"<!doctype html><html><body><h1>benchmark</h1>{links}{form}</body></html>", mimetype="text/html"
         )
@@ -211,15 +231,50 @@ def create_app() -> Flask:
     def secret() -> Response:
         return jsonify({"note": "config", "aws_key": "AKIAIOSFODNN7EXAMPLE"})
 
+    @app.get("/b/nosql-error")
+    def nosql_error() -> Response:
+        if any(c in request.args.get("filter", "") for c in ("'", '"', "{", "$", "[")):
+            return Response("MongoError: unknown top level operator", status=500, mimetype="text/plain")
+        return jsonify({"results": []})
+
+    @app.get("/b/cors")
+    def cors() -> Response:
+        resp = jsonify({"data": "sensitive account data"})
+        origin = request.headers.get("Origin")
+        if origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+        return resp
+
     @app.get("/b/ssrf")
     def ssrf() -> Response:
         url = request.args.get("url", "")
         if url.startswith(("http://", "https://")):
-            try:
-                urllib.request.urlopen(url, timeout=3).read()  # noqa: S310 (intentional SSRF)
-            except Exception:
-                pass
+            _oob_fetch(url)
         return jsonify({"status": "processed"})
+
+    @app.get("/b/log4shell")
+    def log4shell() -> Response:
+        candidate = request.args.get("q", "") + " " + request.headers.get("User-Agent", "")
+        m = re.search(r"jndi:\w+://([^}\s]+)", candidate, re.IGNORECASE)
+        if m:
+            _oob_fetch("http://" + m.group(1))
+        return jsonify({"logged": True})
+
+    @app.post("/b/xxe")
+    def xxe() -> Response:
+        body = (request.form or {}).get("xml", "") or request.get_data(as_text=True)
+        m = re.search(r'SYSTEM\s+"(https?://[^"]+)"', body)
+        if m:
+            _oob_fetch(m.group(1))
+        return jsonify({"parsed": True})
+
+    @app.get("/b/cmdi-blind")
+    def cmdi_blind() -> Response:
+        m = re.search(r"(?:curl|wget)\s+(https?://[^\s;`)]+)", request.args.get("host", ""))
+        if m:
+            _oob_fetch(m.group(1))
+        return jsonify({"pinged": True})
 
     # --- decoys / true negatives ----------------------------------------------------------
 
