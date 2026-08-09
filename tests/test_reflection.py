@@ -52,6 +52,15 @@ def test_escaped_reflection_is_not_reflected() -> None:
     assert check_reflected_xss(_resp(body), SCRIPT) is None
 
 
+def test_reflection_inside_textarea_needs_matching_close() -> None:
+    # Inside <textarea>, a <script> is literal text — only </textarea> breaks out.
+    inert = analyze_reflection(f"<textarea>{SCRIPT}</textarea>", SCRIPT)
+    assert inert.context == "rawtext" and inert.executable is False
+    breakout = "</textarea><script>alert(1)</script>"
+    live = analyze_reflection(f"<textarea>{breakout}</textarea>", breakout)
+    assert live.context == "rawtext" and live.executable is True
+
+
 def test_reflection_inside_html_comment_is_inert() -> None:
     body = f"<!-- debug: {SCRIPT} -->"
     info = analyze_reflection(body, SCRIPT)

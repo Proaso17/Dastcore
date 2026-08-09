@@ -85,8 +85,8 @@ def _executable(context: str, quote: str | None, attr: str | None, payload: str)
         return has_tag
     if context == "comment":
         return "-->" in payload and has_tag
-    if context == "rawtext":  # textarea/title/style: must close the element first
-        return "</" in low and has_tag
+    if context == "rawtext":  # textarea/title/style: only closing THAT element breaks out
+        return bool(attr) and f"</{attr}" in low and has_tag
     if context == "script":  # break out of the block or the surrounding JS string
         return "</script" in low or any(q in payload for q in ("'", '"', "`"))
     if context == "attribute":

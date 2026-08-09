@@ -1,75 +1,111 @@
 """Labeled accuracy benchmark target for dastcore.
 
 Unlike the main vuln_app (almost all true positives — easy to "teach to the test"),
-this app pairs each vulnerable endpoint with realistic **decoys**: things that look
-injectable but aren't (escaped reflection, reflection in a JSON body, a soft-404
-catch-all, an endpoint that echoes NoSQL operators without erroring, a redirect that
-ignores its input, a placeholder that resembles a secret). Scoring against the
-``EXPECTED`` labels yields honest precision/recall/F1, and the decoys are exactly the
-false-positive traps a precise scanner must avoid.
+this app pairs vulnerable endpoints with realistic **decoys**: things that look
+injectable but aren't. Scoring active findings against the ``EXPECTED`` labels yields
+honest precision / recall / F1 — the decoys are the false-positive traps a precise
+scanner must avoid, spanning contexts (HTML text, attribute, JS, comment, textarea),
+injection points (query, body, header), and confirmation styles (error, boolean,
+output, template eval, out-of-band).
 """
 
 from __future__ import annotations
 
 import html
 import json as _json
+import random
 import re
+import time
+import urllib.request
 
 from flask import Flask, Response, jsonify, redirect, request
 
-# path -> the vulnerability family that SHOULD be found there, or None for a decoy
-# (a safe endpoint that must NOT produce an active finding).
+# path -> the vulnerability family that SHOULD be found there, or None for a decoy.
 EXPECTED: dict[str, str | None] = {
-    # --- true positives ---
-    "/b/sqli-error": "sqli",
-    "/b/sqli-blind": "sqli",
-    "/b/xss-html": "xss",
-    "/b/xss-attr": "xss",
-    "/b/cmdi": "cmdi",
-    "/b/xpath": "xpath",
-    "/b/ldap": "ldap",
-    "/b/redirect": "open_redirect",
-    "/b/lfi": "lfi",
-    "/b/secret": "secret",
-    # --- decoys / true negatives (must NOT fire) ---
+    # --- true positives (16) ---
+    "/b/sqli-error": "sqli",  # error-based, query
+    "/b/sqli-blind": "sqli",  # boolean-blind, query
+    "/b/sqli-post": "sqli",  # error-based, POST body
+    "/b/xss-html": "xss",  # reflected in HTML text
+    "/b/xss-attr": "xss",  # reflected in a quoted attribute (breakout)
+    "/b/xss-js": "xss",  # reflected in a <script> JS string
+    "/b/xss-href": "xss",  # javascript: URL in href
+    "/b/cmdi": "cmdi",  # OS command output
+    "/b/xpath": "xpath",  # XPath error
+    "/b/ldap": "ldap",  # LDAP error
+    "/b/ssti": "ssti",  # template evaluation ({{1337*1337}} -> 1787569)
+    "/b/hosthdr": "host_header",  # reflected Host header
+    "/b/redirect": "open_redirect",  # Location = user input
+    "/b/lfi": "lfi",  # path traversal -> /etc/passwd
+    "/b/secret": "secret",  # leaked cloud key
+    "/b/ssrf": "ssrf",  # blind SSRF (out-of-band)
+    # --- decoys / true negatives (19) ---
     "/b/xss-escaped": None,  # reflected but HTML-escaped
     "/b/xss-json": None,  # reflected raw but in a JSON body (can't execute)
     "/b/xss-comment": None,  # reflected inside an HTML comment (inert)
+    "/b/xss-textarea": None,  # reflected inside <textarea> (only </textarea> breaks out)
+    "/b/xss-attr-safe": None,  # reflected in a quoted attribute, but escaped (no breakout)
     "/b/reflect-safe": None,  # echoes input (escaped), no error, no boolean behaviour
     "/b/static": None,  # identical response for any input (boolean/differential trap)
     "/b/nosql-safe": None,  # echoes NoSQL operators in JSON, no DB error
     "/b/lfi-catchall": None,  # passwd-like content for ANY input (soft-404 catch-all)
     "/b/redirect-safe": None,  # redirect target is fixed, ignores input
+    "/b/redirect-body": None,  # reflects the URL in the body (escaped), no Location redirect
     "/b/secret-example": None,  # a placeholder that resembles but isn't a real key
-    "/b/slow": None,  # a uniformly slightly-slow endpoint (time-based trap)
+    "/b/secret-hash": None,  # a hex digest (looks secret-y, not a known key format)
+    "/b/slow": None,  # a uniformly slightly-slow endpoint
+    "/b/slow-random": None,  # random jitter, uncorrelated to input (time-based trap)
+    "/b/error500": None,  # generic 500 on bad input, no DB/parse signature
+    "/b/ssti-literal": None,  # echoes {{1337*1337}} literally (not evaluated)
+    "/b/cmdi-echo": None,  # echoes the command separator (escaped), never runs it
+    "/b/xpath-generic-500": None,  # 500 on special chars but a generic message
 }
 
-# Sample query for each endpoint so the crawler can reach and fuzz it.
 _SAMPLES = {
     "/b/sqli-error": "q=demo",
     "/b/sqli-blind": "id=1",
     "/b/xss-html": "name=guest",
     "/b/xss-attr": "v=x",
+    "/b/xss-js": "v=x",
+    "/b/xss-href": "v=/",
     "/b/cmdi": "host=localhost",
     "/b/xpath": "q=x",
     "/b/ldap": "u=x",
+    "/b/ssti": "tpl=hi",
+    "/b/hosthdr": "",
     "/b/redirect": "url=/",
     "/b/lfi": "file=readme.txt",
     "/b/secret": "",
+    "/b/ssrf": "url=http://placeholder/",
     "/b/xss-escaped": "name=x",
     "/b/xss-json": "name=x",
     "/b/xss-comment": "name=x",
+    "/b/xss-textarea": "name=x",
+    "/b/xss-attr-safe": "v=x",
     "/b/reflect-safe": "q=x",
     "/b/static": "id=1",
     "/b/nosql-safe": "filter=all",
     "/b/lfi-catchall": "file=x",
     "/b/redirect-safe": "url=/",
+    "/b/redirect-body": "url=/",
     "/b/secret-example": "",
+    "/b/secret-hash": "",
     "/b/slow": "x=1",
+    "/b/slow-random": "x=1",
+    "/b/error500": "q=x",
+    "/b/ssti-literal": "tpl=x",
+    "/b/cmdi-echo": "host=x",
+    "/b/xpath-generic-500": "q=x",
 }
 
 _BOOL = re.compile(r"and\s+'?(\w+)'?\s*=\s*'?(\w+)'?", re.IGNORECASE)
 _CMD = re.compile(r"[;&|`$(]+\s*(id|whoami)", re.IGNORECASE)
+_TPL = re.compile(r"\{\{|\$\{|#\{|<%")  # a template-injection delimiter
+_MUL = re.compile(r"(\d+)\s*\*\s*(\d+)")
+
+
+def _sql_error(value: str) -> bool:
+    return any(c in value for c in ("'", '"'))
 
 
 def create_app() -> Flask:
@@ -77,12 +113,16 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> Response:
-        links = "".join(f'<a href="{p}{("?" + _SAMPLES[p]) if _SAMPLES[p] else ""}">{p}</a> ' for p in EXPECTED)
-        return Response(f"<!doctype html><html><body><h1>benchmark</h1>{links}</body></html>", mimetype="text/html")
+        # Links cover the GET endpoints; the POST endpoint is reached via the form.
+        links = "".join(f'<a href="{p}{("?" + q) if q else ""}">{p}</a> ' for p, q in _SAMPLES.items())
+        form = '<form action="/b/sqli-post" method="post"><input name="q" value=""></form>'
+        return Response(
+            f"<!doctype html><html><body><h1>benchmark</h1>{links}{form}</body></html>", mimetype="text/html"
+        )
 
     @app.get("/sitemap.xml")
     def sitemap() -> Response:
-        urls = "".join(f"<url><loc>{p}{('?' + _SAMPLES[p]) if _SAMPLES[p] else ''}</loc></url>" for p in EXPECTED)
+        urls = "".join(f"<url><loc>{p}{('?' + q) if q else ''}</loc></url>" for p, q in _SAMPLES.items())
         return Response(
             f'<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>',
             mimetype="application/xml",
@@ -92,9 +132,15 @@ def create_app() -> Flask:
 
     @app.get("/b/sqli-error")
     def sqli_error() -> Response:
-        if any(c in request.args.get("q", "") for c in ("'", '"')):
+        if _sql_error(request.args.get("q", "")):
             return Response("SQLite3::error near: syntax error", status=500, mimetype="text/plain")
         return jsonify({"results": []})
+
+    @app.post("/b/sqli-post")
+    def sqli_post() -> Response:
+        if _sql_error((request.form or {}).get("q", "")):
+            return Response("SQLite3::error near: syntax error", status=500, mimetype="text/plain")
+        return jsonify({"ok": True})
 
     @app.get("/b/sqli-blind")
     def sqli_blind() -> Response:
@@ -109,6 +155,14 @@ def create_app() -> Flask:
     @app.get("/b/xss-attr")
     def xss_attr() -> Response:
         return Response(f'<input value="{request.args.get("v", "")}">', mimetype="text/html")
+
+    @app.get("/b/xss-js")
+    def xss_js() -> Response:
+        return Response(f"<script>var q = '{request.args.get('v', '')}';</script>", mimetype="text/html")
+
+    @app.get("/b/xss-href")
+    def xss_href() -> Response:
+        return Response(f'<a href="{request.args.get("v", "/")}">next</a>', mimetype="text/html")
 
     @app.get("/b/cmdi")
     def cmdi() -> Response:
@@ -129,6 +183,19 @@ def create_app() -> Flask:
             return Response("LDAPError: bad search filter (LDAP: error code 87)", status=500, mimetype="text/plain")
         return jsonify({"found": False})
 
+    @app.get("/b/ssti")
+    def ssti() -> Response:
+        raw = request.args.get("tpl", "")
+        if _TPL.search(raw):
+            mul = _MUL.search(raw)
+            if mul:
+                return Response(f"<p>{int(mul.group(1)) * int(mul.group(2))}</p>", mimetype="text/html")
+        return Response(f"<p>{html.escape(raw)}</p>", mimetype="text/html")
+
+    @app.get("/b/hosthdr")
+    def hosthdr() -> Response:
+        return Response(f"<p>Host: {request.headers.get('Host', '')}</p>", mimetype="text/html")
+
     @app.get("/b/redirect")
     def redir() -> Response:
         return redirect(request.args.get("url", "/"))
@@ -144,6 +211,16 @@ def create_app() -> Flask:
     def secret() -> Response:
         return jsonify({"note": "config", "aws_key": "AKIAIOSFODNN7EXAMPLE"})
 
+    @app.get("/b/ssrf")
+    def ssrf() -> Response:
+        url = request.args.get("url", "")
+        if url.startswith(("http://", "https://")):
+            try:
+                urllib.request.urlopen(url, timeout=3).read()  # noqa: S310 (intentional SSRF)
+            except Exception:
+                pass
+        return jsonify({"status": "processed"})
+
     # --- decoys / true negatives ----------------------------------------------------------
 
     @app.get("/b/xss-escaped")
@@ -152,12 +229,19 @@ def create_app() -> Flask:
 
     @app.get("/b/xss-json")
     def xss_json() -> Response:
-        # Raw echo, but in a JSON body (json.dumps doesn't escape <, unlike Flask's jsonify)
         return Response(_json.dumps({"echo": request.args.get("name", "")}), mimetype="application/json")
 
     @app.get("/b/xss-comment")
     def xss_comment() -> Response:
         return Response(f"<!-- echo: {request.args.get('name', '')} -->", mimetype="text/html")
+
+    @app.get("/b/xss-textarea")
+    def xss_textarea() -> Response:
+        return Response(f"<textarea>{request.args.get('name', '')}</textarea>", mimetype="text/html")
+
+    @app.get("/b/xss-attr-safe")
+    def xss_attr_safe() -> Response:
+        return Response(f'<input value="{html.escape(request.args.get("v", ""))}">', mimetype="text/html")
 
     @app.get("/b/reflect-safe")
     def reflect_safe() -> Response:
@@ -173,22 +257,52 @@ def create_app() -> Flask:
 
     @app.get("/b/lfi-catchall")
     def lfi_catchall() -> Response:
-        # Returns passwd-like content for ANY input -> a soft-404 catch-all, not a real read.
         return Response("root:x:0:0:root:/root:/bin/bash", mimetype="text/plain")
 
     @app.get("/b/redirect-safe")
     def redirect_safe() -> Response:
-        return redirect("/")  # fixed target, ignores the user input
+        return redirect("/")
+
+    @app.get("/b/redirect-body")
+    def redirect_body() -> Response:
+        return Response(f"<p>Irías a: {html.escape(request.args.get('url', ''))}</p>", mimetype="text/html")
 
     @app.get("/b/secret-example")
     def secret_example() -> Response:
         return jsonify({"example": "AKIA-YOUR-KEY-HERE", "docs": "put your real key in the env"})
 
+    @app.get("/b/secret-hash")
+    def secret_hash() -> Response:
+        return jsonify({"commit": "da39a3ee5e6b4b0d3255bfef95601890afd80709"})
+
     @app.get("/b/slow")
     def slow() -> Response:
-        import time
-
-        time.sleep(0.05)  # constant small delay regardless of input
+        time.sleep(0.05)
         return jsonify({"ok": True})
+
+    @app.get("/b/slow-random")
+    def slow_random() -> Response:
+        time.sleep(random.uniform(0.0, 0.2))  # noqa: S311 (jitter, not crypto)
+        return jsonify({"ok": True})
+
+    @app.get("/b/error500")
+    def error500() -> Response:
+        if any(c in request.args.get("q", "") for c in ("'", '"', "<", ";")):
+            return Response("Internal Server Error", status=500, mimetype="text/plain")
+        return jsonify({"ok": True})
+
+    @app.get("/b/ssti-literal")
+    def ssti_literal() -> Response:
+        return Response(f"<p>{html.escape(request.args.get('tpl', ''))}</p>", mimetype="text/html")
+
+    @app.get("/b/cmdi-echo")
+    def cmdi_echo() -> Response:
+        return Response(f"<pre>cmd recibido: {html.escape(request.args.get('host', ''))}</pre>", mimetype="text/html")
+
+    @app.get("/b/xpath-generic-500")
+    def xpath_generic_500() -> Response:
+        if any(c in request.args.get("q", "") for c in ("'", '"', "(")):
+            return Response("Query error", status=500, mimetype="text/plain")
+        return jsonify({"r": []})
 
     return app

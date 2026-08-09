@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from dastcore.config import RateLimitConfig, ScopeConfig
 from dastcore.core.http_client import HttpClient
 from dastcore.discovery.crawler_http import HttpCrawler
+from dastcore.engine.oast import LocalOastServer
 from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 from tests.targets.benchmark.app import EXPECTED
@@ -36,15 +37,22 @@ _ACTIVE_FAMILIES = {
     "xxe",
     "ssrf",
     "crlf",
+    "host_header",
+    "log4shell",
 }
 
 
 async def test_accuracy_benchmark(benchmark_url: str) -> None:
     scope = ScopeConfig(allow_domains=["127.0.0.1"])
     rate = RateLimitConfig(requests_per_second=100, max_concurrency=20)
-    async with HttpClient(scope, rate_limit=rate) as client:
-        discovered = await HttpCrawler(client).crawl(f"{benchmark_url}/")
-        findings = await Scanner(client, load_rules()).scan(discovered)
+    oast = LocalOastServer()
+    await oast.start()
+    try:
+        async with HttpClient(scope, rate_limit=rate) as client:
+            discovered = await HttpCrawler(client).crawl(f"{benchmark_url}/")
+            findings = await Scanner(client, load_rules(), oast=oast, oob_poll_attempts=6).scan(discovered)
+    finally:
+        await oast.stop()
 
     detected: dict[str, set[str]] = defaultdict(set)
     for finding in findings:
