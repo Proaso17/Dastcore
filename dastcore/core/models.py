@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, computed_field
 
 from dastcore.config import Severity
 
-Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"]
 InjectionLocation = Literal["query", "body", "header", "cookie", "path", "json", "fragment"]
 EvidenceType = Literal["reflected", "response_match", "differential", "time_based", "oob", "status", "dom_execution"]
 Confidence = Literal["low", "medium", "high"]

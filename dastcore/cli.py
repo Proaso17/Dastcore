@@ -42,7 +42,7 @@ from dastcore.config import (
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import Finding, HttpRequest
 from dastcore.core.session import SessionManager
-from dastcore.detectors.active_checks import check_graphql_introspection, probe_sensitive_files
+from dastcore.detectors.active_checks import check_graphql_introspection, check_trace_method, probe_sensitive_files
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
@@ -451,6 +451,7 @@ async def _run_scan(
 
             progress.status("Fingerprint de tecnología + WAF…")
             extra_findings.extend(await fingerprint_and_waf(client, target))
+            extra_findings.extend(await check_trace_method(client, target))
 
             scanner = Scanner(
                 client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency, stored_scan=stored_scan

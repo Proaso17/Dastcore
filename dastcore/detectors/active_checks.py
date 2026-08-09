@@ -10,11 +10,14 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin, urlsplit
 
+import httpx
+
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.discovery.graphql import introspect
 
 _CORS_PROBE_ORIGIN = "https://dastcore-cors-probe.evil"
+_XST_PROBE = "dastcore-xst-probe"
 
 # path -> (finding name, signature the body must match to confirm, severity)
 _SENSITIVE_FILES: list[tuple[str, str, str, str]] = [
@@ -112,6 +115,41 @@ async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding
                 )
             )
     return findings
+
+
+async def check_trace_method(client: HttpClient, target: str) -> list[Finding]:
+    """Flag a server that honours HTTP TRACE and echoes the request (Cross-Site Tracing).
+
+    Confirmed by the echo: a unique probe header sent on the TRACE request coming back in
+    the response body means TRACE is enabled, which XST can abuse to read otherwise
+    HttpOnly headers/cookies. No echo, no finding."""
+    parts = urlsplit(target)
+    origin = f"{parts.scheme}://{parts.netloc}/"
+    try:
+        response = await client.request("TRACE", origin, headers={"X-Dastcore-XST": _XST_PROBE})
+    except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
+        return []
+    if response.status_code != 200 or _XST_PROBE not in response.text:
+        return []
+    request = HttpRequest(method="TRACE", url=origin, headers={"X-Dastcore-XST": _XST_PROBE})
+    return [
+        Finding(
+            id=f"active-trace-method:{parts.netloc}",
+            rule_id="active-trace-method",
+            name="HTTP TRACE method enabled (Cross-Site Tracing)",
+            severity="low",
+            cwe="CWE-16",
+            owasp="WSTG-CONF-06",
+            family="xst",
+            injection_point=_point(request, "header", "X-Dastcore-XST"),
+            evidence=[
+                Evidence(type="response_match", data="TRACE echoed the request (XST possible)", confidence="high")
+            ],
+            request=request,
+            response=response,
+            remediation="Deshabilita el método TRACE (y TRACK) en el servidor/proxy; no es necesario en producción.",
+        )
+    ]
 
 
 async def check_graphql_introspection(client: HttpClient, endpoint_url: str) -> list[Finding]:

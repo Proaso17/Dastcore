@@ -44,8 +44,12 @@ def create_app() -> Flask:
     app.secret_key = "dastcore-test-fixture-not-for-prod"
     db = _seed_db()
 
-    @app.get("/")
-    def index() -> str:
+    @app.route("/", methods=["GET", "TRACE"])
+    def index() -> Response | str:
+        if request.method == "TRACE":
+            # Vulnerable: echoes the request back (enables Cross-Site Tracing / XST).
+            echo = "TRACE / HTTP/1.1\r\n" + "\r\n".join(f"{name}: {value}" for name, value in request.headers.items())
+            return Response(echo, mimetype="message/http")
         return (
             "<!doctype html><html><body>"
             "<h1>dastcore vulnerable test target</h1>"
