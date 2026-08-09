@@ -1,9 +1,11 @@
-"""SQLite persistence for the control-plane.
+"""Persistence for the control-plane (SQLite or PostgreSQL via `dastcore.cloud.db`).
 
 Multi-tenant: every job belongs to a project, and a project's API key scopes all
-access to it. API keys are stored hashed (only the plaintext, shown once at
-creation, can authenticate). Access is serialized behind a lock — the control
-plane is a single process and each request does a short DB op.
+access to it. API keys and runner tokens are stored hashed (only the plaintext, shown
+once at creation, can authenticate). The job queue is durable: a claim increments an
+attempt counter, and `requeue_stale_jobs` returns jobs a crashed/vanished runner never
+finished back to the queue (or fails them once retries are exhausted), so in-flight
+work is never silently lost.
 """
 
 from __future__ import annotations
@@ -11,13 +13,14 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-import sqlite3
-import threading
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+from dastcore.cloud.db import open_database
 from dastcore.cloud.models import JobSpec, ScheduleCreate
 from dastcore.core.models import Finding
 
@@ -51,6 +54,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at      REAL NOT NULL,
     claimed_at      REAL,
     finished_at     REAL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    max_attempts    INTEGER NOT NULL DEFAULT 3,
     num_findings    INTEGER NOT NULL DEFAULT 0,
     severity_counts TEXT NOT NULL DEFAULT '{}',
     error           TEXT,
@@ -83,6 +88,9 @@ CREATE TABLE IF NOT EXISTS schedules (
     next_run_at      REAL NOT NULL
 );
 """
+
+# Columns added after the initial release, applied to pre-existing DBs on open.
+_JOB_MIGRATIONS = {"attempts": "INTEGER NOT NULL DEFAULT 0", "max_attempts": "INTEGER NOT NULL DEFAULT 3"}
 
 
 @dataclass
@@ -146,6 +154,7 @@ class JobRow:
     created_at: float
     claimed_at: float | None = None
     finished_at: float | None = None
+    attempts: int = 0
     num_findings: int = 0
     severity_counts: dict[str, int] = field(default_factory=dict)
     error: str | None = None
@@ -176,17 +185,22 @@ def _severity_counts(findings: list[Finding]) -> dict[str, int]:
 
 class Store:
     def __init__(self, db_path: str | Path) -> None:
-        self._path = str(db_path)
-        if self._path != ":memory:":
-            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self._path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
-            self._conn.executescript(_SCHEMA)
+        self._db = open_database(str(db_path))
+        self._db.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        if self._db.dialect == "postgres":
+            for name, decl in _JOB_MIGRATIONS.items():
+                self._db.execute(f"ALTER TABLE jobs ADD COLUMN IF NOT EXISTS {name} {decl}")
+        else:
+            existing = {row["name"] for row in self._db.query("PRAGMA table_info(jobs)")}
+            for name, decl in _JOB_MIGRATIONS.items():
+                if name not in existing:
+                    self._db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
-        self._conn.close()
+        self._db.close()
 
     # --- projects & keys ---------------------------------------------------------------
 
@@ -198,29 +212,25 @@ class Store:
         project_id = uuid.uuid4().hex[:12]
         api_key = "dast_" + secrets.token_urlsafe(24)
         now = time.time()
-        with self._lock, self._conn:
-            self._conn.execute("INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)", (project_id, name, now))
-            self._conn.execute(
+        with self._db.transaction() as tx:
+            tx.execute("INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)", (project_id, name, now))
+            tx.execute(
                 "INSERT INTO api_keys (key_hash, project_id, created_at) VALUES (?, ?, ?)",
                 (_hash_key(api_key), project_id, now),
             )
         return project_id, api_key
 
     def project_for_key(self, api_key: str) -> str | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT project_id FROM api_keys WHERE key_hash=?", (_hash_key(api_key),)
-            ).fetchone()
+        row = self._db.query_one("SELECT project_id FROM api_keys WHERE key_hash=?", (_hash_key(api_key),))
         return row["project_id"] if row else None
 
     def get_project(self, project_id: str) -> ProjectRow | None:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        row = self._db.query_one("SELECT * FROM projects WHERE id=?", (project_id,))
         return ProjectRow(id=row["id"], name=row["name"], created_at=row["created_at"]) if row else None
 
     # --- jobs --------------------------------------------------------------------------
 
-    def _row_to_job(self, row: sqlite3.Row) -> JobRow:
+    def _row_to_job(self, row: Mapping[str, Any]) -> JobRow:
         return JobRow(
             id=row["id"],
             project_id=row["project_id"],
@@ -236,6 +246,7 @@ class Store:
             created_at=row["created_at"],
             claimed_at=row["claimed_at"],
             finished_at=row["finished_at"],
+            attempts=row["attempts"],
             num_findings=row["num_findings"],
             severity_counts=json.loads(row["severity_counts"] or "{}"),
             error=row["error"],
@@ -243,84 +254,109 @@ class Store:
 
     def enqueue_job(self, project_id: str, spec: JobSpec) -> str:
         job_id = uuid.uuid4().hex[:12]
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO jobs (id, project_id, target, engine, profile, rps, auth_bearer, auth_cookie, "
-                "allow_domains, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
-                (
-                    job_id,
-                    project_id,
-                    spec.target,
-                    spec.engine,
-                    spec.profile or None,
-                    spec.rps,
-                    spec.auth_bearer or None,
-                    spec.auth_cookie or None,
-                    json.dumps(spec.allow_domains),
-                    time.time(),
-                ),
-            )
+        self._db.execute(
+            "INSERT INTO jobs (id, project_id, target, engine, profile, rps, auth_bearer, auth_cookie, "
+            "allow_domains, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+            (
+                job_id,
+                project_id,
+                spec.target,
+                spec.engine,
+                spec.profile or None,
+                spec.rps,
+                spec.auth_bearer or None,
+                spec.auth_cookie or None,
+                json.dumps(spec.allow_domains),
+                time.time(),
+            ),
+        )
         return job_id
 
     def list_jobs(self, project_id: str, limit: int = 100) -> list[JobRow]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT ?", (project_id, limit)
-            ).fetchall()
+        rows = self._db.query(
+            "SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT ?", (project_id, limit)
+        )
         return [self._row_to_job(row) for row in rows]
 
     def get_job(self, project_id: str, job_id: str) -> JobRow | None:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM jobs WHERE id=? AND project_id=?", (job_id, project_id)).fetchone()
+        row = self._db.query_one("SELECT * FROM jobs WHERE id=? AND project_id=?", (job_id, project_id))
         return self._row_to_job(row) if row else None
 
     def get_findings(self, project_id: str, job_id: str) -> list[Finding]:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT findings_json FROM jobs WHERE id=? AND project_id=?", (job_id, project_id)
-            ).fetchone()
+        row = self._db.query_one("SELECT findings_json FROM jobs WHERE id=? AND project_id=?", (job_id, project_id))
         if not row:
             return []
         return [Finding.model_validate(item) for item in json.loads(row["findings_json"])]
 
     def claim_job(self, project_id: str, runner: str) -> JobRow | None:
-        """Atomically hand the oldest queued job to a runner (marks it running)."""
+        """Atomically hand the oldest queued job to a runner (marks it running, counts the
+        attempt). On Postgres this is a single `FOR UPDATE SKIP LOCKED` statement, so many
+        control-plane instances can claim concurrently without handing out the same job."""
         now = time.time()
-        with self._lock, self._conn:
-            row = self._conn.execute(
+        if self._db.dialect == "postgres":
+            row = self._db.query_one(
+                "UPDATE jobs SET status='running', runner=?, claimed_at=?, attempts=attempts+1 "
+                "WHERE id = (SELECT id FROM jobs WHERE project_id=? AND status='queued' "
+                "ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *",
+                (runner, now, project_id),
+            )
+            return self._row_to_job(row) if row else None
+
+        with self._db.transaction() as tx:
+            row = tx.query_one(
                 "SELECT * FROM jobs WHERE project_id=? AND status='queued' ORDER BY created_at LIMIT 1",
                 (project_id,),
-            ).fetchone()
+            )
             if row is None:
                 return None
-            self._conn.execute(
-                "UPDATE jobs SET status='running', runner=?, claimed_at=? WHERE id=?",
+            tx.execute(
+                "UPDATE jobs SET status='running', runner=?, claimed_at=?, attempts=attempts+1 WHERE id=?",
                 (runner, now, row["id"]),
             )
             job = self._row_to_job(row)
-            job.status = "running"
-            job.runner = runner
-            job.claimed_at = now
+            job.status, job.runner, job.claimed_at, job.attempts = "running", runner, now, row["attempts"] + 1
             return job
 
     def complete_job(self, project_id: str, job_id: str, findings: list[Finding]) -> bool:
         counts = _severity_counts(findings)
         findings_json = json.dumps([f.model_dump(mode="json") for f in findings], ensure_ascii=False)
-        with self._lock, self._conn:
-            cur = self._conn.execute(
+        return (
+            self._db.execute(
                 "UPDATE jobs SET status='done', finished_at=?, num_findings=?, severity_counts=?, "
                 "findings_json=? WHERE id=? AND project_id=? AND status='running'",
                 (time.time(), len(findings), json.dumps(counts), findings_json, job_id, project_id),
             )
-            return cur.rowcount > 0
+            > 0
+        )
 
     def fail_job(self, project_id: str, job_id: str, error: str) -> bool:
-        with self._lock, self._conn:
-            cur = self._conn.execute(
-                "UPDATE jobs SET status='error', finished_at=?, error=? WHERE id=? AND project_id=? AND status='running'",
+        return (
+            self._db.execute(
+                "UPDATE jobs SET status='error', finished_at=?, error=? "
+                "WHERE id=? AND project_id=? AND status='running'",
                 (time.time(), error, job_id, project_id),
             )
-            return cur.rowcount > 0
+            > 0
+        )
+
+    def requeue_stale_jobs(self, visibility_timeout: float, now: float | None = None) -> int:
+        """Recover jobs a runner claimed but never finished within ``visibility_timeout``
+        seconds (it crashed or vanished): put them back on the queue if attempts remain,
+        else fail them. Returns how many jobs moved. Run periodically by the scheduler."""
+        now = time.time() if now is None else now
+        cutoff = now - visibility_timeout
+        with self._db.transaction() as tx:
+            failed = tx.execute(
+                "UPDATE jobs SET status='error', finished_at=?, error='timed out: no result from runner' "
+                "WHERE status='running' AND claimed_at < ? AND attempts >= max_attempts",
+                (now, cutoff),
+            )
+            requeued = tx.execute(
+                "UPDATE jobs SET status='queued', runner=NULL, claimed_at=NULL "
+                "WHERE status='running' AND claimed_at < ? AND attempts < max_attempts",
+                (cutoff,),
+            )
+        return failed + requeued
 
     # --- runners -----------------------------------------------------------------------
 
@@ -332,18 +368,25 @@ class Store:
         """
         runner_id = uuid.uuid4().hex[:12]
         token = "dastr_" + secrets.token_urlsafe(24)
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO runners (id, project_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                (runner_id, project_id, name, _hash_key(token), time.time()),
-            )
+        self._db.execute(
+            "INSERT INTO runners (id, project_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+            (runner_id, project_id, name, _hash_key(token), time.time()),
+        )
         return runner_id, token
 
     def runner_for_token(self, token: str) -> RunnerRow | None:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM runners WHERE token_hash=?", (_hash_key(token),)).fetchone()
-        if row is None:
-            return None
+        row = self._db.query_one("SELECT * FROM runners WHERE token_hash=?", (_hash_key(token),))
+        return self._row_to_runner(row) if row else None
+
+    def touch_runner(self, runner_id: str) -> None:
+        self._db.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (time.time(), runner_id))
+
+    def list_runners(self, project_id: str) -> list[RunnerRow]:
+        rows = self._db.query("SELECT * FROM runners WHERE project_id=? ORDER BY created_at DESC", (project_id,))
+        return [self._row_to_runner(row) for row in rows]
+
+    @staticmethod
+    def _row_to_runner(row: Mapping[str, Any]) -> RunnerRow:
         return RunnerRow(
             id=row["id"],
             project_id=row["project_id"],
@@ -352,29 +395,9 @@ class Store:
             last_seen_at=row["last_seen_at"],
         )
 
-    def touch_runner(self, runner_id: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (time.time(), runner_id))
-
-    def list_runners(self, project_id: str) -> list[RunnerRow]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM runners WHERE project_id=? ORDER BY created_at DESC", (project_id,)
-            ).fetchall()
-        return [
-            RunnerRow(
-                id=row["id"],
-                project_id=row["project_id"],
-                name=row["name"],
-                created_at=row["created_at"],
-                last_seen_at=row["last_seen_at"],
-            )
-            for row in rows
-        ]
-
     # --- schedules ---------------------------------------------------------------------
 
-    def _row_to_schedule(self, row: sqlite3.Row) -> ScheduleRow:
+    def _row_to_schedule(self, row: Mapping[str, Any]) -> ScheduleRow:
         return ScheduleRow(
             id=row["id"],
             project_id=row["project_id"],
@@ -394,61 +417,50 @@ class Store:
 
     def create_schedule(self, project_id: str, spec: ScheduleCreate, now: float) -> str:
         schedule_id = uuid.uuid4().hex[:12]
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO schedules (id, project_id, target, engine, profile, rps, auth_bearer, auth_cookie, "
-                "allow_domains, interval_minutes, enabled, created_at, next_run_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (
-                    schedule_id,
-                    project_id,
-                    spec.target,
-                    spec.engine,
-                    spec.profile or None,
-                    spec.rps,
-                    spec.auth_bearer or None,
-                    spec.auth_cookie or None,
-                    json.dumps(spec.allow_domains),
-                    max(1, spec.interval_minutes),
-                    now,
-                    now + max(1, spec.interval_minutes) * 60,
-                ),
-            )
+        interval = max(1, spec.interval_minutes)
+        self._db.execute(
+            "INSERT INTO schedules (id, project_id, target, engine, profile, rps, auth_bearer, auth_cookie, "
+            "allow_domains, interval_minutes, enabled, created_at, next_run_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (
+                schedule_id,
+                project_id,
+                spec.target,
+                spec.engine,
+                spec.profile or None,
+                spec.rps,
+                spec.auth_bearer or None,
+                spec.auth_cookie or None,
+                json.dumps(spec.allow_domains),
+                interval,
+                now,
+                now + interval * 60,
+            ),
+        )
         return schedule_id
 
     def list_schedules(self, project_id: str) -> list[ScheduleRow]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM schedules WHERE project_id=? ORDER BY created_at DESC", (project_id,)
-            ).fetchall()
+        rows = self._db.query("SELECT * FROM schedules WHERE project_id=? ORDER BY created_at DESC", (project_id,))
         return [self._row_to_schedule(row) for row in rows]
 
     def get_schedule(self, project_id: str, schedule_id: str) -> ScheduleRow | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM schedules WHERE id=? AND project_id=?", (schedule_id, project_id)
-            ).fetchone()
+        row = self._db.query_one("SELECT * FROM schedules WHERE id=? AND project_id=?", (schedule_id, project_id))
         return self._row_to_schedule(row) if row else None
 
     def due_schedules(self, now: float) -> list[ScheduleRow]:
-        with self._lock:
-            rows = self._conn.execute("SELECT * FROM schedules WHERE enabled=1 AND next_run_at<=?", (now,)).fetchall()
+        rows = self._db.query("SELECT * FROM schedules WHERE enabled=1 AND next_run_at<=?", (now,))
         return [self._row_to_schedule(row) for row in rows]
 
     def mark_schedule_ran(self, schedule_id: str, last_run_at: float, next_run_at: float) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE schedules SET last_run_at=?, next_run_at=? WHERE id=?",
-                (last_run_at, next_run_at, schedule_id),
-            )
+        self._db.execute(
+            "UPDATE schedules SET last_run_at=?, next_run_at=? WHERE id=?", (last_run_at, next_run_at, schedule_id)
+        )
 
     def set_schedule_enabled(self, project_id: str, schedule_id: str, enabled: bool) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE schedules SET enabled=? WHERE id=? AND project_id=?",
-                (1 if enabled else 0, schedule_id, project_id),
-            )
+        self._db.execute(
+            "UPDATE schedules SET enabled=? WHERE id=? AND project_id=?",
+            (1 if enabled else 0, schedule_id, project_id),
+        )
 
     def delete_schedule(self, project_id: str, schedule_id: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute("DELETE FROM schedules WHERE id=? AND project_id=?", (schedule_id, project_id))
+        self._db.execute("DELETE FROM schedules WHERE id=? AND project_id=?", (schedule_id, project_id))

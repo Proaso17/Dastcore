@@ -1,30 +1,48 @@
-# Deploy the dastcore control-plane (cloud SaaS API + UI).
+# Deploy the dastcore control-plane (cloud SaaS API + UI) with a durable Postgres.
 #   DASTCORE_ADMIN_TOKEN=<strong-secret> docker compose -f docker-compose.cloud.yml up --build
-# The API + UI are served on :8800; scan jobs, results and schedules persist in the
-# named volume. Runners (self-hosted, in the target network) connect to this server.
+# The API + UI are served on :8800; jobs, results, runners and schedules live in
+# Postgres. Runners (self-hosted, in the target network) connect to this server.
 #
-# In production put a TLS-terminating reverse proxy in front and restrict who can
-# reach it. The port below is published only on localhost by default.
+# For a zero-dependency setup instead, drop the `db` service and set
+#   DASTCORE_DB=/data/cloud.db   (SQLite on the named volume)
+# In production put a TLS-terminating reverse proxy in front and restrict access;
+# the port below is published only on localhost by default.
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dastcore
+      POSTGRES_PASSWORD: ${DASTCORE_DB_PASSWORD:-dastcore}
+      POSTGRES_DB: dastcore
+    volumes:
+      - dastcore-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dastcore -d dastcore"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   control-plane:
     build:
       context: .
       dockerfile: Dockerfile.cloud
     image: dastcore-cloud:local
     environment:
-      # Provide a strong admin token; if unset, the container generates and logs one.
       DASTCORE_ADMIN_TOKEN: ${DASTCORE_ADMIN_TOKEN:-}
+      DASTCORE_DB: postgresql://dastcore:${DASTCORE_DB_PASSWORD:-dastcore}@db:5432/dastcore
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8800:8800"
-    volumes:
-      - dastcore-cloud-data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8800/api/health').status==200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
 volumes:
-  dastcore-cloud-data:
+  dastcore-pg:

@@ -521,7 +521,8 @@ Porque el escaneo es **intrusivo** y necesita alcance de red al objetivo, un clo
 - **UI del control-plane**: entras con la API key del proyecto (cookie httpOnly) → **dashboard** para encolar escaneos, ver trabajos y resultados, **crear tokens de runner** y **programar** escaneos recurrentes. Autoescape ON (payloads inertes), sin assets externos.
 - **`dastcore/cloud/runner.py`** — agente self-hosted: se registra (o usa un token), reclama el trabajo más antiguo, construye el `ScanConfig` y **reusa `_run_scan`** para escanear localmente, y publica los hallazgos. Heartbeat cuando está ocioso.
 - **`dastcore/cloud/scheduler.py`** — scheduler del control-plane: **encola** jobs de los programados vencidos (los ejecuta un runner), arrancado por el lifespan de FastAPI.
-- **`dastcore/cloud/store.py`** — persistencia SQLite (proyectos, api_keys y tokens de runner hasheados, jobs y schedules, con aislamiento por proyecto y reparto atómico).
+- **`dastcore/cloud/store.py`** + **`db.py`** — persistencia con backend **SQLite** (por defecto, cero setup) o **PostgreSQL** (`DASTCORE_DB=postgresql://…`, `pip install 'dastcore[pg]'`, para despliegue durable y multi-instancia). Proyectos, api_keys y tokens de runner hasheados, jobs y schedules, con aislamiento por proyecto.
+- **Cola de trabajos durable**: cada `claim` cuenta un intento; un job que un runner reclamó pero **nunca terminó** (crash, se cayó) se **re-encola** al pasar un *visibility timeout* (o falla al agotar reintentos) — el trabajo en vuelo no se pierde. El reaper corre en el loop del scheduler. En Postgres el claim usa `FOR UPDATE SKIP LOCKED` para que varias instancias del control-plane repartan trabajos sin colisiones.
 
 Es una **base**; billing y roles/orgs quedan fuera de alcance. El bucle completo está cubierto por tests end-to-end (encolar → runner reclama → escanea la app vulnerable → reporta), más aislamiento, scheduling y UI.
 

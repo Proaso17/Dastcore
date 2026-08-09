@@ -16,7 +16,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY dastcore ./dastcore
 
-RUN pip install --upgrade pip && pip install ".[web]"
+# Include the PostgreSQL driver so the image can use either backend (SQLite via a
+# volume, or a durable Postgres via DASTCORE_DB=postgresql://…).
+RUN pip install --upgrade pip && pip install ".[web,pg]"
 
 # Non-root; /data holds the SQLite DB (mount a volume there to persist it).
 RUN useradd --create-home --uid 10001 dast \

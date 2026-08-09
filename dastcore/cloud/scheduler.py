@@ -19,13 +19,16 @@ _log = logging.getLogger(__name__)
 
 
 class Scheduler:
-    def __init__(self, store: Store, *, poll_seconds: float = 30.0) -> None:
+    def __init__(self, store: Store, *, poll_seconds: float = 30.0, visibility_timeout: float = 900.0) -> None:
         self._store = store
         self._poll_seconds = poll_seconds
+        self._visibility_timeout = visibility_timeout
 
     async def tick(self, now: float | None = None) -> int:
-        """Enqueue a job for every due, enabled schedule. Returns how many fired."""
+        """Enqueue a job for every due, enabled schedule, and reap stale (never-finished)
+        jobs so a crashed runner doesn't strand its work. Returns how many jobs were enqueued."""
         now = time.time() if now is None else now
+        self._store.requeue_stale_jobs(self._visibility_timeout, now)
         enqueued = 0
         for sched in self._store.due_schedules(now):
             self._store.enqueue_job(sched.project_id, sched.spec())
