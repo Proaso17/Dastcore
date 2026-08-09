@@ -1,7 +1,7 @@
 # dastcore — Dynamic Application Security Testing scanner
 # Ships with the headless browser, OAST and web-dashboard extras so `--engine
 # headless|both`, the Interactsh client, and `dastcore serve` all work out of the box.
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
