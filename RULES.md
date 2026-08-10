@@ -127,6 +127,27 @@ Las reglas de jailbreak / prompt-injection admiten payloads extra de una wordlis
 
 En una regla YAML, `payloads_file: wordlists/mi_fichero.txt` añade la wordlist como parte de la propia regla.
 
+### Analizar un chatbot embebido en una app (no un endpoint suelto)
+
+Para una app web con un asistente integrado (típico SaaS de gestión, helpdesk, CRM),
+`dastcore ai <url-de-la-app> --discover` **crawlea la app, autodetecta el endpoint del
+chatbot** a partir del tráfico capturado (infiere el campo del prompt o la plantilla
+`messages[]`, el dot-path de la respuesta y el streaming) y lanza el set LLM contra él,
+sin configurar la forma a mano. El detector exige una señal *de petición* y otra *de
+respuesta* de chat, así que un API JSON de login/CRUD nunca se confunde con un bot.
+
+Con `--discover` se activan además dos comprobaciones específicas de asistentes con
+acceso a datos (RAG), ambas confirmadas con canary fresco → sin falsos positivos:
+
+- **Inyección indirecta almacenada (segundo orden)**: planta una instrucción oculta por
+  un endpoint de escritura de la app (mensaje, incidencia, campo de perfil) y confirma
+  que el asistente la **ejecuta al recuperarla**, devolviendo el canary. Los sinks de
+  escritura se infieren del crawl.
+- **Fuga cross-tenant (BOLA vía el LLM)**: con una segunda identidad
+  (`--victim-bearer <token> --victim-ref "unit 4B"`), la víctima planta un canary en sus
+  propios datos y se intenta que el asistente del atacante lo lea; solo reporta si el
+  atacante recupera el canary de la víctima → el retrieval no está aislado por tenant.
+
 ## Base de avisos de versiones (componentes con CVE conocido)
 
 dastcore hace fingerprint de `producto + versión` (cabeceras `Server`/`X-Powered-By`,

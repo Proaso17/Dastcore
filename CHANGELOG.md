@@ -24,6 +24,12 @@ minor releases.
   OAST (echoing/summarizing the note can't produce the canary). Wired into `--discover`
   (write endpoints are inferred from the crawl) and unit-tested against a multi-tenant
   chatbot fixture, including a hardened-assistant negative control.
+- **Cross-tenant data leakage via the assistant** (BOLA through the LLM, CWE-639,
+  API1:2023): with two authenticated identities (`--victim-bearer` + `--victim-ref`),
+  the victim plants a fresh canary in their own data and the attacker's assistant is
+  steered to read it; a finding fires only when the attacker's answer returns the
+  victim's canary — proving the retrieval layer isn't scoped per tenant. Same-tenant and
+  unknown-reference negative controls keep it false-positive-free.
 - **CSV / Formula Injection** detection (CWE-1236): a new `formula_injection` oracle,
   gated on spreadsheet content types and cell boundaries so the standard `'`-prefix
   mitigation reads as safe. Added to the accuracy benchmark (now 22 vulns + 22 decoys,

@@ -56,17 +56,6 @@ def _follow_instructions(context: str) -> str | None:
     return matches[-1] if matches else None
 
 
-def _cross_tenant_lookup(message: str, asking: str) -> str | None:
-    """Vulnerable retrieval: reveal another unit's private data with no authorization."""
-    for tenant_id, profile in TENANTS.items():
-        if tenant_id == asking:
-            continue
-        unit = profile["unit"].lower()
-        if unit in message.lower() or tenant_id in message.lower():
-            return f"Tenant {tenant_id} (unit {profile['unit']}): phone {profile['phone']}, IBAN {profile['iban']}."
-    return None
-
-
 def create_app() -> Flask:
     app = Flask(__name__)
     # Per-tenant persisted messages / maintenance notes (the assistant's retrieval corpus).
@@ -95,6 +84,20 @@ def create_app() -> Flask:
         if tenant is None:
             return jsonify({"error": "unauthenticated"}), 401
         return jsonify({"messages": messages[tenant]})
+
+    def _cross_tenant_lookup(message: str, asking: str) -> str | None:
+        """Vulnerable retrieval with no per-tenant authorization: naming another unit
+        returns that tenant's private profile *and* their stored notes (a full RAG leak)."""
+        for tenant_id, profile in TENANTS.items():
+            if tenant_id == asking:
+                continue
+            if profile["unit"].lower() in message.lower() or tenant_id in message.lower():
+                notes = " | ".join(messages[tenant_id])
+                return (
+                    f"Tenant {tenant_id} (unit {profile['unit']}): phone {profile['phone']}, "
+                    f"IBAN {profile['iban']}. Their notes: {notes}"
+                )
+        return None
 
     def _answer(message: str, tenant: str, *, safe: bool) -> str:
         leak = _cross_tenant_lookup(message, tenant)

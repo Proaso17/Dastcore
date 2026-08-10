@@ -13,6 +13,7 @@ import asyncio
 import json as _json
 import logging
 import time
+from collections.abc import Sequence
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -26,10 +27,11 @@ from rich.table import Table
 
 from dastcore import __version__
 from dastcore.ai.client import AiChatClient
+from dastcore.ai.cross_tenant import CrossTenantScanner, TenantProbe
 from dastcore.ai.discovery import ChatEndpointProfile, probe_chat_endpoints
 from dastcore.ai.engine import AiScanner, load_ai_rules
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
-from dastcore.ai.stored_injection import StoredInjectionScanner, infer_write_endpoints
+from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint, infer_write_endpoints
 from dastcore.config import (
     AuthConfig,
     FormLoginConfig,
@@ -1165,8 +1167,20 @@ async def _run_ai_scan(
         return await AiScanner(chat, rules).scan()
 
 
+def _chat_for(client: HttpClient, profile: ChatEndpointProfile, headers: dict[str, str]) -> AiChatClient:
+    kwargs = profile.client_kwargs()
+    kwargs["headers"] = {**(kwargs.get("headers") or {}), **headers}  # CLI auth headers win
+    return AiChatClient(client, profile.url, **kwargs)
+
+
 async def _run_ai_discover_scan(
-    config: ScanConfig, base_url: str, headers: dict[str, str], wordlist: str, max_pages: int
+    config: ScanConfig,
+    base_url: str,
+    headers: dict[str, str],
+    wordlist: str,
+    max_pages: int,
+    victim_headers: dict[str, str] | None = None,
+    victim_refs: Sequence[str] = (),
 ) -> tuple[ChatEndpointProfile | None, list[Finding]]:
     """Discover the embedded chatbot, then run the LLM rule set against the best endpoint."""
     # Carry any CLI auth headers through the crawl + probe so authenticated pages
@@ -1183,9 +1197,7 @@ async def _run_ai_discover_scan(
         if not profiles:
             return None, []
         best = profiles[0]
-        kwargs = best.client_kwargs()
-        kwargs["headers"] = {**(kwargs.get("headers") or {}), **headers}  # CLI auth headers win
-        chat = AiChatClient(client, best.url, **kwargs)
+        chat = _chat_for(client, best, headers)
         rules = load_ai_rules(extra_wordlist=Path(wordlist) if wordlist else None)
         findings = await AiScanner(chat, rules).scan()
 
@@ -1196,6 +1208,20 @@ async def _run_ai_discover_scan(
             sink.headers = {**sink.headers, **headers}  # ensure the plant is authenticated
         if sinks:
             findings.extend(await StoredInjectionScanner(client, chat, sinks).scan())
+
+        # Cross-tenant (BOLA via the LLM): needs a second identity + how to name the victim.
+        if victim_headers and victim_refs and sinks:
+            attacker_sink = WriteEndpoint(
+                url=sinks[0].url, field=sinks[0].field, headers={**sinks[0].headers, **headers}
+            )
+            victim_sink = WriteEndpoint(
+                url=sinks[0].url, field=sinks[0].field, headers={**sinks[0].headers, **victim_headers}
+            )
+            attacker = TenantProbe("attacker", chat, attacker_sink, references=[])
+            victim = TenantProbe(
+                "victim", _chat_for(client, best, victim_headers), victim_sink, references=list(victim_refs)
+            )
+            findings.extend(await CrossTenantScanner(client, attacker, victim).scan())
         return best, findings
 
 
@@ -1233,6 +1259,12 @@ def ai(
         help="Trata el objetivo como una app web: crawlea, autodetecta el endpoint del chatbot y lo escanea.",
     ),
     max_pages: int = typer.Option(200, "--max-pages", help="Máximo de páginas a recorrer en el crawl de --discover."),
+    victim_bearer: str = typer.Option(
+        "", "--victim-bearer", help="Token de un SEGUNDO tenant (víctima) para la prueba de fuga cross-tenant."
+    ),
+    victim_ref: list[str] = typer.Option(
+        [], "--victim-ref", help="Cómo referirse al tenant víctima (repetible): 'unit 4B', 'bob'."
+    ),
     wordlist: str = typer.Option("", "--ai-wordlist", help="Fichero de payloads de jailbreak extra (uno por línea)."),
     auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer / API key (cabecera Authorization)."),
     auth_header: list[str] = typer.Option([], "--auth-header", help="Cabecera estática 'Nombre=valor' (repetible)."),
@@ -1328,8 +1360,11 @@ def ai(
     started_at = time.monotonic()
     try:
         if discover:
+            victim_headers = {"Authorization": f"Bearer {victim_bearer}"} if victim_bearer else None
             profile, findings = asyncio.run(
-                _run_ai_discover_scan(config, str(config.target), headers, wordlist, max_pages)
+                _run_ai_discover_scan(
+                    config, str(config.target), headers, wordlist, max_pages, victim_headers, victim_ref
+                )
             )
             if profile is None:
                 console.print(
