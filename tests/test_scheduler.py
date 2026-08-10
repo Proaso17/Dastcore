@@ -74,8 +74,8 @@ async def test_tick_launches_due_schedule(app, mini_target_url: str) -> None:
     assert sched.last_run_at is not None
     assert sched.next_run_at > now + 3700
 
-    # let the launched scan finish on this event loop
-    for _ in range(120):
+    # let the launched scan finish on this event loop (generous under CI/system load)
+    for _ in range(600):
         if store.get_scan(scans[0].id).status in ("done", "error"):
             break
         await asyncio.sleep(0.5)

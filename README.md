@@ -60,12 +60,14 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | Command injection (**in-band por output** + blind OAST) | regla YAML | CWE-78 / WSTG-INPV-12 |
 | **Exposición de secretos en respuestas** (AWS/Google/Stripe/GitHub/Slack keys, private keys) | pasivo | CWE-312 / WSTG-CONF-06 |
 | **Log4Shell / JNDI** (blind, OAST, incl. headers) | regla YAML | CWE-502 |
+| **Shellshock** (CVE-2014-6271, inyección bash vía cabeceras a CGI) | detector activo | CWE-78 / WSTG-INPV-12 |
 | SSRF (blind, OAST) | regla YAML | CWE-918 / WSTG-INPV-19 |
 | XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |
 | **XML Injection** (error-based, rompe el parser XML) | regla YAML | CWE-91 / WSTG-INPV-07 |
 | CRLF / HTTP header injection (OAST) | regla YAML | CWE-93 / WSTG-INPV-16 |
 | **CSV / Formula Injection** (fórmula reflejada sin escapar en export CSV/Excel) | regla YAML (gated por content-type) | CWE-1236 / A03:2021 |
 | Path traversal / LFI | regla YAML | CWE-22 / WSTG-ATHZ-01 |
+| **LFI vía wrapper PHP** (`php://filter` → divulgación de código fuente) | regla YAML | CWE-98 / WSTG-INPV-11 |
 | Open redirect | regla YAML | CWE-601 / WSTG-CLNT-04 |
 | **Host header injection** | regla YAML (headers) | CWE-644 / WSTG-INPV-17 |
 | CORS mal configurado (wildcard+creds **y origin reflejado**) | pasivo + activo | CWE-942 / WSTG-CLNT-07 |

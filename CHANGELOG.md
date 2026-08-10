@@ -30,6 +30,11 @@ minor releases.
   (HS256/384/512) and reports if one is accepted, with the same bad-signature control.
 - **Session token in URL** (CWE-598): passive detector for a session/auth token carried
   in a query string (leaks via history/logs/Referer).
+- **Shellshock** (CVE-2014-6271, CWE-78): active check that injects a bash env-function
+  payload into request headers and confirms by the marker echo (in-band).
+- **LFI via PHP filter wrapper** (CWE-98): a `php_filter` oracle that confirms source
+  disclosure by decoding a `php://filter` base64 response to a `<?php` tag. In the
+  benchmark (24 vulns + 24 decoys).
 - Remediation "How to fix" guides (steps + code + references) for every new class.
 
 ## [0.5.0] - 2026-08-09

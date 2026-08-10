@@ -11,6 +11,7 @@ output, template eval, out-of-band).
 
 from __future__ import annotations
 
+import base64
 import html
 import json as _json
 import random
@@ -23,7 +24,7 @@ from flask import Flask, Response, jsonify, redirect, request
 
 # path -> the vulnerability family that SHOULD be found there, or None for a decoy.
 EXPECTED: dict[str, str | None] = {
-    # --- true positives (23) ---
+    # --- true positives (24) ---
     "/b/sqli-error": "sqli",  # error-based, query
     "/b/sqli-blind": "sqli",  # boolean-blind, query
     "/b/sqli-post": "sqli",  # error-based, POST body
@@ -47,7 +48,8 @@ EXPECTED: dict[str, str | None] = {
     "/b/cmdi-blind": "cmdi",  # blind OS command injection (out-of-band)
     "/b/csv": "csv_injection",  # formula reflected unescaped in a CSV export
     "/b/xmli": "xml_injection",  # user input breaks XML parsing (error-based)
-    # --- decoys / true negatives (23) ---
+    "/b/lfi-php": "lfi",  # php://filter wrapper leaks base64-encoded PHP source
+    # --- decoys / true negatives (24) ---
     "/b/xss-escaped": None,  # reflected but HTML-escaped
     "/b/xss-json": None,  # reflected raw but in a JSON body (can't execute)
     "/b/xss-comment": None,  # reflected inside an HTML comment (inert)
@@ -71,6 +73,7 @@ EXPECTED: dict[str, str | None] = {
     "/b/xss-attr-numeric": None,  # server-side validates the param is numeric (rejects payloads)
     "/b/csv-safe": None,  # CSV export that prefixes a ' to neutralize formula triggers
     "/b/xmli-safe": None,  # echoes input XML-escaped into a valid document (no parse error)
+    "/b/lfi-php-safe": None,  # rejects php:// wrappers -> no source disclosure
 }
 
 _SAMPLES = {
@@ -118,6 +121,8 @@ _SAMPLES = {
     "/b/csv-safe": "field=name",
     "/b/xmli": "data=x",
     "/b/xmli-safe": "data=x",
+    "/b/lfi-php": "file=readme",
+    "/b/lfi-php-safe": "file=readme",
 }
 
 _BOOL = re.compile(r"and\s+'?(\w+)'?\s*=\s*'?(\w+)'?", re.IGNORECASE)
@@ -416,5 +421,22 @@ def create_app() -> Flask:
     def xml_injection_safe() -> Response:
         # Decoy: XML-escape the value, so it reflects into a valid document with no parse error.
         return Response(f"<result>{html.escape(request.args.get('data', ''))}</result>", mimetype="application/xml")
+
+    @app.get("/b/lfi-php")
+    def lfi_php() -> Response:
+        # Vulnerable: honours the php://filter wrapper -> returns base64-encoded PHP source.
+        f = request.args.get("file", "")
+        if "php://filter" in f and "base64" in f:
+            source = b"<?php $db_password = 'S3cr3t!'; include($_GET['page']); ?>"
+            return Response(base64.b64encode(source).decode(), mimetype="text/plain")
+        return Response("welcome to the file viewer", mimetype="text/plain")
+
+    @app.get("/b/lfi-php-safe")
+    def lfi_php_safe() -> Response:
+        # Decoy: reject any wrapper/scheme -> no source disclosure.
+        f = request.args.get("file", "")
+        if "://" in f:
+            return Response("invalid path", status=400, mimetype="text/plain")
+        return Response("welcome to the file viewer", mimetype="text/plain")
 
     return app

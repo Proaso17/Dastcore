@@ -486,6 +486,26 @@ _GUIDES: dict[str, dict] = {
         ),
         "references": (Reference("OWASP CSV Injection", "https://owasp.org/www-community/attacks/CSV_Injection"),),
     },
+    "shellshock": {
+        "steps": (
+            "Patch bash to a fixed version (CVE-2014-6271 and the follow-up CVEs).",
+            "Retire CGI where possible; it exports request headers into the shell environment.",
+            "Never pass request headers/params into a shell; run any CGI with least privilege.",
+            "Add a WAF rule for the `() { ` env-function pattern as defense in depth.",
+        ),
+        "example": CodeExample(
+            lang="text",
+            bad="User-Agent: () { :;}; echo; /bin/id   ->  server runs `id`",
+            good="patched bash rejects the function-in-env trick; no CGI passing headers to sh",
+            note="The bug is bash parsing a function definition trailing with commands from an env var.",
+        ),
+        "references": (
+            Reference(
+                "CISA: Shellshock (CVE-2014-6271)",
+                "https://www.cisa.gov/news-events/alerts/2014/09/25/gnu-bourne-again-shell-bash-shellshock-vulnerability",
+            ),
+        ),
+    },
     "http_methods": {
         "steps": (
             "Disable HTTP methods the app doesn't use (PUT/DELETE/PATCH/CONNECT/TRACK) at the server or proxy.",

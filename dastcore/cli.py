@@ -52,6 +52,7 @@ from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.jwt import check_jwt_none_acceptance, check_jwt_weak_secret, looks_like_jwt
+from dastcore.detectors.shellshock import check_shellshock
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
@@ -467,6 +468,7 @@ async def _run_scan(
                 client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency, stored_scan=stored_scan
             )
             all_requests = list(discovered.values())
+            extra_findings.extend(await check_shellshock(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
     finally:

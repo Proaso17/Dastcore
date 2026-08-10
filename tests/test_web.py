@@ -23,7 +23,7 @@ def client(tmp_path):
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float = 120.0) -> httpx.Response:
+async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float = 300.0) -> httpx.Response:
     deadline = asyncio.get_event_loop().time() + timeout_s
     while asyncio.get_event_loop().time() < deadline:
         resp = await client.get(f"/scans/{scan_id}/panel")

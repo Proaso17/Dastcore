@@ -8,6 +8,8 @@ its oracle checks actually fires here. No oracle match, no report.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from typing import Literal
 
@@ -18,7 +20,14 @@ from dastcore.validation.baseline import BaselineProfile
 from dastcore.validation.reflection import check_reflected_xss
 
 OracleCheckType = Literal[
-    "reflected", "reflected_xss", "response_match", "formula_injection", "differential", "time_based", "oob"
+    "reflected",
+    "reflected_xss",
+    "response_match",
+    "formula_injection",
+    "php_filter",
+    "differential",
+    "time_based",
+    "oob",
 ]
 OraclePart = Literal["body", "headers"]
 
@@ -104,6 +113,31 @@ def check_formula_injection(response: HttpResponse, payload: str) -> Evidence | 
     return None
 
 
+_B64_BLOB = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
+_PHP_TAG = re.compile(rb"<\?php|<\?=")
+
+
+def check_php_filter(response: HttpResponse, payload: str) -> Evidence | None:
+    """Fire when a `php://filter` payload made the app return a base64 blob that decodes
+    to PHP source — LFI escalated to source-code disclosure. Only runs for that wrapper,
+    and only confirms after actually decoding to a `<?php` tag, so it can't false-positive
+    on an ordinary long base64 string."""
+    if "php://filter" not in payload.lower():
+        return None
+    for match in _B64_BLOB.finditer(response.text):
+        try:
+            decoded = base64.b64decode(match.group(0), validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if _PHP_TAG.search(decoded):
+            return Evidence(
+                type="response_match",
+                data="PHP source disclosed via php://filter wrapper (base64-encoded <?php)",
+                confidence="high",
+            )
+    return None
+
+
 def check_reflected(response: HttpResponse, payload: str) -> Evidence | None:
     if payload and payload in response.text:
         return Evidence(type="reflected", data=payload, confidence="medium")
@@ -150,6 +184,8 @@ def _run_check(
         return check_response_match(mutated_response, check.patterns, check.part, payload)
     if check.type == "formula_injection":
         return check_formula_injection(mutated_response, payload)
+    if check.type == "php_filter":
+        return check_php_filter(mutated_response, payload)
     if check.type == "reflected":
         return check_reflected(mutated_response, payload)
     if check.type == "reflected_xss":
