@@ -5,11 +5,14 @@ from dastcore.validation.oracles import (
     OracleCheck,
     OracleSpec,
     check_differential,
+    check_open_redirect,
     check_reflected,
     check_response_match,
     check_time_based,
     evaluate_oracle,
 )
+
+_PROBE = "https://dastcore-redirect-probe.invalid/"
 
 
 def _response(**overrides) -> HttpResponse:
@@ -42,6 +45,39 @@ def test_check_response_match_ignores_echoed_payload() -> None:
     # In headers, an echoed payload IS the signal (open redirect via Location), so it fires.
     redir = _response(headers={"Location": "https://evil.example/"})
     assert check_response_match(redir, ["evil\\.example"], part="headers", payload="https://evil.example/") is not None
+
+
+def test_open_redirect_fires_when_probe_is_the_target_host() -> None:
+    resp = _response(status_code=302, headers={"Location": _PROBE})
+    ev = check_open_redirect(resp, _PROBE)
+    assert ev is not None and ev.confidence == "high"
+
+
+def test_open_redirect_ignores_probe_reflected_in_same_origin_query_param() -> None:
+    # The classic false positive: the probe appears in Location, but as a "next=" param of
+    # a same-origin path — the browser stays on this host, so it is NOT an open redirect.
+    resp = _response(status_code=302, headers={"Location": f"/login?next={_PROBE}"})
+    assert check_open_redirect(resp, _PROBE) is None
+
+
+def test_open_redirect_ignores_probe_as_a_subdomain_lookalike() -> None:
+    # A different host that merely contains the probe string must not match (exact host).
+    resp = _response(status_code=302, headers={"Location": "https://dastcore-redirect-probe.invalid.evil.com/"})
+    assert check_open_redirect(resp, _PROBE) is None
+
+
+def test_open_redirect_handles_protocol_relative_and_backslash_bypass() -> None:
+    assert check_open_redirect(_response(headers={"Location": "//dastcore-redirect-probe.invalid/"}), _PROBE)
+    assert check_open_redirect(_response(headers={"Location": "https:/\\dastcore-redirect-probe.invalid/"}), _PROBE)
+
+
+def test_open_redirect_reads_the_refresh_header_target() -> None:
+    resp = _response(headers={"Refresh": f"0; url={_PROBE}"})
+    assert check_open_redirect(resp, _PROBE) is not None
+
+
+def test_open_redirect_none_without_a_redirect_header() -> None:
+    assert check_open_redirect(_response(text=_PROBE), _PROBE) is None  # in body, not a redirect
 
 
 def test_check_response_match_searches_headers_when_requested() -> None:

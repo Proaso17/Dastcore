@@ -8,13 +8,13 @@ cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:N/A:N"
 inject_into: [query]
 payloads:
   - "https://dastcore-redirect-probe.invalid/"
+  - "//dastcore-redirect-probe.invalid/" # protocol-relative: bypasses naive "http"/"https" blocks
 oracle:
   type: any_of
   checks:
-    - type: response_match
-      part: headers
-      patterns:
-        - "dastcore-redirect-probe\\.invalid"
+    # Confirms the redirect *target host* is our probe (not the probe merely appearing in a
+    # same-origin Location query param), so a reflected-but-safe redirect isn't flagged.
+    - type: open_redirect
 confirm_reproducible: true
 remediation: >-
   Never redirect to a raw user-controlled URL. Validate the destination

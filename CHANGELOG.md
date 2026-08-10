@@ -9,6 +9,16 @@ minor releases.
 
 ## [Unreleased]
 
+### Changed
+
+- **Open-redirect precision**: a new target-host oracle confirms the redirect's actual
+  destination host is the injected probe, instead of matching the probe string anywhere
+  in the `Location` header. A same-origin URL that reflects the probe in a query param
+  (`Location: /login?next=https://probe/`) — a common "return to" pattern — is no longer
+  a false positive; backslash/tab bypasses and the `Refresh` header are normalized like a
+  browser, and a protocol-relative probe payload was added for recall. A dedicated decoy
+  in the accuracy benchmark locks it in (still 1.00 / 1.00 / 1.00, now 24 vulns + 25 decoys).
+
 ### Added
 
 - **Embedded-chatbot auto-discovery** (`dastcore ai <app-url> --discover`): crawls a

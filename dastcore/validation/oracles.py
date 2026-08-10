@@ -12,6 +12,7 @@ import base64
 import binascii
 import re
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +26,7 @@ OracleCheckType = Literal[
     "response_match",
     "formula_injection",
     "php_filter",
+    "open_redirect",
     "differential",
     "time_based",
     "oob",
@@ -144,6 +146,51 @@ def check_reflected(response: HttpResponse, payload: str) -> Evidence | None:
     return None
 
 
+def _redirect_target_host(value: str) -> str:
+    """The host a browser would navigate to for this ``Location``/``Refresh`` value.
+
+    Browsers strip tab/CR/LF inside a URL and treat backslashes as forward slashes,
+    so we normalize the same way before parsing the authority — otherwise ``/\\host``
+    style bypasses would be read as a same-origin path."""
+    cleaned = re.sub(r"[\t\r\n]", "", value.strip()).replace("\\", "/")
+    return (urlsplit(cleaned).hostname or "").lower()
+
+
+_REFRESH_URL = re.compile(r"url\s*=\s*(.+)$", re.IGNORECASE)
+
+
+def _redirect_locations(response: HttpResponse) -> list[str]:
+    """Redirect-target values carried by the response (Location, and Refresh's url=)."""
+    values: list[str] = []
+    for name, value in response.headers.items():
+        low = name.lower()
+        if low == "location":
+            values.append(value)
+        elif low == "refresh":  # e.g. "0; url=https://evil/"
+            match = _REFRESH_URL.search(value)
+            if match:
+                values.append(match.group(1).strip())
+    return values
+
+
+def check_open_redirect(response: HttpResponse, payload: str) -> Evidence | None:
+    """Fire only when the redirect's *target host* is the injected probe host — not merely
+    when the probe string appears somewhere in Location. That distinguishes a real open
+    redirect (``Location: https://probe/``) from a same-origin URL that reflects the probe
+    in a query parameter (``Location: /login?next=https://probe/``), which is not one."""
+    probe_host = _redirect_target_host(payload)
+    if not probe_host:
+        return None
+    for location in _redirect_locations(response):
+        if _redirect_target_host(location) == probe_host:
+            return Evidence(
+                type="response_match",
+                data=f"redirect target host is the injected probe: {location[:180]}",
+                confidence="high",
+            )
+    return None
+
+
 def check_differential(base: HttpResponse, mutated: HttpResponse) -> Evidence | None:
     """Flags a mutated request that started erroring server-side (2xx/4xx -> 5xx)."""
     if mutated.status_code >= 500 and base.status_code < 500:
@@ -186,6 +233,8 @@ def _run_check(
         return check_formula_injection(mutated_response, payload)
     if check.type == "php_filter":
         return check_php_filter(mutated_response, payload)
+    if check.type == "open_redirect":
+        return check_open_redirect(mutated_response, payload)
     if check.type == "reflected":
         return check_reflected(mutated_response, payload)
     if check.type == "reflected_xss":

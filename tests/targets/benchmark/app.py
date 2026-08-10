@@ -70,6 +70,7 @@ EXPECTED: dict[str, str | None] = {
     "/b/cmdi-echo": None,  # echoes the command separator (escaped), never runs it
     "/b/xpath-generic-500": None,  # 500 on special chars but a generic message
     "/b/redirect-relative": None,  # sanitizes the target to a same-origin relative path
+    "/b/redirect-param": None,  # reflects the URL into a same-origin Location query param (not a redirect to it)
     "/b/xss-attr-numeric": None,  # server-side validates the param is numeric (rejects payloads)
     "/b/csv-safe": None,  # CSV export that prefixes a ' to neutralize formula triggers
     "/b/xmli-safe": None,  # echoes input XML-escaped into a valid document (no parse error)
@@ -116,6 +117,7 @@ _SAMPLES = {
     "/b/cmdi-echo": "host=x",
     "/b/xpath-generic-500": "q=x",
     "/b/redirect-relative": "url=/",
+    "/b/redirect-param": "url=/",
     "/b/xss-attr-numeric": "v=1",
     "/b/csv": "field=name",
     "/b/csv-safe": "field=name",
@@ -383,6 +385,13 @@ def create_app() -> Flask:
         # Only ever redirect to a same-origin path — the scheme/host in the input is dropped.
         path = urlsplit(request.args.get("url", "/")).path or "/"
         return redirect(path if path.startswith("/") else "/" + path)
+
+    @app.get("/b/redirect-param")
+    def redirect_param() -> Response:
+        # Reflects the input into a SAME-ORIGIN Location query param (a common "return to"
+        # pattern). The probe appears in the header but the browser stays on this host, so
+        # a substring oracle would false-positive here while a target-host oracle won't.
+        return redirect("/login?next=" + request.args.get("url", "/"))
 
     @app.get("/b/xss-attr-numeric")
     def xss_attr_numeric() -> Response:
