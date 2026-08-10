@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![OWASP LLM Top 10](https://img.shields.io/badge/OWASP-LLM%20Top%2010-red.svg)](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
+[![Benchmark P/R/F1 1.00](https://img.shields.io/badge/benchmark-P%2FR%2FF1%201.00-brightgreen.svg)](#por-qué-dastcore)
 
 Escáner de seguridad de aplicaciones **dinámico** (caja negra) para **web, APIs y chatbots/LLMs**. Gemelo dinámico de `sastcore`.
 
@@ -13,6 +14,30 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra) para **web, API
 > No la ejecutes contra sistemas para los que no tengas autorización explícita.
 > Cada escaneo requiere el flag `--i-have-authorization` y una configuración de scope.
 > Lee [SECURITY.md](SECURITY.md) antes de usarlo.
+
+## Por qué dastcore
+
+**Precisión medida, no prometida.** Contra un [banco etiquetado](#benchmark-de-precisión-accuracy) de **21 vulnerabilidades reales + 21 _decoys_** (señuelos que *parecen* inyectables pero no lo son), dastcore obtiene:
+
+<p align="center">
+  <b>Precision&nbsp;1.000&nbsp;&nbsp;·&nbsp;&nbsp;Recall&nbsp;1.000&nbsp;&nbsp;·&nbsp;&nbsp;F1&nbsp;1.000</b><br>
+  <sub>0 falsos positivos · 0 falsos negativos · 14 familias · verificado como gate de regresión en CI</sub>
+</p>
+
+El problema de las herramientas open source generales no es qué encuentran, sino **cuánto ruido** te hacen triar. Cada hallazgo de dastcore pasa un **oráculo de validación** (diferencial, temporal, reflejo con análisis de contexto, ejecución DOM u OAST out-of-band) antes de reportarse — y cada finding trae evidencia reproducible, `curl`, CVSS, CWE/OWASP y una guía **"cómo solucionarlo"** con pasos y ejemplo de código.
+
+| | dastcore | OWASP ZAP | Wapiti |
+|---|:--:|:--:|:--:|
+| Vulns web clásicas (SQLi, XSS, LFI, open redirect…) | ✅ | ✅ | ✅ |
+| Confirmación **out-of-band** de vulns ciegas (SSRF/RCE/XXE/Log4Shell) | ✅ nativa, token-correlada | ⚠️ addon | ⚠️ parcial |
+| **Autorización multi-sesión** automática (BOLA/IDOR, BFLA) | ✅ con identidades/roles | ⚠️ manual/addon | ❌ |
+| **AI / LLM** (OWASP LLM Top 10: prompt injection, jailbreak, PII…) | ✅ | ❌ | ❌ |
+| Descubrimiento de API por esquema (OpenAPI + GraphQL) | ✅ | ⚠️ parcial | ⚠️ parcial |
+| Crawler headless para SPAs + DOM-XSS | ✅ | ✅ (ajax spider) | ❌ |
+| **SARIF 2.1.0** nativo para code scanning | ✅ | ⚠️ addon | ❌ |
+| Banco de precisión público (precision / recall / F1) | ✅ | ❌ | ❌ |
+
+<sub>ZAP y Wapiti son escáneres generalistas maduros y excelentes; la tabla resume <b>dónde pone el foco dastcore</b> (bajo ruido, autorización a nivel de objeto y seguridad de LLMs), no una evaluación exhaustiva de cada herramienta.</sub>
 
 ## Qué hace
 
