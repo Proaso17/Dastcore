@@ -71,7 +71,11 @@ minor releases.
   (`dastcore/vulndb/nvd.py`) is pure and unit-tested; the merge de-dupes and preserves
   curated entries. `--since-days` / `--min-severity` keep the diff small. A weekly CI
   workflow (`.github/workflows/nvd-sync.yml`) opens a review PR — never auto-merges.
-- Remediation "How to fix" guides (steps + code + references) for every new class.
+- Remediation "How to fix" guides (steps + code + references) for every new class,
+  now including rich, class-specific guidance for the **LLM findings** (prompt injection,
+  stored/second-order injection, cross-tenant read (BOLA) and action (BFLA/excessive
+  agency), plus a generic LLM guide) with OWASP LLM Top 10 / API Security references —
+  shared across the HTML report, SARIF `help.markdown` and the web UI.
 
 ## [0.5.0] - 2026-08-09
 

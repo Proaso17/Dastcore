@@ -500,7 +500,10 @@ _GUIDES: dict[str, dict] = {
             note="Version-banner detection is a lead to verify, not a confirmed exploit.",
         ),
         "references": (
-            Reference("OWASP A06:2021 Vulnerable and Outdated Components", "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"),
+            Reference(
+                "OWASP A06:2021 Vulnerable and Outdated Components",
+                "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/",
+            ),
             Reference("NIST National Vulnerability Database", "https://nvd.nist.gov/"),
         ),
     },
@@ -635,6 +638,96 @@ _GUIDES: dict[str, dict] = {
             ),
         ),
     },
+    "llm_prompt_injection": {
+        "steps": (
+            "Treat every non-system input — the user's message, and especially retrieved/tool/RAG content — as untrusted data, never as instructions.",
+            "Keep a trusted system prompt and clearly delimit external content; do not let it redefine the assistant's role or rules.",
+            "Constrain outputs (allow-lists, schemas, refusal on policy triggers) and add an independent moderation/guard layer.",
+            "Give the model least privilege: no tool or data it doesn't strictly need for the task.",
+        ),
+        "example": CodeExample(
+            lang="text",
+            bad="prompt = SYSTEM + user_message + retrieved_docs   # all concatenated, all trusted",
+            good='messages=[{"role":"system",...}, {"role":"user","content":user_message},\n          {"role":"user","content":"<untrusted_context>"+docs+"</untrusted_context>"}]',
+            note="Structurally separate trusted instructions from untrusted content; instructions in the content are data, not commands.",
+        ),
+        "references": (
+            Reference("OWASP LLM01:2025 Prompt Injection", "https://genai.owasp.org/llmrisk/llm01-prompt-injection/"),
+            Reference("OWASP Top 10 for LLM Applications", "https://genai.owasp.org/llm-top-10/"),
+        ),
+    },
+    "llm_stored_injection": {
+        "steps": (
+            "Treat stored/retrieved content (messages, notes, documents, tool results) as untrusted data at generation time — persisting it safely is not enough.",
+            "Delimit retrieved content and instruct the model to never follow instructions found inside it; strip or neutralize instruction-like markup.",
+            "Scope the retrieval corpus to the requesting tenant/user so one user's text can't reach another's session.",
+            "Add an output guard and human-in-the-loop for any high-impact action the assistant might be steered into.",
+        ),
+        "example": CodeExample(
+            lang="text",
+            bad="context = load_all_notes(); answer = llm(system + question + context)",
+            good="context = load_notes(tenant_id)  # scoped\nanswer = llm(system, user=question, untrusted=context)  # context isolated, not instructions",
+            note="Second-order injection: the payload arrives via a write endpoint and executes later on retrieval — isolate retrieved data from the instruction channel.",
+        ),
+        "references": (
+            Reference("OWASP LLM01:2025 Prompt Injection", "https://genai.owasp.org/llmrisk/llm01-prompt-injection/"),
+            Reference(
+                "OWASP WSTG: Testing for Stored XSS (second-order analogue)",
+                "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/02-Testing_for_Stored_Cross_Site_Scripting",
+            ),
+        ),
+    },
+    "llm_cross_tenant": {
+        "steps": (
+            "Enforce object-level authorization in the retrieval layer: filter the corpus by the session's tenant/user BEFORE it reaches the model.",
+            "Never let the prompt choose which records to load; resolve the allowed scope server-side from the authenticated session.",
+            "Give the assistant the same access controls as the API it fronts — it is not a trust boundary of its own.",
+            "Log and alert on retrieval that crosses tenant boundaries.",
+        ),
+        "example": CodeExample(
+            lang="python",
+            bad="docs = vector_store.search(query)  # every tenant's data is searchable",
+            good="docs = vector_store.search(query, filter={'tenant_id': session.tenant_id})",
+            note="BOLA via the LLM: the fix is the same as any IDOR — authorize the object access, don't rely on the prompt.",
+        ),
+        "references": (
+            Reference(
+                "OWASP API1:2023 Broken Object Level Authorization",
+                "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/",
+            ),
+            Reference("OWASP LLM Top 10 (Sensitive Information Disclosure)", "https://genai.owasp.org/llm-top-10/"),
+        ),
+    },
+    "llm_agency": {
+        "steps": (
+            "Authorize every tool with side effects at call time: verify the session's tenant/user may act on the target object BEFORE executing.",
+            "Require an explicit confirmation step for high-impact actions (payments, cancellations, deletions, messaging on someone's behalf).",
+            "Give tools least privilege and narrow scopes; don't expose destructive capabilities the task doesn't need.",
+            "Make the assistant call the same authorized API paths as a human user — never a privileged back channel.",
+        ),
+        "example": CodeExample(
+            lang="python",
+            bad="def post_note(target, text): notes[target].append(text)  # no authz, called straight from text",
+            good="def post_note(session, target, text):\n    if not can_write(session.user, target): raise Forbidden\n    require_confirmation(session)\n    notes[target].append(text)",
+            note="Excessive agency / BFLA via the LLM: enforce function- and object-level authorization on the tool, not in the prompt.",
+        ),
+        "references": (
+            Reference("OWASP LLM06:2025 Excessive Agency", "https://genai.owasp.org/llmrisk/llm06-excessive-agency/"),
+            Reference(
+                "OWASP API5:2023 Broken Function Level Authorization",
+                "https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/",
+            ),
+        ),
+    },
+    "llm_generic": {
+        "steps": (
+            "Keep secrets and system prompts out of the model's reachable context; assume anything in context can be extracted.",
+            "Filter model output for sensitive data (PII, credentials, internal details) and for unsafe content before it reaches the user or other systems.",
+            "Never trust model output as code/markup/SQL — encode or validate it at every downstream sink.",
+            "Rate-limit and cap generation to bound cost (denial-of-wallet) and abuse.",
+        ),
+        "references": (Reference("OWASP Top 10 for LLM Applications", "https://genai.owasp.org/llm-top-10/"),),
+    },
 }
 
 # Detector findings carry no `family`; map their rule_id prefixes onto a guide key.
@@ -654,6 +747,18 @@ _RULE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("active-graphql-", "graphql"),
     ("active-sensitive-file", "sensitive_file"),
     ("dom-xss", "xss"),
+    # LLM classes (findings carry family "llm", which is intentionally not a guide key so
+    # these rule-specific guides win; the trailing "llm-" is the catch-all for the rest).
+    ("llm-stored-injection", "llm_stored_injection"),
+    ("llm-cross-tenant-leak", "llm_cross_tenant"),
+    ("llm-cross-tenant-action", "llm_agency"),
+    ("llm-excessive-agency", "llm_agency"),
+    ("llm-indirect-injection", "llm_prompt_injection"),
+    ("llm-prompt-injection", "llm_prompt_injection"),
+    ("llm-jailbreak", "llm_prompt_injection"),
+    ("llm-crescendo-jailbreak", "llm_prompt_injection"),
+    ("llm-harmful-content", "llm_prompt_injection"),
+    ("llm-", "llm_generic"),
 )
 
 _CWE_RE = re.compile(r"CWE-(\d+)")

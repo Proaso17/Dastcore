@@ -58,6 +58,25 @@ def test_authz_and_cookie_and_secret_prefixes_resolve() -> None:
     assert guide_for(_finding(rule_id="secret-exposure", cwe="CWE-798")).steps
 
 
+def test_llm_findings_resolve_to_specific_guides_despite_shared_family() -> None:
+    # All LLM findings share family "llm"; the rule_id must select the specific guide.
+    stored = guide_for(_finding(rule_id="llm-stored-injection", family="llm", cwe="CWE-77"))
+    assert stored.steps and any("retriev" in s.lower() for s in stored.steps)
+    assert any("Prompt Injection" in r.label for r in stored.references)
+
+    action = guide_for(_finding(rule_id="llm-cross-tenant-action", family="llm", cwe="CWE-862"))
+    assert any("Function Level Authorization" in r.label for r in action.references)
+
+    leak = guide_for(_finding(rule_id="llm-cross-tenant-leak", family="llm", cwe="CWE-639"))
+    assert any("Object Level Authorization" in r.label for r in leak.references)
+
+
+def test_unlisted_llm_rule_falls_back_to_generic_llm_guide() -> None:
+    # A generic LLM rule (system-prompt leak, PII, denial-of-wallet) hits the "llm-" catch-all.
+    guide = guide_for(_finding(rule_id="llm-system-prompt-leak", family="llm", cwe="CWE-200"))
+    assert guide.steps and any("LLM Applications" in r.label for r in guide.references)
+
+
 def test_unknown_family_still_yields_summary_and_cwe_link() -> None:
     guide = guide_for(
         _finding(rule_id="totally-unknown", family="mystery", cwe="CWE-1234", remediation="Do the thing.")
@@ -82,6 +101,14 @@ def test_html_renders_the_fix_panel() -> None:
     assert 'class="fix-steps"' in html
     assert "Vulnerable" in html and "Secure" in html
     assert "cwe.mitre.org/data/definitions/89.html" in html
+
+
+def test_html_renders_llm_fix_panel_with_owasp_llm_reference() -> None:
+    html = render_html(
+        [_finding(rule_id="llm-stored-injection", family="llm", cwe="CWE-77", remediation="Isolate retrieved data.")]
+    )
+    assert "How to fix" in html
+    assert "genai.owasp.org" in html  # OWASP LLM Top 10 reference rendered
 
 
 def test_html_fix_example_is_escaped_not_executed() -> None:
