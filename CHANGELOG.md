@@ -43,7 +43,8 @@ minor releases.
 - **NVD sync** for the advisory DB: `scripts/sync_nvd.py` refreshes `advisories.yaml`
   from the NVD API 2.0 (run by hand, never at scan time). The CVE→advisory translation
   (`dastcore/vulndb/nvd.py`) is pure and unit-tested; the merge de-dupes and preserves
-  curated entries.
+  curated entries. `--since-days` / `--min-severity` keep the diff small. A weekly CI
+  workflow (`.github/workflows/nvd-sync.yml`) opens a review PR — never auto-merges.
 - Remediation "How to fix" guides (steps + code + references) for every new class.
 
 ## [0.5.0] - 2026-08-09

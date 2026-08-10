@@ -167,5 +167,11 @@ NVD_API_KEY=... python scripts/sync_nvd.py --write   # límite de rate más alto
 
 El merge **de-duplica por (producto, cve, rango) y preserva las entradas curadas** (las
 existentes ganan). Como NVD trae *todo* el histórico de un producto (incl. CVEs
-antiguos/irrelevantes), la recomendación es revisar el `--dry-run` y curar antes de
-`--write`, manteniendo `advisories.yaml` pequeño y de alta señal.
+antiguos/irrelevantes), acota con `--since-days N` (solo CVEs modificados en los últimos
+N días, ≤120) y `--min-severity high` para un diff pequeño; revisa el `--dry-run` y cura
+antes de `--write`, manteniendo `advisories.yaml` de alta señal.
+
+**En CI**: `.github/workflows/nvd-sync.yml` corre el sync **semanalmente** (y a mano vía
+*workflow_dispatch*) con `--since-days 30 --min-severity high`, y **abre un PR de
+revisión** con el diff — nunca auto-mergea. Configura el secret `NVD_API_KEY` (gratis)
+para un rate limit más alto.

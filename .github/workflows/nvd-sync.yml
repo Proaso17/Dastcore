@@ -1,0 +1,57 @@
+# Weekly refresh of the known-vulnerable-component advisory DB from the NVD API 2.0.
+#
+# Opens a pull request with the diff for human review — never auto-merges: advisories.yaml
+# is a curated, high-signal set, so a maintainer curates what NVD proposes before merging.
+# The scanner itself never touches the network; it only reads the bundled YAML.
+name: NVD advisory sync
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: "Only CVEs modified in the last N days (<=120)"
+        default: "30"
+      min_severity:
+        description: "Drop advisories below this severity"
+        default: "high"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Sync advisories from NVD
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }} # optional: raises the rate limit
+        run: |
+          python scripts/sync_nvd.py --write \
+            --since-days "${{ github.event.inputs.since_days || 30 }}" \
+            --min-severity "${{ github.event.inputs.min_severity || 'high' }}"
+      - name: Open a review PR if advisories changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: nvd-advisory-sync
+          title: "chore(vulndb): sync advisories from NVD"
+          commit-message: "chore(vulndb): sync advisories from NVD"
+          labels: dependencies, security
+          body: |
+            Automated NVD sync of `dastcore/vulndb/advisories.yaml` (recent, high-severity
+            CVEs for the tracked components).
+
+            **Review before merging** — advisories.yaml is a curated, high-signal set.
+            Trim anything irrelevant; the merge only adds new entries and never clobbers
+            curated ones.

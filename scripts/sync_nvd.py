@@ -16,6 +16,7 @@ An NVD API key (free) raises the rate limit; without one the script self-throttl
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import sys
@@ -35,9 +36,30 @@ _API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 _ADVISORIES = Path(__file__).resolve().parent.parent / "dastcore" / "vulndb" / "advisories.yaml"
 
 
-def _fetch(cpe: str, api_key: str | None, start: int, per_page: int) -> dict:
-    query = urllib.parse.urlencode({"virtualMatchString": cpe, "resultsPerPage": per_page, "startIndex": start})
-    request = urllib.request.Request(f"{_API}?{query}", headers={"User-Agent": "dastcore-nvd-sync"})
+_SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def filter_by_severity(advisories: list[dict], min_severity: str) -> list[dict]:
+    """Keep advisories at or above `min_severity` (pure; keeps a weekly PR small)."""
+    floor = _SEVERITY_ORDER.get(min_severity, 0)
+    return [a for a in advisories if _SEVERITY_ORDER.get(str(a.get("severity", "")).lower(), 0) >= floor]
+
+
+def _recency_params(since_days: int) -> dict[str, str]:
+    """NVD requires both bounds and a window <= 120 days; return lastMod{Start,End}Date."""
+    if since_days <= 0:
+        return {}
+    end = dt.datetime.now(dt.UTC)
+    start = end - dt.timedelta(days=min(since_days, 120))
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    return {"lastModStartDate": start.strftime(fmt), "lastModEndDate": end.strftime(fmt)}
+
+
+def _fetch(cpe: str, api_key: str | None, start: int, per_page: int, extra: dict[str, str]) -> dict:
+    params = {"virtualMatchString": cpe, "resultsPerPage": per_page, "startIndex": start, **extra}
+    request = urllib.request.Request(
+        f"{_API}?{urllib.parse.urlencode(params)}", headers={"User-Agent": "dastcore-nvd-sync"}
+    )
     if api_key:
         request.add_header("apiKey", api_key)
     for attempt in range(5):  # NVD returns 403/503 under load; back off and retry
@@ -56,14 +78,15 @@ def _cpe_targets() -> list[str]:
     return sorted({key for key in DEFAULT_PRODUCT_MAP if ":" in key})
 
 
-def sync(*, api_key: str | None, per_page: int, max_per_product: int) -> list[dict]:
+def sync(*, api_key: str | None, per_page: int, max_per_product: int, since_days: int = 0) -> list[dict]:
     delay = 0.7 if api_key else 6.5  # NVD: ~50 req/30s with a key, ~5 without
+    recency = _recency_params(since_days)
     collected: list[dict] = []
     for target in _cpe_targets():
         cpe = f"cpe:2.3:a:{target}"
         start, total = 0, None
         while True:
-            data = _fetch(cpe, api_key, start, per_page)
+            data = _fetch(cpe, api_key, start, per_page, recency)
             total = data.get("totalResults", 0) if total is None else total
             for item in data.get("vulnerabilities", []):
                 collected.extend(advisories_from_cve(item.get("cve", {})))
@@ -84,10 +107,25 @@ def main() -> int:
     parser.add_argument("--api-key", default=os.environ.get("NVD_API_KEY"), help="NVD API key (or $NVD_API_KEY)")
     parser.add_argument("--per-page", type=int, default=2000, help="NVD resultsPerPage (max 2000)")
     parser.add_argument("--max-per-product", type=int, default=0, help="cap CVEs fetched per product (0 = all)")
+    parser.add_argument("--since-days", type=int, default=0, help="only CVEs modified in the last N days (<=120)")
+    parser.add_argument(
+        "--min-severity",
+        choices=list(_SEVERITY_ORDER),
+        default="info",
+        help="drop advisories below this severity (keeps the diff small)",
+    )
     args = parser.parse_args()
 
     existing = (yaml.safe_load(_ADVISORIES.read_text(encoding="utf-8")) or {}).get("advisories", [])
-    incoming = sync(api_key=args.api_key, per_page=args.per_page, max_per_product=args.max_per_product)
+    incoming = filter_by_severity(
+        sync(
+            api_key=args.api_key,
+            per_page=args.per_page,
+            max_per_product=args.max_per_product,
+            since_days=args.since_days,
+        ),
+        args.min_severity,
+    )
     merged = merge_advisories(existing, incoming)
     added = len(merged) - len(existing)
 
