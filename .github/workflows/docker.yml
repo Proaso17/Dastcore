@@ -38,7 +38,7 @@ jobs:
       - name: Log in to GHCR
         # Skip login (and push) on pull requests from forks, which lack write access.
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
