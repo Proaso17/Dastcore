@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dastcore"
-version = "0.1.0"
+dynamic = ["version"]  # single source of truth: dastcore.__version__
 description = "Dynamic Application Security Testing (DAST) scanner for web, APIs and LLM/AI chatbots"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -77,6 +77,9 @@ Issues = "https://github.com/Proaso17/Dastcore/issues"
 
 [project.scripts]
 dastcore = "dastcore.cli:app"
+
+[tool.setuptools.dynamic]
+version = { attr = "dastcore.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["dastcore*"]
