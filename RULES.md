@@ -147,6 +147,11 @@ acceso a datos (RAG), ambas confirmadas con canary fresco → sin falsos positiv
   (`--victim-bearer <token> --victim-ref "unit 4B"`), la víctima planta un canary en sus
   propios datos y se intenta que el asistente del atacante lo lea; solo reporta si el
   atacante recupera el canary de la víctima → el retrieval no está aislado por tenant.
+- **Acción no autorizada cross-tenant (excessive agency / BFLA vía el LLM)**: para
+  asistentes que pueden *actuar* (publicar, cancelar, enviar), el atacante intenta que el
+  asistente escriba un canary en la cuenta de la **víctima**; se verifica out-of-band
+  leyendo el estado de la víctima. Solo reporta si el canary aparece allí → la herramienta
+  no aplica autorización por tenant ni confirmación. (Misma segunda identidad que arriba.)
 
 ## Base de avisos de versiones (componentes con CVE conocido)
 

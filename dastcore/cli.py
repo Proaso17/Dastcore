@@ -26,6 +26,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn
 from rich.table import Table
 
 from dastcore import __version__
+from dastcore.ai.agency import ActionAgencyScanner, ReadBack
 from dastcore.ai.client import AiChatClient
 from dastcore.ai.cross_tenant import CrossTenantScanner, TenantProbe
 from dastcore.ai.discovery import ChatEndpointProfile, probe_chat_endpoints
@@ -1209,7 +1210,7 @@ async def _run_ai_discover_scan(
         if sinks:
             findings.extend(await StoredInjectionScanner(client, chat, sinks).scan())
 
-        # Cross-tenant (BOLA via the LLM): needs a second identity + how to name the victim.
+        # Cross-tenant checks (need a second identity + how to name the victim).
         if victim_headers and victim_refs and sinks:
             attacker_sink = WriteEndpoint(
                 url=sinks[0].url, field=sinks[0].field, headers={**sinks[0].headers, **headers}
@@ -1217,11 +1218,17 @@ async def _run_ai_discover_scan(
             victim_sink = WriteEndpoint(
                 url=sinks[0].url, field=sinks[0].field, headers={**sinks[0].headers, **victim_headers}
             )
+            # C · read leak: does the attacker's assistant surface the victim's data?
             attacker = TenantProbe("attacker", chat, attacker_sink, references=[])
             victim = TenantProbe(
                 "victim", _chat_for(client, best, victim_headers), victim_sink, references=list(victim_refs)
             )
             findings.extend(await CrossTenantScanner(client, attacker, victim).scan())
+
+            # D · unauthorized action: does the attacker's assistant *write* into the victim's
+            # account? Verified out-of-band with a GET (as the victim) on the same resource.
+            readback = ReadBack(url=victim_sink.url, method="GET", headers=dict(victim_headers))
+            findings.extend(await ActionAgencyScanner(client, chat, readback, list(victim_refs)[0]).scan())
         return best, findings
 
 

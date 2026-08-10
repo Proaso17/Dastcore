@@ -30,6 +30,13 @@ minor releases.
   steered to read it; a finding fires only when the attacker's answer returns the
   victim's canary — proving the retrieval layer isn't scoped per tenant. Same-tenant and
   unknown-reference negative controls keep it false-positive-free.
+- **Unauthorized cross-tenant action via the assistant** (excessive agency / BFLA through
+  the LLM, CWE-862, API5:2023): for assistants that can *act* (post, cancel, message), the
+  attacker steers the assistant to write a fresh canary into the **victim's** account, and
+  the effect is verified out-of-band by reading the victim's own state — a finding fires
+  only when the canary actually landed there, proving the tool has no per-tenant
+  authorization or confirmation gate. Silent against an assistant that refuses tool calls
+  and against actions targeting the attacker's own account.
 - **CSV / Formula Injection** detection (CWE-1236): a new `formula_injection` oracle,
   gated on spreadsheet content types and cell boundaries so the standard `'`-prefix
   mitigation reads as safe. Added to the accuracy benchmark (now 22 vulns + 22 decoys,

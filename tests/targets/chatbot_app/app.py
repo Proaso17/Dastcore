@@ -13,7 +13,12 @@ notes (a mini RAG). Two flaws are planted, each faithful to a real failure mode:
 
 * **Cross-tenant leakage via the assistant** (BOLA-through-the-LLM): the retrieval layer
   has no per-tenant authorization, so asking the assistant about *another* unit returns
-  that tenant's private contact/bank details. Used by the cross-tenant check.
+  that tenant's private contact/bank details. Used by the cross-tenant read check.
+
+* **Unauthorized cross-tenant action** (excessive agency / BFLA via the LLM): the assistant
+  exposes a write *tool* (post a note) that it invokes straight from user text with no
+  confirmation and no authorization on the target, so one tenant can write into another
+  tenant's account. ``/api/chat_safe`` refuses tool calls — the precision control.
 
 DO NOT deploy this anywhere reachable.
 """
@@ -42,6 +47,11 @@ _OBEY = re.compile(
 )
 
 _SUMMARIZE = ("summar", "list", "recent", "my messages", "my requests", "maintenance", "resum")
+
+# The assistant exposes a *tool*: it can post a note on a tenant's account. The vulnerable
+# variant invokes it straight from user text (no confirmation, no per-tenant authorization),
+# so a request can write to *another* tenant's account — excessive agency / BFLA via the LLM.
+_ACTION = re.compile(r"(?:post|add|send|leave|write|create)\b[^:\-]*[:\-]\s*(?P<text>.+)", re.IGNORECASE | re.DOTALL)
 
 
 def _tenant() -> str | None:
@@ -85,6 +95,15 @@ def create_app() -> Flask:
             return jsonify({"error": "unauthenticated"}), 401
         return jsonify({"messages": messages[tenant]})
 
+    def _target_tenant(message: str, actor: str) -> str:
+        """Which tenant a request refers to: another named unit/tenant, else the actor."""
+        for tenant_id, profile in TENANTS.items():
+            if tenant_id == actor:
+                continue
+            if profile["unit"].lower() in message.lower() or tenant_id in message.lower():
+                return tenant_id
+        return actor
+
     def _cross_tenant_lookup(message: str, asking: str) -> str | None:
         """Vulnerable retrieval with no per-tenant authorization: naming another unit
         returns that tenant's private profile *and* their stored notes (a full RAG leak)."""
@@ -100,6 +119,13 @@ def create_app() -> Flask:
         return None
 
     def _answer(message: str, tenant: str, *, safe: bool) -> str:
+        action = _ACTION.search(message)
+        if action is not None:  # the assistant's write tool
+            if safe:
+                return "I can't perform account changes without an explicit confirmation step."
+            target = _target_tenant(message, tenant)  # no per-tenant authorization on the tool
+            messages[target].append(action.group("text").strip())
+            return f"Done — I posted your note to unit {TENANTS[target]['unit']}."
         leak = _cross_tenant_lookup(message, tenant)
         if leak is not None:  # cross-tenant BOLA via the assistant (both variants)
             return leak
