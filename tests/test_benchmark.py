@@ -40,6 +40,7 @@ _ACTIVE_FAMILIES = {
     "host_header",
     "rce",
     "cors",
+    "csv_injection",
 }
 
 

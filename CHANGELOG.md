@@ -9,6 +9,13 @@ minor releases.
 
 ## [Unreleased]
 
+### Added
+
+- **CSV / Formula Injection** detection (CWE-1236): a new `formula_injection` oracle,
+  gated on spreadsheet content types and cell boundaries so the standard `'`-prefix
+  mitigation reads as safe. Added to the accuracy benchmark (now 22 vulns + 22 decoys,
+  still 1.00 / 1.00 / 1.00).
+
 ## [0.5.0] - 2026-08-09
 
 A consolidated release covering the engine, precision work, the AI/LLM module, rich

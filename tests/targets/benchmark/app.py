@@ -23,7 +23,7 @@ from flask import Flask, Response, jsonify, redirect, request
 
 # path -> the vulnerability family that SHOULD be found there, or None for a decoy.
 EXPECTED: dict[str, str | None] = {
-    # --- true positives (16) ---
+    # --- true positives (22) ---
     "/b/sqli-error": "sqli",  # error-based, query
     "/b/sqli-blind": "sqli",  # boolean-blind, query
     "/b/sqli-post": "sqli",  # error-based, POST body
@@ -45,7 +45,8 @@ EXPECTED: dict[str, str | None] = {
     "/b/log4shell": "rce",  # JNDI / Log4Shell (out-of-band)
     "/b/xxe": "xxe",  # XML external entity (out-of-band, POST body)
     "/b/cmdi-blind": "cmdi",  # blind OS command injection (out-of-band)
-    # --- decoys / true negatives (19) ---
+    "/b/csv": "csv_injection",  # formula reflected unescaped in a CSV export
+    # --- decoys / true negatives (22) ---
     "/b/xss-escaped": None,  # reflected but HTML-escaped
     "/b/xss-json": None,  # reflected raw but in a JSON body (can't execute)
     "/b/xss-comment": None,  # reflected inside an HTML comment (inert)
@@ -67,6 +68,7 @@ EXPECTED: dict[str, str | None] = {
     "/b/xpath-generic-500": None,  # 500 on special chars but a generic message
     "/b/redirect-relative": None,  # sanitizes the target to a same-origin relative path
     "/b/xss-attr-numeric": None,  # server-side validates the param is numeric (rejects payloads)
+    "/b/csv-safe": None,  # CSV export that prefixes a ' to neutralize formula triggers
 }
 
 _SAMPLES = {
@@ -110,6 +112,8 @@ _SAMPLES = {
     "/b/xpath-generic-500": "q=x",
     "/b/redirect-relative": "url=/",
     "/b/xss-attr-numeric": "v=1",
+    "/b/csv": "field=name",
+    "/b/csv-safe": "field=name",
 }
 
 _BOOL = re.compile(r"and\s+'?(\w+)'?\s*=\s*'?(\w+)'?", re.IGNORECASE)
@@ -377,5 +381,19 @@ def create_app() -> Flask:
         if not v.isdigit():  # server-side validation rejects the payload before it's reflected
             v = "0"
         return Response(f'<input value="{v}">', mimetype="text/html")
+
+    @app.get("/b/csv")
+    def csv_export() -> Response:
+        # Vulnerable: user input lands at the start of a cell, un-neutralized -> formula injection.
+        field = request.args.get("field", "")
+        return Response(f"name,note\r\n{field},exported\r\n", mimetype="text/csv")
+
+    @app.get("/b/csv-safe")
+    def csv_export_safe() -> Response:
+        # Decoy: prefix a single quote when a value starts with a formula trigger (the fix).
+        field = request.args.get("field", "")
+        if field[:1] in ("=", "+", "-", "@"):
+            field = "'" + field
+        return Response(f"name,note\r\n{field},exported\r\n", mimetype="text/csv")
 
     return app

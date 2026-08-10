@@ -1,0 +1,19 @@
+id: csv-formula-injection
+name: CSV / Formula Injection
+family: csv_injection
+severity: medium
+cwe: CWE-1236
+owasp: A03:2021-Injection
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+inject_into: [query, body]
+payloads:
+  - "=1+1"
+oracle:
+  type: any_of
+  checks:
+    - type: formula_injection
+confirm_reproducible: true
+remediation: >-
+  When exporting user-controlled data to CSV/spreadsheets, neutralize any cell that
+  begins with =, +, -, @ (or tab/CR) by prefixing a single quote, and quote fields
+  containing separators. Do not rely on the client to sanitize.

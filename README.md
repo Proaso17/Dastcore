@@ -17,11 +17,11 @@ Escáner de seguridad de aplicaciones **dinámico** (caja negra) para **web, API
 
 ## Por qué dastcore
 
-**Precisión medida, no prometida.** Contra un [banco etiquetado](#benchmark-de-precisión-accuracy) de **21 vulnerabilidades reales + 21 _decoys_** (señuelos que *parecen* inyectables pero no lo son), dastcore obtiene:
+**Precisión medida, no prometida.** Contra un [banco etiquetado](#benchmark-de-precisión-accuracy) de **22 vulnerabilidades reales + 22 _decoys_** (señuelos que *parecen* inyectables pero no lo son), dastcore obtiene:
 
 <p align="center">
   <b>Precision&nbsp;1.000&nbsp;&nbsp;·&nbsp;&nbsp;Recall&nbsp;1.000&nbsp;&nbsp;·&nbsp;&nbsp;F1&nbsp;1.000</b><br>
-  <sub>0 falsos positivos · 0 falsos negativos · 14 familias · verificado como gate de regresión en CI</sub>
+  <sub>0 falsos positivos · 0 falsos negativos · 15 familias · verificado como gate de regresión en CI</sub>
 </p>
 
 El problema de las herramientas open source generales no es qué encuentran, sino **cuánto ruido** te hacen triar. Cada hallazgo de dastcore pasa un **oráculo de validación** (diferencial, temporal, reflejo con análisis de contexto, ejecución DOM u OAST out-of-band) antes de reportarse — y cada finding trae evidencia reproducible, `curl`, CVSS, CWE/OWASP y una guía **"cómo solucionarlo"** con pasos y ejemplo de código.
@@ -63,6 +63,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | SSRF (blind, OAST) | regla YAML | CWE-918 / WSTG-INPV-19 |
 | XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |
 | CRLF / HTTP header injection (OAST) | regla YAML | CWE-93 / WSTG-INPV-16 |
+| **CSV / Formula Injection** (fórmula reflejada sin escapar en export CSV/Excel) | regla YAML (gated por content-type) | CWE-1236 / A03:2021 |
 | Path traversal / LFI | regla YAML | CWE-22 / WSTG-ATHZ-01 |
 | Open redirect | regla YAML | CWE-601 / WSTG-CLNT-04 |
 | **Host header injection** | regla YAML (headers) | CWE-644 / WSTG-INPV-17 |
@@ -589,7 +590,7 @@ docker run --rm ghcr.io/proaso17/dastcore:latest runner https://cloud.example.co
 
 Para no "estudiar para el examen que ya conoce", hay un **banco etiquetado** aparte (`tests/targets/benchmark/`) que empareja cada endpoint vulnerable con **decoys** realistas: cosas que *parecen* inyectables pero no lo son (reflexión escapada, reflexión en JSON, LFI catch-all, operadores NoSQL reflejados sin error, boolean estático, redirect fijo, placeholder que parece un secreto). El harness corre un crawl+scan real y puntúa los hallazgos activos contra las etiquetas → **precision / recall / F1** honestos, siendo los decoys las trampas de falso positivo.
 
-Resultado actual (**21 vulns + 21 decoys**, **14 familias** — SQLi/XSS/CMDi/XPath/LDAP/SSTI/host-header/open-redirect/LFI/secretos/NoSQLi/CORS/SSRF/RCE-JNDI/XXE —, puntos de inyección query/body/header y confirmación error/boolean/output/template/out-of-band): **precision 1.000 · recall 1.000 · F1 1.000** (0 FP, 0 FN). Es además un **gate de regresión** en CI (falla si aparece cualquier FP o cae el recall). Ampliarlo ya destapó y corrigió un bug real del analizador de reflexión (un `<script>` dentro de `<textarea>` no ejecuta) y dio la **primera prueba end-to-end de XXE y command-injection ciego**. *(Quedan fuera del banco offline: CRLF —cuya confirmación OOB no encaja con un endpoint realista— y BOLA/BFLA/missing-auth, que requieren varias identidades y se prueban en `test_authz.py`.)*
+Resultado actual (**22 vulns + 22 decoys**, **15 familias** — SQLi/XSS/CMDi/XPath/LDAP/SSTI/host-header/open-redirect/LFI/secretos/NoSQLi/CORS/SSRF/RCE-JNDI/XXE/**CSV-formula** —, puntos de inyección query/body/header y confirmación error/boolean/output/template/out-of-band/**spreadsheet**): **precision 1.000 · recall 1.000 · F1 1.000** (0 FP, 0 FN). Es además un **gate de regresión** en CI (falla si aparece cualquier FP o cae el recall). Ampliarlo ya destapó y corrigió un bug real del analizador de reflexión (un `<script>` dentro de `<textarea>` no ejecuta) y dio la **primera prueba end-to-end de XXE y command-injection ciego**. *(Quedan fuera del banco offline: CRLF —cuya confirmación OOB no encaja con un endpoint realista— y BOLA/BFLA/missing-auth, que requieren varias identidades y se prueban en `test_authz.py`.)*
 
 ```powershell
 .venv\Scripts\pytest tests/test_benchmark.py -s    # imprime el scorecard

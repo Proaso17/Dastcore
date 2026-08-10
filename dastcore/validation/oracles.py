@@ -17,8 +17,23 @@ from dastcore.core.models import Evidence, HttpResponse
 from dastcore.validation.baseline import BaselineProfile
 from dastcore.validation.reflection import check_reflected_xss
 
-OracleCheckType = Literal["reflected", "reflected_xss", "response_match", "differential", "time_based", "oob"]
+OracleCheckType = Literal[
+    "reflected", "reflected_xss", "response_match", "formula_injection", "differential", "time_based", "oob"
+]
 OraclePart = Literal["body", "headers"]
+
+_SPREADSHEET_TYPES = (
+    "text/csv",
+    "application/csv",
+    "text/comma-separated-values",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml",
+)
+_FORMULA_TRIGGERS = ("=", "+", "-", "@")
+# A spreadsheet treats a cell as a formula only when the trigger starts the cell,
+# i.e. right after a delimiter/line-start. The standard mitigation neutralizes it
+# with a leading apostrophe (or space/tab), which is therefore NOT a cell boundary.
+_CELL_BOUNDARY = "[,;\t\r\n]"
 
 
 class OracleCheck(BaseModel):
@@ -60,6 +75,32 @@ def check_response_match(
             if payload and part == "body" and hit.lower() in payload_lower:
                 continue
             return Evidence(type="response_match", data=hit[:200], confidence="high")
+    return None
+
+
+def _content_type(response: HttpResponse) -> str:
+    for name, value in response.headers.items():
+        if name.lower() == "content-type":
+            return value.lower()
+    return ""
+
+
+def check_formula_injection(response: HttpResponse, payload: str) -> Evidence | None:
+    """Fire when a formula payload is reflected, un-neutralized, at the start of a cell in a
+    spreadsheet response (CSV/Excel). Gated on content type so a page that merely echoes
+    `=1+1` in HTML isn't flagged, and on the cell boundary so an app that prefixes a `'`
+    (the standard mitigation) is correctly treated as safe."""
+    if not payload or payload[0] not in _FORMULA_TRIGGERS:
+        return None
+    if not any(t in _content_type(response) for t in _SPREADSHEET_TYPES):
+        return None
+    boundary = f"(?:^|{_CELL_BOUNDARY}){re.escape(payload)}"
+    if re.search(boundary, response.text):
+        return Evidence(
+            type="response_match",
+            data=f"formula reflected unescaped at a cell boundary in a spreadsheet response: {payload}",
+            confidence="high",
+        )
     return None
 
 
@@ -107,6 +148,8 @@ def _run_check(
 ) -> Evidence | None:
     if check.type == "response_match":
         return check_response_match(mutated_response, check.patterns, check.part, payload)
+    if check.type == "formula_injection":
+        return check_formula_injection(mutated_response, payload)
     if check.type == "reflected":
         return check_reflected(mutated_response, payload)
     if check.type == "reflected_xss":
