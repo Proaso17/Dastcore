@@ -146,7 +146,8 @@ class _PostgresDatabase:
 
     def query(self, sql: str, params: Params = ()) -> list[Mapping[str, Any]]:
         with self._lock:
-            return self._conn.execute(_to_pg(sql), params).fetchall()
+            rows: list[Mapping[str, Any]] = self._conn.execute(_to_pg(sql), params).fetchall()
+            return rows
 
     def query_one(self, sql: str, params: Params = ()) -> Mapping[str, Any] | None:
         with self._lock:
