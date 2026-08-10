@@ -19,6 +19,7 @@ from dastcore.cli import (
     _Budget,
     _build_auth_config,
     _retest_scope_and_target,
+    _run_ai_discover_scan,
     _run_retest,
     _run_scan,
 )
@@ -42,6 +43,9 @@ class ScanRequest:
     auth_bearer: str = ""
     auth_cookie: str = ""  # "name=value"
     allow_domains: list[str] = field(default_factory=list)
+    # Embedded-chatbot ("ai --discover") scans: a second identity for the cross-tenant checks.
+    victim_bearer: str = ""
+    victim_refs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -147,6 +151,56 @@ class ScanManager:
             self._store.mark_done(job.id, time.time(), duration, findings)
             job.status = "done"
             job.phase = "Completado"
+        except SessionLoginError as exc:
+            self._fail(job, started, f"Error de autenticación: {exc}")
+        except Exception as exc:  # noqa: BLE001 — surface any engine error to the UI, don't crash the server
+            self._fail(job, started, f"{type(exc).__name__}: {exc}")
+
+    # --- embedded chatbot (ai --discover) ----------------------------------------------
+
+    def _ai_config(self, req: ScanRequest) -> ScanConfig:
+        return ScanConfig(
+            target=req.target,  # type: ignore[arg-type]
+            scope=ScopeConfig(allow_domains=list(req.allow_domains)),
+            rate_limit=RateLimitConfig(requests_per_second=req.rps if req.rps > 0 else 5.0),
+            output=OutputConfig(format="json"),
+            i_have_authorization=True,
+        )
+
+    def start_ai(self, req: ScanRequest) -> str:
+        """Launch an embedded-chatbot scan (discover the bot, then run the LLM checks)."""
+        config = self._ai_config(req)
+        headers = {"Authorization": f"Bearer {req.auth_bearer}"} if req.auth_bearer else {}
+        victim_headers = {"Authorization": f"Bearer {req.victim_bearer}"} if req.victim_bearer else None
+        scan_id = uuid.uuid4().hex[:12]
+        job = LiveJob(id=scan_id, target=str(config.target), phase="Descubriendo el chatbot…")
+        self._live[scan_id] = job
+        self._store.insert_running(scan_id, str(config.target), "chatbot", None, time.time(), kind="ai")
+
+        task = asyncio.create_task(
+            self._run_ai_job(job, config, headers, victim_headers, list(req.victim_refs), req.max_pages)
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return scan_id
+
+    async def _run_ai_job(
+        self,
+        job: LiveJob,
+        config: ScanConfig,
+        headers: dict[str, str],
+        victim_headers: dict[str, str] | None,
+        victim_refs: list[str],
+        max_pages: int,
+    ) -> None:
+        started = time.monotonic()
+        try:
+            profile, findings = await _run_ai_discover_scan(
+                config, str(config.target), headers, "", max_pages, victim_headers, victim_refs
+            )
+            self._store.mark_done(job.id, time.time(), time.monotonic() - started, findings)
+            job.status = "done"
+            job.phase = "Completado" if profile is not None else "Completado — no se detectó ningún chatbot embebido"
         except SessionLoginError as exc:
             self._fail(job, started, f"Error de autenticación: {exc}")
         except Exception as exc:  # noqa: BLE001 — surface any engine error to the UI, don't crash the server

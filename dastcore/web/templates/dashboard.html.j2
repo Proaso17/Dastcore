@@ -10,9 +10,16 @@
     <h2>Nuevo escaneo</h2>
     {% if error %}<div class="panel err" style="margin:0 0 14px">{{ error }}</div>{% endif %}
     <form method="post" action="/scans">
+      <label for="mode">Tipo de escaneo</label>
+      <select id="mode" name="mode" onchange="dcToggleMode(this.value)">
+        <option value="scan">Web (vulnerabilidades clásicas)</option>
+        <option value="ai">Chatbot embebido (IA / OWASP LLM)</option>
+      </select>
+
       <label for="target">URL objetivo</label>
       <input id="target" name="target" placeholder="https://staging.example.com" value="{{ target or '' }}" required>
-      <div class="row3">
+
+      <div class="row3" data-mode="scan">
         <div>
           <label for="engine">Motor</label>
           <select id="engine" name="engine">
@@ -35,22 +42,50 @@
           <input id="rps" name="rps" type="number" step="0.5" min="0.5" value="5">
         </div>
       </div>
+
       <div class="row">
         <div>
           <label for="auth_bearer">Bearer token (opcional)</label>
           <input id="auth_bearer" name="auth_bearer" placeholder="eyJ…">
         </div>
-        <div>
+        <div data-mode="scan">
           <label for="auth_cookie">Cookie (opcional)</label>
           <input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123">
         </div>
       </div>
+
+      <div data-mode="ai" hidden>
+        <p class="muted" style="margin:6px 0 10px">
+          Crawlea la app, autodetecta el endpoint del chatbot y corre las comprobaciones OWASP LLM
+          (prompt injection, inyección almacenada). Para las pruebas <strong>cross-tenant</strong>
+          (BOLA/BFLA vía el asistente) añade una segunda identidad:
+        </p>
+        <div class="row">
+          <div>
+            <label for="victim_bearer">Bearer de un 2.º tenant (víctima)</label>
+            <input id="victim_bearer" name="victim_bearer" placeholder="eyJ… (otra cuenta)">
+          </div>
+          <div>
+            <label for="victim_ref">Cómo nombrar a la víctima (una por línea)</label>
+            <textarea id="victim_ref" name="victim_ref" rows="2" placeholder="unit 4B&#10;bob"></textarea>
+          </div>
+        </div>
+      </div>
+
       <div class="check">
         <input id="authorization" name="authorization" type="checkbox" value="on">
         <label for="authorization" style="margin:0">Tengo autorización explícita para escanear este objetivo.</label>
       </div>
       <button type="submit">Iniciar escaneo</button>
     </form>
+    <script>
+      function dcToggleMode(mode) {
+        document.querySelectorAll('[data-mode]').forEach(function (el) {
+          el.hidden = el.getAttribute('data-mode') !== mode;
+        });
+      }
+      dcToggleMode(document.getElementById('mode').value);
+    </script>
   </div>
 
   <div class="panel">
@@ -66,7 +101,7 @@
               {% if s.kind == 'retest' %}<span class="muted" title="reverificación">↻</span> {% endif %}
               <a href="/scans/{{ s.id }}">{{ s.target }}</a>
             </td>
-            <td class="muted">{% if s.kind == 'retest' %}retest{% else %}{{ s.engine }}{% if s.profile %} · {{ s.profile }}{% endif %}{% endif %}</td>
+            <td class="muted">{% if s.kind == 'retest' %}retest{% elif s.kind == 'ai' %}chatbot IA{% else %}{{ s.engine }}{% if s.profile %} · {{ s.profile }}{% endif %}{% endif %}</td>
             <td><span class="status st-{{ s.status }}">{{ s.status }}</span></td>
             <td>
               {% if s.status == 'done' %}

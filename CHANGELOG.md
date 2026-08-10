@@ -71,6 +71,12 @@ minor releases.
   (`dastcore/vulndb/nvd.py`) is pure and unit-tested; the merge de-dupes and preserves
   curated entries. `--since-days` / `--min-severity` keep the diff small. A weekly CI
   workflow (`.github/workflows/nvd-sync.yml`) opens a review PR — never auto-merges.
+- **Embedded-chatbot scan in the web dashboard** (`dastcore serve`): the new form mode
+  "Chatbot embebido (IA / OWASP LLM)" launches the `ai --discover` pipeline from the UI —
+  crawl, auto-detect the bot, run the LLM checks — with an optional second identity
+  (victim bearer + references) for the cross-tenant read/action checks. Results, the
+  attack-chain narrative and remediation appear in the same panel/report as any other
+  scan; the run is labelled "chatbot IA" in history.
 - **Chatbot discovery hardening** (precision + recall): GraphQL endpoints (whose `query`
   field looks prompt-like) are now excluded outright; prompt fields nested one level deep
   (`{"data":{"message":…}}`) are detected and driven via a generated `{{prompt}}` template;

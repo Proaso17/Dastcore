@@ -39,6 +39,7 @@ async def test_dashboard_loads_empty(client: httpx.AsyncClient) -> None:
     assert resp.status_code == 200
     assert "Nuevo escaneo" in resp.text
     assert "Aún no hay escaneos" in resp.text
+    assert "Chatbot embebido" in resp.text  # the AI scan mode is offered in the form
 
 
 async def test_dashboard_sets_security_headers(client: httpx.AsyncClient) -> None:
@@ -89,6 +90,55 @@ async def test_full_scan_flow_finds_planted_vulns(client: httpx.AsyncClient, min
         report = await client.get(f"/scans/{scan_id}/report")
         assert report.status_code == 200
         assert "<title>" in report.text
+
+
+async def test_ai_chatbot_scan_from_dashboard(client: httpx.AsyncClient, chatbot_app_url: str, monkeypatch) -> None:
+    """The 'Chatbot embebido (IA)' mode: launch from the form, discover the bot and run the
+    LLM checks (incl. cross-tenant with a second identity), and surface them in the panel.
+
+    The static crawler can't reach a JS-driven chat XHR, so we feed it the requests the
+    headless engine would have captured (same shim used in the CLI discovery tests)."""
+    import dastcore.cli as cli
+    from dastcore.core.models import HttpRequest
+
+    auth_a = {"Authorization": "Bearer tok-a"}
+    candidates = [
+        HttpRequest(method="POST", url=f"{chatbot_app_url}/api/chat", headers=auth_a, json_body={"message": "hola"}),
+        HttpRequest(method="POST", url=f"{chatbot_app_url}/api/messages", headers=auth_a, json_body={"text": "n"}),
+    ]
+
+    class _FakeCrawler:
+        def __init__(self, http_client, max_pages=200):
+            pass
+
+        async def crawl(self, start_url):
+            return candidates
+
+    monkeypatch.setattr(cli, "HttpCrawler", _FakeCrawler)
+    async with client:
+        resp = await client.post(
+            "/scans",
+            data={
+                "target": chatbot_app_url,
+                "mode": "ai",
+                "rps": "50",
+                "auth_bearer": "tok-a",
+                "victim_bearer": "tok-b",
+                "victim_ref": "unit 4B",
+                "authorization": "on",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        scan_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+        panel = await _wait_done(client, scan_id)
+        assert "Completado" in panel.text
+        assert "Injection" in panel.text  # stored / second-order prompt injection surfaced
+        assert "Cross-Tenant" in panel.text  # BOLA/BFLA via the assistant surfaced
+
+        home = await client.get("/")
+        assert "chatbot IA" in home.text  # history labels the run as an AI scan
 
 
 async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncClient, mini_target_url: str) -> None:

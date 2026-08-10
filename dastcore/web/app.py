@@ -123,11 +123,14 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
     @app.post("/scans")
     async def start_scan(
         target: str = Form(...),
+        mode: str = Form("scan"),
         engine: str = Form("http"),
         profile: str = Form(""),
         rps: float = Form(5.0),
         auth_bearer: str = Form(""),
         auth_cookie: str = Form(""),
+        victim_bearer: str = Form(""),
+        victim_ref: str = Form(""),
         authorization: str = Form(""),
     ) -> Response:
         target = target.strip()
@@ -143,16 +146,29 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         if engine not in ("http", "headless", "both"):
             engine = "http"
         try:
-            scan_id = manager.start(
-                ScanRequest(
-                    target=target,
-                    engine=engine,
-                    profile=profile if profile in ("quick", "full", "api") else "",
-                    rps=rps if rps > 0 else 5.0,
-                    auth_bearer=auth_bearer.strip(),
-                    auth_cookie=auth_cookie.strip(),
+            if mode == "ai":
+                # One victim reference per line for the cross-tenant checks.
+                refs = [r.strip() for r in victim_ref.splitlines() if r.strip()]
+                scan_id = manager.start_ai(
+                    ScanRequest(
+                        target=target,
+                        rps=rps if rps > 0 else 5.0,
+                        auth_bearer=auth_bearer.strip(),
+                        victim_bearer=victim_bearer.strip(),
+                        victim_refs=refs,
+                    )
                 )
-            )
+            else:
+                scan_id = manager.start(
+                    ScanRequest(
+                        target=target,
+                        engine=engine,
+                        profile=profile if profile in ("quick", "full", "api") else "",
+                        rps=rps if rps > 0 else 5.0,
+                        auth_bearer=auth_bearer.strip(),
+                        auth_cookie=auth_cookie.strip(),
+                    )
+                )
         except Exception as exc:  # noqa: BLE001 — bad target/config -> re-render the form with the reason
             return HTMLResponse(
                 env.get_template("dashboard.html.j2").render(
