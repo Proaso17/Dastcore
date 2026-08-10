@@ -11,6 +11,12 @@ minor releases.
 
 ### Added
 
+- **Embedded-chatbot auto-discovery** (`dastcore ai <app-url> --discover`): crawls a
+  web app (headless when available, else static), auto-detects the chat endpoint from
+  captured traffic — inferring the prompt field / `messages[]` template, the answer
+  dot-path, and streaming — and runs the LLM rule set against it, no hand-config. The
+  detector is conservative (requires a request-side *and* a response-side chat signal)
+  so ordinary CRUD/login JSON APIs are never mistaken for a chatbot.
 - **CSV / Formula Injection** detection (CWE-1236): a new `formula_injection` oracle,
   gated on spreadsheet content types and cell boundaries so the standard `'`-prefix
   mitigation reads as safe. Added to the accuracy benchmark (now 22 vulns + 22 decoys,

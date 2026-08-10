@@ -26,6 +26,7 @@ from rich.table import Table
 
 from dastcore import __version__
 from dastcore.ai.client import AiChatClient
+from dastcore.ai.discovery import ChatEndpointProfile, probe_chat_endpoints
 from dastcore.ai.engine import AiScanner, load_ai_rules
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.config import (
@@ -1163,6 +1164,31 @@ async def _run_ai_scan(
         return await AiScanner(chat, rules).scan()
 
 
+async def _run_ai_discover_scan(
+    config: ScanConfig, base_url: str, headers: dict[str, str], wordlist: str, max_pages: int
+) -> tuple[ChatEndpointProfile | None, list[Finding]]:
+    """Discover the embedded chatbot, then run the LLM rule set against the best endpoint."""
+    # Carry any CLI auth headers through the crawl + probe so authenticated pages
+    # (and the chat XHR behind a login) are reachable.
+    session = SessionManager(AuthConfig(type="header", headers=headers)) if headers else None
+    async with HttpClient(config.scope, rate_limit=config.rate_limit, session=session) as client:
+        discovered = await HttpCrawler(client, max_pages=max_pages).crawl(base_url)
+        try:
+            headless, _ = await _run_headless(config, client, base_url, max_pages)
+            discovered = [*discovered, *headless]
+        except HeadlessUnavailableError:
+            pass  # no browser: fall back to whatever the static crawler found
+        profiles = await probe_chat_endpoints(client, discovered)
+        if not profiles:
+            return None, []
+        best = profiles[0]
+        kwargs = best.client_kwargs()
+        kwargs["headers"] = {**(kwargs.get("headers") or {}), **headers}  # CLI auth headers win
+        chat = AiChatClient(client, best.url, **kwargs)
+        rules = load_ai_rules(extra_wordlist=Path(wordlist) if wordlist else None)
+        return best, await AiScanner(chat, rules).scan()
+
+
 @app.command("ai")
 def ai(
     ctx: typer.Context,
@@ -1191,6 +1217,12 @@ def ai(
         False, "--ai-stream", help="El endpoint responde en streaming (SSE/NDJSON); reensambla los deltas."
     ),
     stream_path: str = typer.Option("", "--ai-stream-path", help="Dot-path al delta por chunk (auto si se omite)."),
+    discover: bool = typer.Option(
+        False,
+        "--discover",
+        help="Trata el objetivo como una app web: crawlea, autodetecta el endpoint del chatbot y lo escanea.",
+    ),
+    max_pages: int = typer.Option(200, "--max-pages", help="Máximo de páginas a recorrer en el crawl de --discover."),
     wordlist: str = typer.Option("", "--ai-wordlist", help="Fichero de payloads de jailbreak extra (uno por línea)."),
     auth_bearer: str = typer.Option("", "--auth-bearer", help="Token Bearer / API key (cabecera Authorization)."),
     auth_header: list[str] = typer.Option([], "--auth-header", help="Cabecera estática 'Nombre=valor' (repetible)."),
@@ -1285,19 +1317,36 @@ def ai(
 
     started_at = time.monotonic()
     try:
-        findings = asyncio.run(
-            _run_ai_scan(
-                config,
-                str(config.target),
-                prompt_field,
-                template,
-                response_path,
-                headers,
-                wordlist,
-                stream,
-                stream_path,
+        if discover:
+            profile, findings = asyncio.run(
+                _run_ai_discover_scan(config, str(config.target), headers, wordlist, max_pages)
             )
-        )
+            if profile is None:
+                console.print(
+                    "\n[bold yellow]No se detectó ningún chatbot embebido[/bold yellow] en el crawl. "
+                    "Configúralo a mano con --ai-template / --ai-response-path, o instala el motor headless "
+                    "([bold]pip install 'dastcore[headless]'[/bold]) para capturar el XHR del widget."
+                )
+                raise typer.Exit(code=0)
+            if not quiet:
+                console.print(
+                    f"[green]Chatbot detectado[/green] ([bold]{profile.confidence}[/bold] confianza) en "
+                    f"[bold]{profile.url}[/bold] — {profile.evidence}"
+                )
+        else:
+            findings = asyncio.run(
+                _run_ai_scan(
+                    config,
+                    str(config.target),
+                    prompt_field,
+                    template,
+                    response_path,
+                    headers,
+                    wordlist,
+                    stream,
+                    stream_path,
+                )
+            )
     except httpx.HTTPError as exc:
         console.print(f"\n[bold red]Error de red al contactar el endpoint IA:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
