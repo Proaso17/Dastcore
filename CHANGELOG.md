@@ -35,6 +35,11 @@ minor releases.
 - **LFI via PHP filter wrapper** (CWE-98): a `php_filter` oracle that confirms source
   disclosure by decoding a `php://filter` base64 response to a `<?php` tag. In the
   benchmark (24 vulns + 24 decoys).
+- **Known-vulnerable component detection** (SCA-lite, A06:2021): fingerprints product +
+  version (Server/X-Powered-By headers, generator meta, client-side jQuery/Bootstrap
+  assets) and matches a bundled, offline advisory DB (`dastcore/vulndb/advisories.yaml`)
+  with a version-range matcher. Reported at medium confidence (version-banner based).
+  Extensible by adding a YAML entry.
 - Remediation "How to fix" guides (steps + code + references) for every new class.
 
 ## [0.5.0] - 2026-08-09

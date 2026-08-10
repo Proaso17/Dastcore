@@ -1,0 +1,90 @@
+# Curated, offline advisory database: known-vulnerable component versions.
+#
+# dastcore fingerprints product + version from response headers, cookies, the HTML
+# generator meta tag and client-side library assets, then matches here. This DB is
+# deliberately small and high-signal (famous, widely-relevant CVEs) rather than a full
+# NVD mirror — accuracy over coverage. Add an entry to cover a new advisory; it can also
+# be regenerated from an NVD feed later (see RULES.md).
+#
+# `affected` is a comma-separated set of version constraints (AND), each `<`, `<=`, `>`,
+# `>=`, `==`. Findings are reported at medium confidence: a version banner can be
+# spoofed or a distro may have back-ported the fix, so treat them as "verify the patch
+# level", not a confirmed exploit.
+
+advisories:
+  # --- Apache HTTP Server ---
+  - product: apache
+    cve: CVE-2021-41773
+    title: "Apache HTTP Server path traversal (and RCE with mod_cgi)"
+    affected: "==2.4.49"
+    fixed: "2.4.50"
+    severity: high
+    cwe: CWE-22
+    cvss: "7.5"
+
+  - product: apache
+    cve: CVE-2021-42013
+    title: "Apache HTTP Server path traversal / RCE (incomplete fix of CVE-2021-41773)"
+    affected: ">=2.4.49,<2.4.51"
+    fixed: "2.4.51"
+    severity: critical
+    cwe: CWE-22
+    cvss: "9.8"
+
+  # --- nginx ---
+  - product: nginx
+    cve: CVE-2021-23017
+    title: "nginx resolver off-by-one heap write"
+    affected: ">=0.6.18,<1.21.0"
+    fixed: "1.21.0"
+    severity: high
+    cwe: CWE-787
+    cvss: "7.7"
+
+  # --- OpenSSL (often exposed in the Server header) ---
+  - product: openssl
+    cve: CVE-2014-0160
+    title: "OpenSSL Heartbleed information disclosure"
+    affected: ">=1.0.1,<1.0.1g"
+    fixed: "1.0.1g"
+    severity: high
+    cwe: CWE-125
+    cvss: "7.5"
+
+  # --- jQuery (client-side, from script assets) ---
+  - product: jquery
+    cve: CVE-2020-11022
+    title: "jQuery cross-site scripting via untrusted HTML passed to DOM manipulation"
+    affected: ">=1.2.0,<3.5.0"
+    fixed: "3.5.0"
+    severity: medium
+    cwe: CWE-79
+    cvss: "6.1"
+
+  - product: jquery
+    cve: CVE-2019-11358
+    title: "jQuery prototype pollution via jQuery.extend"
+    affected: "<3.4.0"
+    fixed: "3.4.0"
+    severity: medium
+    cwe: CWE-1321
+    cvss: "6.1"
+
+  # --- Bootstrap (client-side, two affected branches) ---
+  - product: bootstrap
+    cve: CVE-2019-8331
+    title: "Bootstrap cross-site scripting in tooltip/popover data-template (3.x)"
+    affected: "<3.4.1"
+    fixed: "3.4.1"
+    severity: medium
+    cwe: CWE-79
+    cvss: "6.1"
+
+  - product: bootstrap
+    cve: CVE-2019-8331
+    title: "Bootstrap cross-site scripting in tooltip/popover data-template (4.x)"
+    affected: ">=4.0.0,<4.3.1"
+    fixed: "4.3.1"
+    severity: medium
+    cwe: CWE-79
+    cvss: "6.1"

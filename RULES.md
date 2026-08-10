@@ -126,3 +126,29 @@ Las reglas de jailbreak / prompt-injection admiten payloads extra de una wordlis
 - **Propias / comunidad**: `dastcore ai <url> --ai-wordlist misjailbreaks.txt` (o una carpeta con varios `.txt`). Así puedes enchufar sets públicos como [garak](https://github.com/NVIDIA/garak), L1B3RT4S o listas de PromptInjection: descárgalos y apunta `--ai-wordlist` a la carpeta.
 
 En una regla YAML, `payloads_file: wordlists/mi_fichero.txt` añade la wordlist como parte de la propia regla.
+
+## Base de avisos de versiones (componentes con CVE conocido)
+
+dastcore hace fingerprint de `producto + versión` (cabeceras `Server`/`X-Powered-By`,
+`<meta name="generator">`, y assets de librerías cliente como jQuery/Bootstrap) y lo
+compara contra una **base de avisos offline curada**: `dastcore/vulndb/advisories.yaml`.
+Es SCA-lite: pequeña y de alta señal, no un mirror completo de NVD.
+
+**Añadir un aviso = añadir una entrada YAML** (sin tocar código):
+
+```yaml
+advisories:
+  - product: apache            # clave que produce el fingerprint (apache, nginx, openssl, php, jquery, bootstrap, wordpress)
+    cve: CVE-2021-41773
+    title: "Apache HTTP Server path traversal"
+    affected: "==2.4.49"       # constraints separados por coma (AND): <, <=, >, >=, ==
+    fixed: "2.4.50"
+    severity: high             # info|low|medium|high|critical
+    cwe: CWE-22
+    cvss: "7.5"
+```
+
+Los hallazgos se reportan con **confianza media**: un banner de versión puede estar
+falseado o la distro puede haber *back-porteado* el parche sin cambiar la cadena de
+versión. Es una pista a verificar, no un exploit confirmado. La misma BD puede
+regenerarse desde un feed de NVD en el futuro (el formato es estable).

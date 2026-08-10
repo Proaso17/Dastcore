@@ -156,6 +156,11 @@ async def fingerprint_and_waf(client: HttpClient, target: str) -> list[Finding]:
     findings: list[Finding] = []
     base_request = HttpRequest(method="GET", url=origin)
 
+    # Known-vulnerable component versions (SCA-lite) from the fingerprinted software.
+    from dastcore.detectors.version_cve import check_known_vulnerable_versions
+
+    findings.extend(check_known_vulnerable_versions(base_request, base))
+
     if profile.server or profile.powered_by or profile.technologies:
         detail = ", ".join(profile.technologies) or profile.server or profile.powered_by or "unknown"
         findings.append(

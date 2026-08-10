@@ -486,6 +486,24 @@ _GUIDES: dict[str, dict] = {
         ),
         "references": (Reference("OWASP CSV Injection", "https://owasp.org/www-community/attacks/CSV_Injection"),),
     },
+    "vulnerable_component": {
+        "steps": (
+            "Upgrade the flagged component to the fixed version (or later).",
+            "Confirm your real patch level — a back-ported distro fix may keep the old version banner.",
+            "Track dependencies in an SBOM and watch advisories (NVD/GitHub) for the components you ship.",
+            "Suppress or minimize version banners (Server, X-Powered-By) to slow reconnaissance.",
+        ),
+        "example": CodeExample(
+            lang="text",
+            bad="Server: Apache/2.4.49   ->  CVE-2021-41773 (path traversal / RCE)",
+            good="Server: Apache/2.4.58   (patched; banner optionally suppressed)",
+            note="Version-banner detection is a lead to verify, not a confirmed exploit.",
+        ),
+        "references": (
+            Reference("OWASP A06:2021 Vulnerable and Outdated Components", "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"),
+            Reference("NIST National Vulnerability Database", "https://nvd.nist.gov/"),
+        ),
+    },
     "shellshock": {
         "steps": (
             "Patch bash to a fixed version (CVE-2014-6271 and the follow-up CVEs).",

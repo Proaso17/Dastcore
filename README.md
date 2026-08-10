@@ -80,6 +80,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | GraphQL introspection habilitada | detector activo | CWE-200 / WSTG-APIT-01 |
 | **Método HTTP TRACE habilitado (Cross-Site Tracing)** | detector activo | CWE-16 / WSTG-CONF-06 |
 | **Métodos HTTP peligrosos habilitados** (PUT/DELETE/PATCH vía `Allow`) | detector activo | CWE-749 / WSTG-CONF-06 |
+| **Componentes con CVE conocido** (fingerprint de versión → BD de avisos offline: Apache/nginx/OpenSSL/jQuery/Bootstrap) | SCA-lite | CWE-1035 / A06:2021 |
 | Cabeceras/cookies inseguras, CSP/HSTS ausentes, directory listing, stack traces, divulgación de tecnología | pasivos | varios |
 | **LLM: prompt injection (directa+indirecta), jailbreak, crescendo multi-turno, system-prompt leak, secretos/PII, excessive agency, output inseguro, denial of wallet** | `dastcore ai` | OWASP LLM01/02/05/06/07/10 |
 - **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.
