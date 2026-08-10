@@ -106,6 +106,19 @@ class Evidence(BaseModel):
     confidence: Confidence = "medium"
 
 
+class ChainStep(BaseModel):
+    """One step in a multi-stage attack narrative (who did what, and what it proved).
+
+    Populated for findings whose confirmation spans several requests/actors — e.g. a
+    stored prompt injection (plant → retrieve → execute) or a cross-tenant leak/action
+    (victim plants → attacker reads/writes → out-of-band verification) — so the report
+    can tell the story instead of listing disconnected evidence lines."""
+
+    actor: str  # who acts: e.g. "Attacker (tenant A)", "Assistant", "Victim (tenant B)", "dastcore"
+    action: str  # short label: e.g. "Plant", "Execute on retrieval", "Confirm"
+    detail: str  # human-readable description of the step
+
+
 class Finding(BaseModel):
     """A confirmed vulnerability: always backed by at least one `Evidence` entry."""
 
@@ -125,6 +138,7 @@ class Finding(BaseModel):
     suppression_reason: str | None = None
     family: str = ""  # vulnerability family (from the rule); groups cross-technique confirmations
     corroborated_by: list[str] = Field(default_factory=list)  # other rules confirming the same scenario
+    attack_chain: list[ChainStep] = Field(default_factory=list)  # ordered narrative for multi-stage attacks
 
     @computed_field  # type: ignore[prop-decorator]
     @property

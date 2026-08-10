@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+from dastcore.core.models import ChainStep, Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.report import render_html
 from dastcore.report.remediation import guide_for
 
@@ -109,6 +109,24 @@ def test_html_renders_llm_fix_panel_with_owasp_llm_reference() -> None:
     )
     assert "How to fix" in html
     assert "genai.owasp.org" in html  # OWASP LLM Top 10 reference rendered
+
+
+def test_html_renders_attack_chain_when_present() -> None:
+    f = _finding(rule_id="llm-stored-injection", family="llm", cwe="CWE-77")
+    f.attack_chain = [
+        ChainStep(actor="Attacker", action="Plant", detail="persists a hidden instruction"),
+        ChainStep(actor="Assistant", action="Execute on retrieval", detail="follows it as an instruction"),
+        ChainStep(actor="dastcore", action="Confirm", detail="the fresh canary came back"),
+    ]
+    html = render_html([f])
+    assert "Attack chain" in html
+    assert 'class="chain"' in html
+    assert "Execute on retrieval" in html and "Assistant" in html
+
+
+def test_html_omits_attack_chain_for_ordinary_findings() -> None:
+    html = render_html([_finding(rule_id="sqli-injection", family="sqli")])
+    assert "Attack chain" not in html  # only multi-stage findings carry a chain
 
 
 def test_html_fix_example_is_escaped_not_executed() -> None:

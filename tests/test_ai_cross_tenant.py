@@ -38,6 +38,7 @@ async def test_cross_tenant_leak_is_confirmed(chatbot_app_url: str) -> None:
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "llm-cross-tenant-leak" and f.severity == "critical"
+    assert len(f.attack_chain) == 3 and f.attack_chain[0].actor.startswith("Victim")
 
 
 @pytest.mark.asyncio

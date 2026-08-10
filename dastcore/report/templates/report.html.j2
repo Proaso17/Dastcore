@@ -61,6 +61,18 @@
   .evidence li { font-size: 13px; padding: 6px 10px; background: var(--panel-2);
     border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
   .evidence .etype { font-weight: 700; color: var(--accent); }
+  /* --- attack chain (multi-stage narrative) ---------------------------------- */
+  ol.chain { list-style: none; margin: 4px 0 0; padding-left: 0; counter-reset: chain; }
+  ol.chain li { position: relative; padding: 8px 12px 8px 40px; margin-bottom: 6px; font-size: 13px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+  ol.chain li::before { content: counter(chain); counter-increment: chain; position: absolute;
+    left: 10px; top: 8px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent);
+    color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  ol.chain .actor { display: inline-block; font-weight: 700; }
+  ol.chain .act { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
+    background: var(--fix-soft); border: 1px solid var(--fix-border); color: var(--fix); }
+  ol.chain .dtl { display: block; margin-top: 3px; color: var(--muted); }
   /* --- How to fix panel ------------------------------------------------------ */
   .fix { margin-top: 8px; border: 1px solid var(--fix-border); border-radius: 12px;
     background: var(--fix-soft); overflow: hidden; }
@@ -167,6 +179,15 @@
         <dd><code>{{ f.injection_point.location }}</code> parameter <code>{{ f.injection_point.name }}</code></dd>
         <dt>Finding id</dt><dd><code>{{ f.id }}</code></dd>
       </dl>
+
+      {% if f.attack_chain %}
+      <div class="section-label">Attack chain</div>
+      <ol class="chain">
+        {% for step in f.attack_chain %}
+        <li><span class="actor">{{ step.actor }}</span><span class="act">{{ step.action }}</span><span class="dtl">{{ step.detail }}</span></li>
+        {% endfor %}
+      </ol>
+      {% endif %}
 
       <div class="section-label">Evidence</div>
       <ul class="evidence">

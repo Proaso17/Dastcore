@@ -29,6 +29,8 @@ async def test_stored_injection_is_found_via_the_chatbot(chatbot_app_url: str) -
     f = findings[0]
     assert f.rule_id == "llm-stored-injection" and f.family == "llm"
     assert "text" in f.injection_point.name
+    # multi-stage narrative: plant → execute on retrieval → confirm
+    assert [s.action for s in f.attack_chain] == ["Plant", "Execute on retrieval", "Confirm"]
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from dastcore.ai.client import AiChatClient
 from dastcore.ai.stored_injection import WriteEndpoint, _new_canary
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
-from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+from dastcore.core.models import ChainStep, Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 
 # How an attacker points the assistant at another tenant. `{ref}` is a victim descriptor
 # (a unit number, a username, an account id) an attacker could plausibly know or guess.
@@ -123,6 +123,23 @@ class CrossTenantScanner:
             ],
             request=request,
             response=response,
+            attack_chain=[
+                ChainStep(
+                    actor=f"Victim ({self._victim.name})",
+                    action="Plant",
+                    detail="stores a fresh private canary in their own account (data only they should reach)",
+                ),
+                ChainStep(
+                    actor=f"Attacker ({self._attacker.name})",
+                    action="Ask across the boundary",
+                    detail="asks their own assistant about the victim (by unit/username)",
+                ),
+                ChainStep(
+                    actor="dastcore",
+                    action="Confirm",
+                    detail="the attacker's answer contained the victim's canary — the retrieval layer is not scoped per tenant",
+                ),
+            ],
             remediation=(
                 "Aplica autorización a nivel de objeto en la capa de retrieval del asistente: "
                 "filtra el corpus (documentos, mensajes, registros) por el tenant/usuario de la "

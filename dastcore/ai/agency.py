@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from dastcore.ai.client import AiChatClient
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
-from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+from dastcore.core.models import ChainStep, Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 
 # Natural action requests aimed at the victim. `{ref}` names the victim (a unit/username),
 # `{canary}` is the payload the write should persist into their account.
@@ -118,6 +118,23 @@ class ActionAgencyScanner:
             ],
             request=request,
             response=response,
+            attack_chain=[
+                ChainStep(
+                    actor="Attacker",
+                    action="Instruct",
+                    detail=f"asks their own assistant to write a note into {self._ref}'s account",
+                ),
+                ChainStep(
+                    actor="Assistant",
+                    action="Invoke tool cross-tenant",
+                    detail="calls the write tool on the victim's object with no per-tenant authorization or confirmation",
+                ),
+                ChainStep(
+                    actor="dastcore",
+                    action="Verify out-of-band",
+                    detail=f"reading {self._ref}'s own state (as the victim) shows the fresh canary — the action really landed there",
+                ),
+            ],
             remediation=(
                 "Aplica autorización a nivel de función/objeto a cada herramienta con efectos "
                 "secundarios: comprueba que el tenant/usuario de la sesión puede actuar sobre el "

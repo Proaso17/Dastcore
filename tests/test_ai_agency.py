@@ -38,6 +38,7 @@ async def test_cross_tenant_action_is_confirmed(chatbot_app_url: str) -> None:
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "llm-cross-tenant-action" and f.severity == "critical"
+    assert [s.action for s in f.attack_chain] == ["Instruct", "Invoke tool cross-tenant", "Verify out-of-band"]
 
 
 @pytest.mark.asyncio

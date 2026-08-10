@@ -71,6 +71,11 @@ minor releases.
   (`dastcore/vulndb/nvd.py`) is pure and unit-tested; the merge de-dupes and preserves
   curated entries. `--since-days` / `--min-severity` keep the diff small. A weekly CI
   workflow (`.github/workflows/nvd-sync.yml`) opens a review PR — never auto-merges.
+- **Attack-chain narrative** in the HTML report: multi-stage findings (stored prompt
+  injection, cross-tenant read/action) now carry an ordered `attack_chain` (actor →
+  action → detail) rendered as a numbered flow, so the report tells the story
+  (plant → retrieve → execute; victim plants → attacker reads/writes → verify) instead
+  of listing disconnected evidence. Ordinary findings are unchanged.
 - Remediation "How to fix" guides (steps + code + references) for every new class,
   now including rich, class-specific guidance for the **LLM findings** (prompt injection,
   stored/second-order injection, cross-tenant read (BOLA) and action (BFLA/excessive
