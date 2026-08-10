@@ -563,6 +563,22 @@ _GUIDES: dict[str, dict] = {
             Reference("OWASP Deserialization Cheat Sheet", _CHEATSHEET + "Deserialization_Cheat_Sheet.html"),
         ),
     },
+    "session_exposure": {
+        "steps": (
+            "Never put session or authentication tokens in the URL/query string.",
+            "Keep the session in a Secure, HttpOnly, SameSite cookie, or send tokens in the Authorization header.",
+            "Rotate any token that may have leaked via history/logs/Referer, and set a short expiry.",
+        ),
+        "example": CodeExample(
+            lang="text",
+            bad="GET /account?sessionid=8f3b1c2d9a7e4f60  (leaks via logs/Referer/history)",
+            good="Cookie: sessionid=8f3b1c2d...  (Secure; HttpOnly; SameSite=Lax)",
+            note="Query strings are logged and forwarded; cookies/headers are not shared the same way.",
+        ),
+        "references": (
+            Reference("OWASP Session Management Cheat Sheet", _CHEATSHEET + "Session_Management_Cheat_Sheet.html"),
+        ),
+    },
     "cleartext": {
         "steps": (
             "Serve login pages over HTTPS and post credentials only to an https:// endpoint.",

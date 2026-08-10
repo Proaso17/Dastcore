@@ -13,6 +13,7 @@ from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, I
 from dastcore.detectors.cleartext import check_cleartext_credentials
 from dastcore.detectors.deserialization import check_serialized_exposure
 from dastcore.detectors.secrets import check_exposed_secrets
+from dastcore.detectors.session_url import check_session_token_in_url
 
 _ERROR_DISCLOSURE_PATTERNS = [
     r"Traceback \(most recent call last\)",
@@ -280,4 +281,5 @@ def run_passive_checks(request: HttpRequest, response: HttpResponse) -> list[Fin
     findings.extend(check_exposed_secrets(request, response))
     findings.extend(check_serialized_exposure(request, response))
     findings.extend(check_cleartext_credentials(request, response))
+    findings.extend(check_session_token_in_url(request, response))
     return findings

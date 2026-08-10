@@ -28,6 +28,8 @@ minor releases.
   PATCH/CONNECT advertised in the Allow header.
 - **JWT weak HMAC secret** (CWE-347): re-signs the bearer with a list of common secrets
   (HS256/384/512) and reports if one is accepted, with the same bad-signature control.
+- **Session token in URL** (CWE-598): passive detector for a session/auth token carried
+  in a query string (leaks via history/logs/Referer).
 - Remediation "How to fix" guides (steps + code + references) for every new class.
 
 ## [0.5.0] - 2026-08-09
