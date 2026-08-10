@@ -76,6 +76,8 @@ reporting, the local dashboard, the cloud control-plane, and a hardened CI.
 - A **self-scan** job that runs the shipped CLI against the bundled vulnerable target
   and fails on any detection regression.
 - A **PostgreSQL-backed** cloud-store job exercising the real Postgres code paths.
+- A **CycloneDX SBOM** generated on release and attached to the GitHub Release
+  alongside the wheel and sdist.
 - `python -m dastcore` entry point; version consolidated to a single source.
 
 ## [0.1.0] - 2026-08-04
