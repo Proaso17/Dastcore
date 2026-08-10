@@ -41,6 +41,7 @@ _ACTIVE_FAMILIES = {
     "rce",
     "cors",
     "csv_injection",
+    "xml_injection",
 }
 
 

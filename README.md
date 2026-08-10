@@ -62,6 +62,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Log4Shell / JNDI** (blind, OAST, incl. headers) | regla YAML | CWE-502 |
 | SSRF (blind, OAST) | regla YAML | CWE-918 / WSTG-INPV-19 |
 | XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |
+| **XML Injection** (error-based, rompe el parser XML) | regla YAML | CWE-91 / WSTG-INPV-07 |
 | CRLF / HTTP header injection (OAST) | regla YAML | CWE-93 / WSTG-INPV-16 |
 | **CSV / Formula Injection** (fórmula reflejada sin escapar en export CSV/Excel) | regla YAML (gated por content-type) | CWE-1236 / A03:2021 |
 | Path traversal / LFI | regla YAML | CWE-22 / WSTG-ATHZ-01 |
@@ -75,6 +76,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | Exposición de ficheros sensibles (`.env`, `.git`, claves) | detector activo | CWE-538 / WSTG-CONF-04 |
 | GraphQL introspection habilitada | detector activo | CWE-200 / WSTG-APIT-01 |
 | **Método HTTP TRACE habilitado (Cross-Site Tracing)** | detector activo | CWE-16 / WSTG-CONF-06 |
+| **Métodos HTTP peligrosos habilitados** (PUT/DELETE/PATCH vía `Allow`) | detector activo | CWE-749 / WSTG-CONF-06 |
 | Cabeceras/cookies inseguras, CSP/HSTS ausentes, directory listing, stack traces, divulgación de tecnología | pasivos | varios |
 | **LLM: prompt injection (directa+indirecta), jailbreak, crescendo multi-turno, system-prompt leak, secretos/PII, excessive agency, output inseguro, denial of wallet** | `dastcore ai` | OWASP LLM01/02/05/06/07/10 |
 - **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.

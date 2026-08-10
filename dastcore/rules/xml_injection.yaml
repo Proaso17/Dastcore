@@ -1,0 +1,36 @@
+id: xml-injection
+name: XML Injection
+family: xml_injection
+severity: high
+cwe: CWE-91
+owasp: WSTG-INPV-07
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:L"
+inject_into: [query, body, json]
+payloads:
+  # Break XML structure without opening an HTML comment/rawtext context — an unclosed
+  # `<!--` payload, if the app stores it, would comment out unrelated content.
+  - "<x>"
+  - "<foo>"
+  - "<x></y>"
+  - "]]>"
+oracle:
+  type: any_of
+  checks:
+    - type: response_match
+      part: body
+      patterns:
+        - "not[ -]?well[ -]?formed"
+        - "SAXParseException"
+        - "XML(?:Syntax)?Error"
+        - "XML Parsing Error"
+        - "org\\.xml\\.sax"
+        - "premature end of (?:data|document)"
+        - "mismatched tag"
+        - "junk after document element"
+        - "ExpatError"
+        - "lxml\\.etree"
+confirm_reproducible: true
+remediation: >-
+  Never build XML documents by concatenating user input. Encode/escape values for the
+  XML context (or build the tree with a DOM API that escapes for you), validate against
+  a schema, and disable DTD/external-entity processing in the parser.

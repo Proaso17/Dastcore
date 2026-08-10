@@ -22,7 +22,11 @@ minor releases.
   serialized objects handed to the client (an insecure-deserialization sink).
 - **Cleartext credential submission** (CWE-319): passive detector for a password form
   whose action posts to an absolute `http://` URL.
-- Remediation "How to fix" guides (steps + code + references) for all four new classes.
+- **XML Injection** (CWE-91): error-based rule that flags user input breaking XML
+  parsing (SAX/lxml/expat signatures). Added to the benchmark (23 vulns + 23 decoys).
+- **Dangerous HTTP methods** (CWE-749): a safe OPTIONS probe that flags PUT/DELETE/
+  PATCH/CONNECT advertised in the Allow header.
+- Remediation "How to fix" guides (steps + code + references) for every new class.
 
 ## [0.5.0] - 2026-08-09
 

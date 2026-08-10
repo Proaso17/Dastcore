@@ -152,6 +152,49 @@ async def check_trace_method(client: HttpClient, target: str) -> list[Finding]:
     ]
 
 
+_DANGEROUS_METHODS = ("PUT", "DELETE", "PATCH", "CONNECT", "TRACK")
+
+
+async def check_dangerous_methods(client: HttpClient, target: str) -> list[Finding]:
+    """Flag write/dangerous HTTP methods advertised in the OPTIONS `Allow` header.
+
+    A safe, read-only probe (a single OPTIONS): if the server advertises PUT/DELETE/PATCH
+    (or CONNECT/TRACK), those state-changing methods are reachable and worth reviewing for
+    missing authorization. Reported low — it confirms exposure, not exploitability."""
+    parts = urlsplit(target)
+    origin = f"{parts.scheme}://{parts.netloc}/"
+    try:
+        response = await client.request("OPTIONS", origin)
+    except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
+        return []
+    allow = next((value for name, value in response.headers.items() if name.lower() == "allow"), "")
+    advertised = [m for m in _DANGEROUS_METHODS if re.search(rf"\b{m}\b", allow, re.IGNORECASE)]
+    if not advertised:
+        return []
+    request = HttpRequest(method="OPTIONS", url=origin)
+    return [
+        Finding(
+            id=f"active-dangerous-methods:{parts.netloc}",
+            rule_id="active-dangerous-methods",
+            name=f"Dangerous HTTP methods enabled: {', '.join(advertised)}",
+            severity="low",
+            cwe="CWE-749",
+            owasp="WSTG-CONF-06",
+            family="http_methods",
+            injection_point=_point(request, "header", "Allow"),
+            evidence=[
+                Evidence(type="response_match", data=f"OPTIONS Allow advertises: {allow.strip()}", confidence="high")
+            ],
+            request=request,
+            response=response,
+            remediation=(
+                "Disable HTTP methods the application does not use (PUT/DELETE/PATCH/CONNECT/TRACK) at "
+                "the server or proxy, and enforce authorization on any write method you do expose."
+            ),
+        )
+    ]
+
+
 async def check_graphql_introspection(client: HttpClient, endpoint_url: str) -> list[Finding]:
     """Flag a GraphQL endpoint that has introspection enabled (info disclosure)."""
     schema = await introspect(client, endpoint_url)

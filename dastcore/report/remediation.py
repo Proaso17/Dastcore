@@ -486,6 +486,45 @@ _GUIDES: dict[str, dict] = {
         ),
         "references": (Reference("OWASP CSV Injection", "https://owasp.org/www-community/attacks/CSV_Injection"),),
     },
+    "http_methods": {
+        "steps": (
+            "Disable HTTP methods the app doesn't use (PUT/DELETE/PATCH/CONNECT/TRACK) at the server or proxy.",
+            "For any write method you do expose, enforce authentication and authorization server-side.",
+            "Do not rely on the client's method for access decisions; check permissions on every verb.",
+        ),
+        "example": CodeExample(
+            lang="text",
+            bad="OPTIONS /  ->  Allow: GET, PUT, DELETE, PATCH",
+            good="OPTIONS /  ->  Allow: GET, POST, HEAD, OPTIONS   (write verbs disabled)",
+            note="Advertised write methods are an attack surface even before authz is considered.",
+        ),
+        "references": (
+            Reference(
+                "OWASP WSTG: Test HTTP Methods",
+                "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/06-Test_HTTP_Methods",
+            ),
+        ),
+    },
+    "xml_injection": {
+        "steps": (
+            "Never build XML by concatenating user input.",
+            "Build the document with a DOM/serializer API that escapes values, or escape &, <, >, \" and ' yourself.",
+            "Validate the input against a schema (XSD/RelaxNG) and reject malformed structure.",
+            "Disable DTD and external-entity processing in the parser (defends XXE at the same time).",
+        ),
+        "example": CodeExample(
+            lang="python",
+            bad='xml = f"<result>{user_value}</result>"',
+            good='from xml.sax.saxutils import escape\nxml = f"<result>{escape(user_value)}</result>"',
+            note="Escaping the XML metacharacters keeps user data as text, not markup.",
+        ),
+        "references": (
+            Reference(
+                "OWASP XML External Entity Prevention Cheat Sheet",
+                _CHEATSHEET + "XML_External_Entity_Prevention_Cheat_Sheet.html",
+            ),
+        ),
+    },
     "jwt": {
         "steps": (
             "Verify the signature with a fixed, server-side algorithm allow-list (e.g. only RS256, or only HS256).",
@@ -557,6 +596,7 @@ _RULE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("authz-", "authz"),
     ("secret-", "secrets"),
     ("active-trace-", "xst"),
+    ("active-dangerous-methods", "http_methods"),
     ("active-graphql-", "graphql"),
     ("active-sensitive-file", "sensitive_file"),
     ("dom-xss", "xss"),

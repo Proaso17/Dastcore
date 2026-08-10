@@ -23,7 +23,7 @@ from flask import Flask, Response, jsonify, redirect, request
 
 # path -> the vulnerability family that SHOULD be found there, or None for a decoy.
 EXPECTED: dict[str, str | None] = {
-    # --- true positives (22) ---
+    # --- true positives (23) ---
     "/b/sqli-error": "sqli",  # error-based, query
     "/b/sqli-blind": "sqli",  # boolean-blind, query
     "/b/sqli-post": "sqli",  # error-based, POST body
@@ -46,7 +46,8 @@ EXPECTED: dict[str, str | None] = {
     "/b/xxe": "xxe",  # XML external entity (out-of-band, POST body)
     "/b/cmdi-blind": "cmdi",  # blind OS command injection (out-of-band)
     "/b/csv": "csv_injection",  # formula reflected unescaped in a CSV export
-    # --- decoys / true negatives (22) ---
+    "/b/xmli": "xml_injection",  # user input breaks XML parsing (error-based)
+    # --- decoys / true negatives (23) ---
     "/b/xss-escaped": None,  # reflected but HTML-escaped
     "/b/xss-json": None,  # reflected raw but in a JSON body (can't execute)
     "/b/xss-comment": None,  # reflected inside an HTML comment (inert)
@@ -69,6 +70,7 @@ EXPECTED: dict[str, str | None] = {
     "/b/redirect-relative": None,  # sanitizes the target to a same-origin relative path
     "/b/xss-attr-numeric": None,  # server-side validates the param is numeric (rejects payloads)
     "/b/csv-safe": None,  # CSV export that prefixes a ' to neutralize formula triggers
+    "/b/xmli-safe": None,  # echoes input XML-escaped into a valid document (no parse error)
 }
 
 _SAMPLES = {
@@ -114,6 +116,8 @@ _SAMPLES = {
     "/b/xss-attr-numeric": "v=1",
     "/b/csv": "field=name",
     "/b/csv-safe": "field=name",
+    "/b/xmli": "data=x",
+    "/b/xmli-safe": "data=x",
 }
 
 _BOOL = re.compile(r"and\s+'?(\w+)'?\s*=\s*'?(\w+)'?", re.IGNORECASE)
@@ -395,5 +399,22 @@ def create_app() -> Flask:
         if field[:1] in ("=", "+", "-", "@"):
             field = "'" + field
         return Response(f"name,note\r\n{field},exported\r\n", mimetype="text/csv")
+
+    @app.get("/b/xmli")
+    def xml_injection() -> Response:
+        # Vulnerable: raw input concatenated into XML -> structural chars break the parser.
+        data = request.args.get("data", "")
+        if "<" in data or ">" in data:
+            return Response(
+                "lxml.etree.XMLSyntaxError: Opening and ending tag mismatch: result line 1",
+                status=500,
+                mimetype="text/plain",
+            )
+        return Response(f"<result>{data}</result>", mimetype="application/xml")
+
+    @app.get("/b/xmli-safe")
+    def xml_injection_safe() -> Response:
+        # Decoy: XML-escape the value, so it reflects into a valid document with no parse error.
+        return Response(f"<result>{html.escape(request.args.get('data', ''))}</result>", mimetype="application/xml")
 
     return app
