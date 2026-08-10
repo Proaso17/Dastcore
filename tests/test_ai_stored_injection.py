@@ -81,6 +81,62 @@ async def test_discover_flow_finds_both_direct_and_stored_llm_issues(chatbot_app
     assert any(f.rule_id == "llm-stored-injection" for f in findings)
 
 
+@pytest.mark.asyncio
+async def test_discover_flow_does_not_auto_attack_a_low_confidence_candidate(chatbot_app_url, monkeypatch) -> None:
+    """An ambiguous (low-confidence) endpoint is reported but never auto-attacked, so the
+    flow can't fuzz a translate/search API that merely looks chat-shaped."""
+    import dastcore.cli as cli
+    from dastcore.ai.discovery import ChatEndpointProfile
+    from dastcore.config import RateLimitConfig
+
+    class _FakeCrawler:
+        def __init__(self, client, max_pages=200):
+            pass
+
+        async def crawl(self, start_url):
+            return []
+
+    low = ChatEndpointProfile(url=f"{chatbot_app_url}/api/translate", prompt_field="text", confidence="low")
+
+    async def _fake_probe(client, requests):
+        return [low]
+
+    monkeypatch.setattr(cli, "HttpCrawler", _FakeCrawler)
+    monkeypatch.setattr(cli, "probe_chat_endpoints", _fake_probe)
+    config = ScanConfig(target=chatbot_app_url, rate_limit=RateLimitConfig(requests_per_second=50))
+    profile, findings = await cli._run_ai_discover_scan(config, chatbot_app_url, dict(_AUTH), "", 50)
+    assert profile is low and findings == []  # reported, not attacked
+
+
+@pytest.mark.asyncio
+async def test_injection_lands_against_a_bot_obeying_a_different_phrasing() -> None:
+    """The stacked-phrasing payload catches a bot that follows one wording ("include the
+    exact text …") a single-phrasing payload would have missed — recall, still canary-gated."""
+    import re
+
+    from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint
+    from dastcore.core.models import HttpRequest, HttpResponse
+
+    store: list[str] = []
+    obey = re.compile(r"include the exact text (DCSTORED[0-9A-F]+)", re.IGNORECASE)
+
+    class _FakeHttp:
+        async def request(self, method, url, *, headers=None, json=None, **kw):
+            store.append(str(json.get("text", "")))
+            return HttpResponse(status_code=200, text="{}")
+
+    class _FakeChat:
+        async def ask(self, prompt):
+            # This bot only obeys the "include the exact text X" instruction (latest wins).
+            hit = next((m.group(1) for note in reversed(store) for m in [obey.search(note)] if m), "")
+            req = HttpRequest(method="POST", url="https://app.test/api/chat", json_body={"message": prompt})
+            return (f"Sure: {hit}" if hit else "How can I help?"), req, HttpResponse(status_code=200, text="ok")
+
+    sink = WriteEndpoint(url="https://app.test/api/messages", field="text")
+    findings = await StoredInjectionScanner(_FakeHttp(), _FakeChat(), [sink]).scan()  # type: ignore[arg-type]
+    assert len(findings) == 1 and findings[0].rule_id == "llm-stored-injection"
+
+
 def test_infer_write_endpoints_skips_the_chat_and_non_string_fields() -> None:
     requests = [
         HttpRequest(method="POST", url="https://app.test/api/chat", json_body={"message": "hi"}),

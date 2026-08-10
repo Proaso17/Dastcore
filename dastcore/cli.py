@@ -1198,6 +1198,10 @@ async def _run_ai_discover_scan(
         if not profiles:
             return None, []
         best = profiles[0]
+        if best.confidence == "low":
+            # Ambiguous shape (a translate/search API can look the same). Report it as a
+            # candidate but don't auto-attack — the caller surfaces it for a human to confirm.
+            return best, []
         chat = _chat_for(client, best, headers)
         rules = load_ai_rules(extra_wordlist=Path(wordlist) if wordlist else None)
         findings = await AiScanner(chat, rules).scan()
@@ -1378,6 +1382,16 @@ def ai(
                     "\n[bold yellow]No se detectó ningún chatbot embebido[/bold yellow] en el crawl. "
                     "Configúralo a mano con --ai-template / --ai-response-path, o instala el motor headless "
                     "([bold]pip install 'dastcore[headless]'[/bold]) para capturar el XHR del widget."
+                )
+                raise typer.Exit(code=0)
+            if profile.confidence == "low":
+                # Ambiguous shape: reported as a candidate, not auto-attacked.
+                console.print(
+                    f"\n[bold yellow]Posible endpoint de chat (confianza baja)[/bold yellow] en "
+                    f"[bold]{profile.url}[/bold] — {profile.evidence}.\n"
+                    "Es ambiguo (una API de búsqueda/traducción puede tener la misma forma), así que "
+                    "no se ataca automáticamente. Confírmalo y escanéalo directo con "
+                    f"[bold]dastcore ai {profile.url} --ai-prompt-field {profile.prompt_field}[/bold]."
                 )
                 raise typer.Exit(code=0)
             if not quiet:

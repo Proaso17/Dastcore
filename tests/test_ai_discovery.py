@@ -76,6 +76,31 @@ def test_crud_create_endpoint_is_not_a_chatbot() -> None:
     assert _detect([(req, resp)]) == []
 
 
+def test_graphql_endpoint_is_not_a_chatbot() -> None:
+    # GraphQL bodies carry a `query` field (a prompt-field name) and often return text,
+    # but they are not chatbots — the `variables`/`operationName` shape gives them away.
+    gql = _post("https://app.test/graphql", {"query": "{ me { name } }", "variables": {}})
+    assert _detect([(gql, _json_resp({"data": {"me": {"name": "a"}}}))]) == []
+    # even without the /graphql path, the operationName marker is enough
+    gql2 = _post("https://app.test/api", {"query": "query Q { x }", "operationName": "Q"})
+    assert _detect([(gql2, _json_resp({"data": {"x": 1}, "answer": "hi"}))]) == []
+
+
+def test_nested_prompt_field_is_detected_with_a_template() -> None:
+    req = _post("https://app.test/api/assistant", {"data": {"message": "hola"}, "meta": {"lang": "es"}})
+    p = _detect([(req, _json_resp({"reply": "hi"}))])[0]
+    assert p.template is not None
+    assert '"message": "{{prompt}}"' in p.template or '"message":"{{prompt}}"' in p.template
+    assert '"meta"' in p.template  # siblings preserved
+
+
+def test_messages_array_without_path_hint_is_medium_not_low() -> None:
+    # A messages[] body is a strong signal on its own, even at an unhinted URL.
+    body = {"messages": [{"role": "user", "content": "hola"}]}
+    p = _detect([(_post("https://app.test/api/v2/generate", body), _json_resp({"reply": "hi"}))])[0]
+    assert p.confidence == "medium"
+
+
 def test_get_requests_are_ignored() -> None:
     req = HttpRequest(method="GET", url="https://app.test/chat", json_body=None)
     assert _detect([(req, _json_resp({"reply": "hi"}))]) == []

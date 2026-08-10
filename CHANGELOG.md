@@ -71,6 +71,17 @@ minor releases.
   (`dastcore/vulndb/nvd.py`) is pure and unit-tested; the merge de-dupes and preserves
   curated entries. `--since-days` / `--min-severity` keep the diff small. A weekly CI
   workflow (`.github/workflows/nvd-sync.yml`) opens a review PR — never auto-merges.
+- **Chatbot discovery hardening** (precision + recall): GraphQL endpoints (whose `query`
+  field looks prompt-like) are now excluded outright; prompt fields nested one level deep
+  (`{"data":{"message":…}}`) are detected and driven via a generated `{{prompt}}` template;
+  an OpenAI-style `messages[]` body now counts as a strong signal even at an unhinted URL.
+  Confidence is graded and the `--discover` flow no longer auto-attacks `low`-confidence
+  (ambiguous) candidates — it reports them for a human to confirm, so a translate/search
+  API is never fuzzed as if it were a chatbot. Covered by adversarial detector tests.
+- **Stored-injection oracle robustness**: the planted note stacks several equivalent
+  instruction phrasings and the retrieval triggers are more varied, so the check lands
+  against bots that obey one wording but not another — recall up, confirmation still
+  canary-gated (no false positives).
 - **Attack-chain narrative** in the HTML report: multi-stage findings (stored prompt
   injection, cross-tenant read/action) now carry an ordered `attack_chain` (actor →
   action → detail) rendered as a numbered flow, so the report tells the story

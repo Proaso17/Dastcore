@@ -8,16 +8,23 @@ or a ``{{prompt}}`` template, the dot-path to the answer, streaming). That lets 
 plain ``dastcore`` run also exercise the embedded assistant without hand-config.
 
 Detection is deliberately conservative: an endpoint is only accepted when it shows
-a **request** signal (a user-text field, or an OpenAI-style ``messages`` array) AND
-a **response** signal (a decodable assistant-text field, or an SSE/NDJSON stream).
-Requiring both keeps ordinary CRUD/JSON APIs — which also take and echo strings —
-from being mistaken for a chatbot.
+a **request** signal (a top-level or one-level-nested user-text field, or an
+OpenAI-style ``messages`` array) AND a **response** signal (a decodable assistant-text
+field, or an SSE/NDJSON stream). Requiring both keeps ordinary CRUD/JSON APIs — which
+also take and echo strings — from being mistaken for a chatbot, and GraphQL endpoints
+(whose ``query`` field looks prompt-like) are excluded outright.
+
+Confidence is graded so callers can act on it: an unhinted, bare-field endpoint is only
+``low`` (ambiguous — a translate/search API can look the same), while a ``messages[]``
+array or a chat-like URL path raises it. The CLI ``--discover`` flow does not auto-attack
+``low`` candidates; it reports them for a human to confirm.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from dastcore.ai.client import (
     _AUTO_RESPONSE_PATHS,
@@ -101,7 +108,7 @@ def _messages_array(body: object) -> list | None:
 
 
 def _prompt_field_of(body: object) -> str | None:
-    """Name of the field holding a non-empty user string, if the body has one."""
+    """Name of the top-level field holding a non-empty user string, if the body has one."""
     if not isinstance(body, dict):
         return None
     for name in _PROMPT_FIELDS:
@@ -109,6 +116,40 @@ def _prompt_field_of(body: object) -> str | None:
         if isinstance(value, str) and value.strip():
             return name
     return None
+
+
+# Common wrappers a chat body nests the prompt under (e.g. {"data": {"message": "..."}}).
+_NEST_KEYS = ("data", "input", "payload", "body", "params", "request", "args")
+
+
+def _nested_prompt(body: object) -> tuple[str, str] | None:
+    """Find a prompt field one level deep, returning (container_key, field) if present."""
+    if not isinstance(body, dict):
+        return None
+    for key in _NEST_KEYS:
+        inner = body.get(key)
+        field = _prompt_field_of(inner)
+        if field is not None:
+            return key, field
+    return None
+
+
+def _is_graphql(request: HttpRequest) -> bool:
+    """A GraphQL POST looks chat-shaped (it has a ``query`` field) but is not a chatbot."""
+    if urlsplit(request.url).path.rstrip("/").endswith("/graphql"):
+        return True
+    body = request.json_body
+    return isinstance(body, dict) and "query" in body and ("variables" in body or "operationName" in body)
+
+
+def _template_with_prompt_at(body: dict, container_key: str, field: str) -> str | None:
+    """Build a ``{{prompt}}`` template that injects into a nested field, keeping siblings."""
+    try:
+        clone = json.loads(json.dumps(body))
+        clone[container_key] = {**clone[container_key], field: "@@P@@"}
+        return json.dumps(clone).replace('"@@P@@"', '"{{prompt}}"')
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def _template_from_messages(body: dict) -> str | None:
@@ -166,12 +207,16 @@ def detect_chat_endpoints(
     """
     profiles: dict[str, ChatEndpointProfile] = {}
     for request, response in exchanges:
-        if request.method.upper() != "POST" or request.json_body is None:
+        if request.method.upper() != "POST" or not isinstance(request.json_body, dict):
             continue
+        if _is_graphql(request):
+            continue  # GraphQL has a `query` field but is not a chatbot
 
-        messages = _messages_array(request.json_body)
-        prompt_field = _prompt_field_of(request.json_body)
-        if messages is None and prompt_field is None:
+        body = request.json_body
+        messages = _messages_array(body)
+        top_field = _prompt_field_of(body)
+        nested = _nested_prompt(body) if (messages is None and top_field is None) else None
+        if messages is None and top_field is None and nested is None:
             continue  # no request-side signal
 
         streamed, stream_path = _looks_streamed(response)
@@ -186,34 +231,38 @@ def detect_chat_endpoints(
                 continue
 
         path_hint = any(hint in request.url.lower() for hint in _PATH_HINTS)
-        # Message-array or an explicit path hint make it a confident chat endpoint;
-        # a bare prompt-field on an unhinted URL is accepted but only "low" confidence.
-        confidence = "high" if (messages is not None and path_hint) else "medium" if path_hint else "low"
+        # An OpenAI-style messages[] array is a strong request signal on its own; a bare
+        # or nested prompt field needs a path hint to clear "low" (ambiguous) confidence.
+        strong = messages is not None
+        confidence = "high" if (strong and path_hint) else "medium" if (strong or path_hint) else "low"
 
-        if messages is not None and isinstance(request.json_body, dict):
-            template = _template_from_messages(request.json_body)
+        common = {
+            "url": request.url,
+            "method": request.method.upper(),
+            "response_path": answer_path,
+            "stream": streamed,
+            "stream_path": stream_path,
+            "headers": _forwardable_headers(request.headers),
+            "confidence": confidence,
+        }
+        if messages is not None:
             profile = ChatEndpointProfile(
-                url=request.url,
-                method=request.method.upper(),
-                template=template,
-                response_path=answer_path,
-                stream=streamed,
-                stream_path=stream_path,
-                headers=_forwardable_headers(request.headers),
-                confidence=confidence,
+                template=_template_from_messages(body),
                 evidence="OpenAI-style messages[] request with an assistant reply",
+                **common,
+            )
+        elif top_field is not None:
+            profile = ChatEndpointProfile(
+                prompt_field=top_field,
+                evidence=f"chat-shaped JSON: field {top_field!r} in, assistant text out",
+                **common,
             )
         else:
+            assert nested is not None
             profile = ChatEndpointProfile(
-                url=request.url,
-                method=request.method.upper(),
-                prompt_field=prompt_field or "message",
-                response_path=answer_path,
-                stream=streamed,
-                stream_path=stream_path,
-                headers=_forwardable_headers(request.headers),
-                confidence=confidence,
-                evidence=f"chat-shaped JSON: field {prompt_field!r} in, assistant text out",
+                template=_template_with_prompt_at(body, *nested),
+                evidence=f"chat-shaped JSON: nested field {nested[0]}.{nested[1]!r} in, assistant text out",
+                **common,
             )
 
         signature = f"{profile.method} {request.signature()}"
