@@ -150,5 +150,22 @@ advisories:
 
 Los hallazgos se reportan con **confianza media**: un banner de versión puede estar
 falseado o la distro puede haber *back-porteado* el parche sin cambiar la cadena de
-versión. Es una pista a verificar, no un exploit confirmado. La misma BD puede
-regenerarse desde un feed de NVD en el futuro (el formato es estable).
+versión. Es una pista a verificar, no un exploit confirmado.
+
+### Sincronizar desde NVD
+
+`scripts/sync_nvd.py` refresca la BD desde el **NVD API 2.0** (red; se ejecuta a mano,
+NUNCA en tiempo de escaneo — el escáner solo lee el YAML, offline). La traducción
+CVE→aviso vive en `dastcore/vulndb/nvd.py` y está testeada; el script solo hace el
+fetch + merge alrededor.
+
+```bash
+python scripts/sync_nvd.py --dry-run          # muestra qué cambiaría (por defecto)
+python scripts/sync_nvd.py --write            # fusiona en advisories.yaml
+NVD_API_KEY=... python scripts/sync_nvd.py --write   # límite de rate más alto con clave
+```
+
+El merge **de-duplica por (producto, cve, rango) y preserva las entradas curadas** (las
+existentes ganan). Como NVD trae *todo* el histórico de un producto (incl. CVEs
+antiguos/irrelevantes), la recomendación es revisar el `--dry-run` y curar antes de
+`--write`, manteniendo `advisories.yaml` pequeño y de alta señal.

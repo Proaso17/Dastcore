@@ -40,6 +40,10 @@ minor releases.
   assets) and matches a bundled, offline advisory DB (`dastcore/vulndb/advisories.yaml`)
   with a version-range matcher. Reported at medium confidence (version-banner based).
   Extensible by adding a YAML entry.
+- **NVD sync** for the advisory DB: `scripts/sync_nvd.py` refreshes `advisories.yaml`
+  from the NVD API 2.0 (run by hand, never at scan time). The CVE→advisory translation
+  (`dastcore/vulndb/nvd.py`) is pure and unit-tested; the merge de-dupes and preserves
+  curated entries.
 - Remediation "How to fix" guides (steps + code + references) for every new class.
 
 ## [0.5.0] - 2026-08-09
