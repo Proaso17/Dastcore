@@ -26,6 +26,8 @@ minor releases.
   parsing (SAX/lxml/expat signatures). Added to the benchmark (23 vulns + 23 decoys).
 - **Dangerous HTTP methods** (CWE-749): a safe OPTIONS probe that flags PUT/DELETE/
   PATCH/CONNECT advertised in the Allow header.
+- **JWT weak HMAC secret** (CWE-347): re-signs the bearer with a list of common secrets
+  (HS256/384/512) and reports if one is accepted, with the same bad-signature control.
 - Remediation "How to fix" guides (steps + code + references) for every new class.
 
 ## [0.5.0] - 2026-08-09

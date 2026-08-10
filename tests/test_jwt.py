@@ -19,6 +19,7 @@ from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
 from dastcore.detectors.jwt import (
     check_jwt_none_acceptance,
+    check_jwt_weak_secret,
     forge_alg_none,
     forge_bad_signature,
     looks_like_jwt,
@@ -31,11 +32,14 @@ def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
-def _mint(claims: dict, alg: str = "HS256") -> str:
+def _mint(claims: dict, alg: str = "HS256", secret: bytes = _SECRET) -> str:
     header = _b64(json.dumps({"alg": alg, "typ": "JWT"}).encode())
     payload = _b64(json.dumps(claims).encode())
-    sig = _b64(hmac.new(_SECRET, f"{header}.{payload}".encode(), hashlib.sha256).digest())
+    sig = _b64(hmac.new(secret, f"{header}.{payload}".encode(), hashlib.sha256).digest())
     return f"{header}.{payload}.{sig}"
+
+
+WEAK_TOKEN = _mint({"sub": "alice"}, secret=b"secret")  # signed with a dictionary-word secret
 
 
 VALID = _mint({"sub": "alice", "role": "user"})
@@ -68,7 +72,7 @@ def test_forge_bad_signature_changes_only_the_signature() -> None:
 # --- oracle against a live server -------------------------------------------------------
 
 
-def _jwt_app():
+def _jwt_app(secret: bytes = _SECRET):
     from flask import Flask, Response, request
 
     app = Flask(__name__)
@@ -84,7 +88,7 @@ def _jwt_app():
             return None
         if str(header.get("alg", "")).lower() == "none":
             return payload if accept_none else None
-        expected = _b64(hmac.new(_SECRET, f"{parts[0]}.{parts[1]}".encode(), hashlib.sha256).digest())
+        expected = _b64(hmac.new(secret, f"{parts[0]}.{parts[1]}".encode(), hashlib.sha256).digest())
         return payload if hmac.compare_digest(expected, parts[2]) else None
 
     def _handle(accept_none: bool) -> Response:
@@ -105,14 +109,26 @@ def _jwt_app():
     return app
 
 
-@pytest.fixture(scope="module")
-def jwt_server() -> Iterator[str]:
+def _serve(app) -> tuple[str, object]:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    server = make_server("127.0.0.1", port, _jwt_app(), threaded=True)
+    server = make_server("127.0.0.1", port, app, threaded=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{port}"
+    return f"http://127.0.0.1:{port}", server
+
+
+@pytest.fixture(scope="module")
+def jwt_server() -> Iterator[str]:
+    url, server = _serve(_jwt_app())
+    yield url
+    server.shutdown()
+
+
+@pytest.fixture(scope="module")
+def weak_secret_server() -> Iterator[str]:
+    url, server = _serve(_jwt_app(secret=b"secret"))  # HS256 secret is a dictionary word
+    yield url
     server.shutdown()
 
 
@@ -135,3 +151,19 @@ async def test_no_finding_when_token_is_not_a_jwt(jwt_server: str) -> None:
     scope = ScopeConfig(allow_domains=["127.0.0.1"])
     async with HttpClient(scope) as client:
         assert await check_jwt_none_acceptance(client, f"{jwt_server}/vuln", "opaque-token") == []
+
+
+async def test_detects_weak_hmac_secret(weak_secret_server: str) -> None:
+    scope = ScopeConfig(allow_domains=["127.0.0.1"])
+    async with HttpClient(scope) as client:
+        findings = await check_jwt_weak_secret(client, f"{weak_secret_server}/strict", WEAK_TOKEN)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "jwt-weak-secret"
+    assert "secret" in findings[0].evidence[0].data
+
+
+async def test_strong_secret_is_not_flagged(jwt_server: str) -> None:
+    # server signs with a long non-dictionary secret; none of the candidates match
+    scope = ScopeConfig(allow_domains=["127.0.0.1"])
+    async with HttpClient(scope) as client:
+        assert await check_jwt_weak_secret(client, f"{jwt_server}/strict", VALID) == []
