@@ -15,6 +15,14 @@ minor releases.
   gated on spreadsheet content types and cell boundaries so the standard `'`-prefix
   mitigation reads as safe. Added to the accuracy benchmark (now 22 vulns + 22 decoys,
   still 1.00 / 1.00 / 1.00).
+- **JWT signature-not-verified / alg:none** (CWE-347): active check that forges an
+  unsigned variant of a JWT bearer, with a bad-signature control so it only fires when
+  the server really does verify signatures but accepts the unsigned token.
+- **Serialized-object exposure** (CWE-502): passive detector for Java/PHP/pickle
+  serialized objects handed to the client (an insecure-deserialization sink).
+- **Cleartext credential submission** (CWE-319): passive detector for a password form
+  whose action posts to an absolute `http://` URL.
+- Remediation "How to fix" guides (steps + code + references) for all four new classes.
 
 ## [0.5.0] - 2026-08-09
 

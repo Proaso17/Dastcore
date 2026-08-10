@@ -472,6 +472,76 @@ _GUIDES: dict[str, dict] = {
         ),
         "references": (),
     },
+    "csv_injection": {
+        "steps": (
+            "When exporting user-controlled data to CSV/spreadsheets, prefix any cell that begins with =, +, -, @ (or tab/CR) with a single quote.",
+            "Quote fields that contain separators, and strip leading formula triggers server-side.",
+            "Do not rely on the spreadsheet client to sanitize on open.",
+        ),
+        "example": CodeExample(
+            lang="python",
+            bad="writer.writerow([user_value])",
+            good="v = user_value\nif v[:1] in ('=', '+', '-', '@'):\n    v = \"'\" + v\nwriter.writerow([v])",
+            note="The leading apostrophe makes the cell a literal string, not a formula.",
+        ),
+        "references": (Reference("OWASP CSV Injection", "https://owasp.org/www-community/attacks/CSV_Injection"),),
+    },
+    "jwt": {
+        "steps": (
+            "Verify the signature with a fixed, server-side algorithm allow-list (e.g. only RS256, or only HS256).",
+            "Reject alg:none and any algorithm the server did not issue — never trust the token's alg header.",
+            "Use a maintained JWT library and its verify() path; do not decode-without-verify for auth decisions.",
+            "Rotate signing keys and keep the secret/private key out of client-reachable code.",
+        ),
+        "example": CodeExample(
+            lang="python",
+            bad='claims = jwt.decode(token, options={"verify_signature": False})',
+            good='claims = jwt.decode(token, key, algorithms=["RS256"])  # alg pinned, signature verified',
+            note="Pinning algorithms server-side defeats alg:none and algorithm-confusion attacks.",
+        ),
+        "references": (
+            Reference("OWASP JSON Web Token Cheat Sheet", _CHEATSHEET + "JSON_Web_Token_for_Java_Cheat_Sheet.html"),
+            Reference(
+                "OWASP API2:2023 Broken Authentication",
+                "https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/",
+            ),
+        ),
+    },
+    "deserialization": {
+        "steps": (
+            "Do not send native serialized objects to the client, and never deserialize untrusted input with them.",
+            "Prefer a data-only format (JSON) over language-native serialization (Java/PHP/pickle).",
+            "If native serialization is unavoidable, sign the blob (HMAC) and verify before deserializing, and use type allow-lists.",
+            "Keep deserialization libraries patched.",
+        ),
+        "example": CodeExample(
+            lang="python",
+            bad="obj = pickle.loads(request.cookies['state'])",
+            good='obj = json.loads(request.cookies["state"])  # data only, no code paths',
+            note="pickle/readObject/unserialize can execute code during deserialization; JSON cannot.",
+        ),
+        "references": (
+            Reference("OWASP Deserialization Cheat Sheet", _CHEATSHEET + "Deserialization_Cheat_Sheet.html"),
+        ),
+    },
+    "cleartext": {
+        "steps": (
+            "Serve login pages over HTTPS and post credentials only to an https:// endpoint.",
+            "Redirect all HTTP traffic to HTTPS and enable HSTS with a long max-age.",
+            "Never hard-code an absolute http:// form action for a form that carries credentials.",
+        ),
+        "example": CodeExample(
+            lang="html",
+            bad='<form action="http://api.example.com/login"><input type="password"></form>',
+            good='<form action="https://api.example.com/login"><input type="password"></form>',
+            note="Credentials on an http:// action travel unencrypted regardless of the page's own scheme.",
+        ),
+        "references": (
+            Reference(
+                "OWASP Transport Layer Security Cheat Sheet", _CHEATSHEET + "Transport_Layer_Security_Cheat_Sheet.html"
+            ),
+        ),
+    },
 }
 
 # Detector findings carry no `family`; map their rule_id prefixes onto a guide key.
