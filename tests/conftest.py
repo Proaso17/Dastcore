@@ -74,6 +74,20 @@ def benchmark_url() -> Iterator[str]:
     thread.join(timeout=5)
 
 
+@pytest.fixture(scope="session")
+def chatbot_app_url() -> Iterator[str]:
+    """A multi-tenant property-management app with an embedded, injectable RAG chatbot."""
+    from tests.targets.chatbot_app.app import create_app as create_chatbot_app
+
+    host = "127.0.0.1"
+    port = _free_port()
+    thread = _ServerThread(create_chatbot_app(), host, port)
+    thread.start()
+    yield f"http://{host}:{port}"
+    thread.shutdown()
+    thread.join(timeout=5)
+
+
 @pytest.fixture
 def sample_finding() -> Finding:
     """A representative Finding for report / evidence tests (no network needed)."""

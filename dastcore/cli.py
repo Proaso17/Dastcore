@@ -29,6 +29,7 @@ from dastcore.ai.client import AiChatClient
 from dastcore.ai.discovery import ChatEndpointProfile, probe_chat_endpoints
 from dastcore.ai.engine import AiScanner, load_ai_rules
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
+from dastcore.ai.stored_injection import StoredInjectionScanner, infer_write_endpoints
 from dastcore.config import (
     AuthConfig,
     FormLoginConfig,
@@ -1186,7 +1187,16 @@ async def _run_ai_discover_scan(
         kwargs["headers"] = {**(kwargs.get("headers") or {}), **headers}  # CLI auth headers win
         chat = AiChatClient(client, best.url, **kwargs)
         rules = load_ai_rules(extra_wordlist=Path(wordlist) if wordlist else None)
-        return best, await AiScanner(chat, rules).scan()
+        findings = await AiScanner(chat, rules).scan()
+
+        # Flagship cross-channel check: plant instructions through the app's write
+        # endpoints and confirm the assistant executes them on retrieval.
+        sinks = infer_write_endpoints(discovered, exclude_urls=[best.url])
+        for sink in sinks:
+            sink.headers = {**sink.headers, **headers}  # ensure the plant is authenticated
+        if sinks:
+            findings.extend(await StoredInjectionScanner(client, chat, sinks).scan())
+        return best, findings
 
 
 @app.command("ai")

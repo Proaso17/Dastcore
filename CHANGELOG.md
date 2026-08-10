@@ -17,6 +17,13 @@ minor releases.
   dot-path, and streaming — and runs the LLM rule set against it, no hand-config. The
   detector is conservative (requires a request-side *and* a response-side chat signal)
   so ordinary CRUD/login JSON APIs are never mistaken for a chatbot.
+- **Stored / second-order indirect prompt injection** (CWE-77, LLM01): the flagship
+  check for RAG assistants. Plants a hidden instruction through an app write endpoint
+  (a message, a maintenance note, a profile field) and confirms the assistant *executes
+  it on retrieval* by returning a fresh per-attempt canary — false-positive-free like
+  OAST (echoing/summarizing the note can't produce the canary). Wired into `--discover`
+  (write endpoints are inferred from the crawl) and unit-tested against a multi-tenant
+  chatbot fixture, including a hardened-assistant negative control.
 - **CSV / Formula Injection** detection (CWE-1236): a new `formula_injection` oracle,
   gated on spreadsheet content types and cell boundaries so the standard `'`-prefix
   mitigation reads as safe. Added to the accuracy benchmark (now 22 vulns + 22 decoys,
