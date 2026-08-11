@@ -437,6 +437,7 @@ async def _run_scan(
     budget: _Budget | None = None,
     progress: _ProgressAdapter | None = None,
     stored_scan: bool = False,
+    waf_evasion: bool = False,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -496,7 +497,12 @@ async def _run_scan(
                 extra_findings.extend(await check_jwt_algorithm_confusion(client, target, jwt_token))
 
             scanner = Scanner(
-                client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency, stored_scan=stored_scan
+                client,
+                rules,
+                oast=oast,
+                concurrency=config.rate_limit.max_concurrency,
+                stored_scan=stored_scan,
+                waf_evasion=waf_evasion,
             )
             all_requests = list(discovered.values())
             extra_findings.extend(await check_shellshock(client, all_requests))
@@ -725,6 +731,12 @@ def scan(
         "--stored",
         help="Detección de XSS almacenado/segundo orden: inyecta canarios y re-crawlea (más lento).",
     ),
+    waf_evasion: bool = typer.Option(
+        False,
+        "--waf-evasion",
+        help="Si el WAF bloquea un payload, reintenta con encoders/tampers para confirmar la vuln enmascarada "
+        "(intrusivo; no se activa en el perfil quick).",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -939,6 +951,7 @@ def scan(
                     budget,
                     _ProgressAdapter(progress),
                     stored_scan=stored,
+                    waf_evasion=waf_evasion and profile != "quick",
                 )
             )
     except SessionLoginError as exc:

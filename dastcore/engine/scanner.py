@@ -26,6 +26,7 @@ from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScop
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.detectors.active_checks import check_cors_reflection
 from dastcore.detectors.exposure import check_source_map
+from dastcore.detectors.fingerprint import looks_blocked
 from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
 from dastcore.engine.oast import OastInteraction, OastProvider, substitute_oast
@@ -36,6 +37,7 @@ from dastcore.engine.rule_engine import (
     oob_payload_templates,
     render_payload_template,
 )
+from dastcore.engine.waf import tampered_variants
 from dastcore.report.correlation import cross_correlate
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import OracleSpec, evaluate_oracle
@@ -94,6 +96,7 @@ class Scanner:
         oob_poll_delay: float = 0.5,
         baseline_samples: int = 2,
         stored_scan: bool = False,
+        waf_evasion: bool = False,
     ) -> None:
         self._http = http_client
         self._rules = rules
@@ -104,6 +107,9 @@ class Scanner:
         self._oob_poll_delay = oob_poll_delay
         self._baseline_samples = max(1, baseline_samples)
         self._stored_scan = stored_scan
+        # When a raw payload is blocked, retry with encoding/case tampers to see if the vuln
+        # is real but WAF-masked. Intrusive/noisy → opt-in (--waf-evasion), off in `quick`.
+        self._waf_evasion = waf_evasion
         # Extra baseline samples pay off for two blind oracles: timing (to measure jitter)
         # and boolean-blind (to check the page is stable enough to trust a TRUE/FALSE diff).
         # Skip them otherwise to keep request volume down.
@@ -221,41 +227,66 @@ class Scanner:
         # the in-band evaluation — a declared payload should never be judged by timing here.
         inband_oracle = _oracle_without_timing(rule.oracle)
         for payload in inband_payloads(rule):
-            mutated_request = build_mutated_request(point, payload.value)
-            mutated_response = await self._send(mutated_request)
-            if mutated_response is None:
+            request = build_mutated_request(point, payload.value)
+            response = await self._send(request)
+            if response is None:
                 continue
 
+            value = payload.value
             evidence = evaluate_oracle(
-                inband_oracle,
-                base_response=base_response,
-                mutated_response=mutated_response,
-                payload=payload.value,
-                baseline=baseline,
+                inband_oracle, base_response=base_response, mutated_response=response, payload=value, baseline=baseline
             )
+            note: str | None = None
+
+            # If the raw payload was blocked and nothing fired, try to evade the WAF and confirm.
+            if not evidence and self._waf_evasion and looks_blocked(response) is not None:
+                evaded = await self._try_waf_evasion(inband_oracle, point, value, base_response, baseline)
+                if evaded is not None:
+                    request, response, value, evidence, note = evaded
+
             if not evidence:
                 continue
 
-            if rule.catch_all_guard and await self._is_catch_all(point, mutated_response, baseline):
+            if rule.catch_all_guard and await self._is_catch_all(point, response, baseline):
                 continue  # endpoint returns the same thing for junk — a soft-404, not a hit
 
             if rule.confirm_reproducible:
-                confirm_response = await self._send(mutated_request)
+                confirm_response = await self._send(request)
                 if confirm_response is None:
                     continue
                 confirm_evidence = evaluate_oracle(
                     inband_oracle,
                     base_response=base_response,
                     mutated_response=confirm_response,
-                    payload=payload.value,
+                    payload=value,
                     baseline=baseline,
                 )
                 if not confirm_evidence:
                     continue
                 evidence = evidence + confirm_evidence
 
-            return self._build_finding(rule, point, evidence, mutated_request, mutated_response)
+            if note is not None:
+                evidence = evidence + [Evidence(type="differential", data=note, confidence="high")]
+            return self._build_finding(rule, point, evidence, request, response)
 
+        return None
+
+    async def _try_waf_evasion(
+        self, oracle: OracleSpec, point, payload_value: str, base_response: HttpResponse, baseline: BaselineProfile
+    ) -> tuple[HttpRequest, HttpResponse, str, list[Evidence], str] | None:
+        """Retry a blocked payload with encoding/case tampers; return the first variant that
+        gets past the WAF and fires the oracle (with a note), else None."""
+        for name, tampered in tampered_variants(payload_value):
+            request = build_mutated_request(point, tampered)
+            response = await self._send(request)
+            if response is None or looks_blocked(response) is not None:
+                continue  # still blocked (or failed) — try the next tamper
+            evidence = evaluate_oracle(
+                oracle, base_response=base_response, mutated_response=response, payload=tampered, baseline=baseline
+            )
+            if evidence:
+                note = f"WAF-evaded: the raw payload was blocked, confirmed via the {name!r} tamper (masked, not fixed)"
+                return request, response, tampered, evidence, note
         return None
 
     @staticmethod

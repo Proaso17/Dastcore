@@ -11,6 +11,12 @@ minor releases.
 
 ### Added
 
+- **WAF-evasion confirmation** (Module 13): a *blocked* request is not a *safe* one, so with
+  `--waf-evasion` the scanner retries a blocked payload with encoding/case tampers (case-swap,
+  URL / double-URL encoding, SQL inline comments) and — when a tampered variant slips past the
+  filter and fires the oracle — reports the vulnerability as **WAF-evaded (masked, not fixed)**
+  rather than missing it. Intrusive/noisy, so it is opt-in and never runs in the `quick`
+  profile; without the flag the scanner does not over-claim a blocked payload as a finding.
 - **GraphQL-native checks** (Module 9): three checks that run against a `--graphql` endpoint,
   each confirmed by the server's own behaviour (no false positives). (1) *Field-suggestion
   leakage* — an unknown field returning "Did you mean <real field>" reconstructs the schema
