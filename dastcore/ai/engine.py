@@ -147,6 +147,16 @@ def _luhn_ok(number: str) -> bool:
     return checksum % 10 == 0
 
 
+def _is_phone_like(candidate: str) -> bool:
+    """A phone number, not a bare id/timestamp: 10–15 digits AND either an international
+    ``+`` prefix or human formatting (space/dash/paren/dot). A plain digit run — an order
+    number, an account id, a unix timestamp — is deliberately not treated as a phone."""
+    digits = re.sub(r"\D", "", candidate)
+    if not (10 <= len(digits) <= 15):
+        return False
+    return candidate.strip().startswith("+") or any(sep in candidate for sep in " ().-")
+
+
 def _find_pii(text: str) -> str | None:
     for match in _EMAIL.finditer(text):
         return f"email {match.group(0)}"
@@ -156,7 +166,7 @@ def _find_pii(text: str) -> str | None:
         if _luhn_ok(match.group(0)):
             return f"card {match.group(0)}"
     for match in _PHONE.finditer(text):
-        if len(re.sub(r"\D", "", match.group(0))) >= 10:
+        if _is_phone_like(match.group(0)):
             return f"phone {match.group(0)}"
     return None
 

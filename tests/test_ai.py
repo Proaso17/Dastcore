@@ -80,6 +80,10 @@ def test_pii_and_luhn_helpers() -> None:
     assert _luhn_ok("1234 5678 9012 3456") is False
     assert _find_pii("contact jane.doe@example.com please").startswith("email")
     assert _find_pii("no personal data here") is None
+    # a formatted phone is PII; a bare digit run (order id / timestamp) is not a false positive
+    assert (_find_pii("call +1-202-555-0173 today") or "").startswith("phone")
+    assert _find_pii("your order number is 1234567890") is None
+    assert _find_pii("transaction 1699999999 processed") is None
 
 
 # --- detection against the vulnerable bot ----------------------------------------------
