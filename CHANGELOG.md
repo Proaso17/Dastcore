@@ -11,6 +11,14 @@ minor releases.
 
 ### Added
 
+- **GraphQL-native checks** (Module 9): three checks that run against a `--graphql` endpoint,
+  each confirmed by the server's own behaviour (no false positives). (1) *Field-suggestion
+  leakage* — an unknown field returning "Did you mean <real field>" reconstructs the schema
+  even with introspection off. (2) *Batching/aliasing abuse* — a JSON array of queries or
+  100 aliased fields executed in one request with no complexity limit, which bypasses
+  per-request rate limiting (credential stuffing, DoS amplification). (3) *CSRF over GraphQL*
+  — a query that executes via GET or `application/x-www-form-urlencoded`. Complements the
+  existing introspection check and NoSQL-injection rule.
 - **Browser login macros** (Module 12): record a JavaScript-driven login once and replay it
   headlessly to authenticate a scan — the classic "the scanner can't log in" pain point.
   `dastcore auth record <login-url>` opens a browser and captures your fills/clicks into a

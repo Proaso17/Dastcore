@@ -56,6 +56,7 @@ from dastcore.detectors.active_checks import (
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
+from dastcore.detectors.graphql import run_graphql_checks
 from dastcore.detectors.jwt import (
     check_jwt_algorithm_confusion,
     check_jwt_kid_injection,
@@ -477,6 +478,7 @@ async def _run_scan(
                 for req in await discover_graphql(client, graphql_url):
                     discovered.setdefault(req.signature(), req)
                 extra_findings.extend(await check_graphql_introspection(client, graphql_url))
+                extra_findings.extend(await run_graphql_checks(client, graphql_url))
 
             progress.status("Probando ficheros sensibles…")
             extra_findings.extend(await probe_sensitive_files(client, target))
