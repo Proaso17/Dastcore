@@ -28,11 +28,33 @@ from dastcore.detectors.active_checks import check_cors_reflection
 from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
 from dastcore.engine.oast import OastInteraction, OastProvider, substitute_oast
-from dastcore.engine.rule_engine import Rule, applicable_payloads, build_mutated_request, oob_payload_templates
+from dastcore.engine.rule_engine import (
+    Rule,
+    build_mutated_request,
+    inband_payloads,
+    oob_payload_templates,
+    render_payload_template,
+)
 from dastcore.report.correlation import cross_correlate
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
-from dastcore.validation.oracles import evaluate_oracle
+from dastcore.validation.oracles import OracleSpec, evaluate_oracle
 from dastcore.validation.reflection import analyze_reflection
+
+
+def _time_based_checks(rule: Rule) -> list:
+    """The rule's time-based oracle checks that carry a templated sleep payload."""
+    if rule.oracle is None:
+        return []
+    return [c for c in rule.oracle.checks if c.type == "time_based" and c.payload]
+
+
+def _oracle_without_timing(oracle: OracleSpec | None) -> OracleSpec:
+    """A copy of the oracle with its time-based checks removed (timing is confirmed
+    separately). An oracle that was *only* time-based becomes an empty check list, which
+    evaluates to no in-band evidence."""
+    if oracle is None:
+        return OracleSpec(type="any_of", checks=[])
+    return OracleSpec(type=oracle.type, checks=[c for c in oracle.checks if c.type != "time_based"])
 
 
 @dataclass
@@ -133,6 +155,8 @@ class Scanner:
                     if rule.is_boolean
                     else await self._try_rule(rule, point, baseline)
                 )
+                if finding is None and _time_based_checks(rule):
+                    finding = await self._try_time_based(rule, point, baseline)
                 if finding is not None:
                     findings.append(finding)
 
@@ -191,14 +215,17 @@ class Scanner:
 
     async def _try_rule(self, rule: Rule, point, baseline: BaselineProfile) -> Finding | None:
         base_response = baseline.primary
-        for payload in applicable_payloads(rule):
+        # Timing checks are confirmed separately (proportional delay), so strip them from
+        # the in-band evaluation — a declared payload should never be judged by timing here.
+        inband_oracle = _oracle_without_timing(rule.oracle)
+        for payload in inband_payloads(rule):
             mutated_request = build_mutated_request(point, payload.value)
             mutated_response = await self._send(mutated_request)
             if mutated_response is None:
                 continue
 
             evidence = evaluate_oracle(
-                rule.oracle,
+                inband_oracle,
                 base_response=base_response,
                 mutated_response=mutated_response,
                 payload=payload.value,
@@ -215,7 +242,7 @@ class Scanner:
                 if confirm_response is None:
                     continue
                 confirm_evidence = evaluate_oracle(
-                    rule.oracle,
+                    inband_oracle,
                     base_response=base_response,
                     mutated_response=confirm_response,
                     payload=payload.value,
@@ -293,6 +320,60 @@ class Scanner:
         return responses_similar(base, true_response, baseline) and not responses_similar(
             base, false_response, baseline
         )
+
+    # --- time-based (blind) ------------------------------------------------------------
+
+    async def _timed_probe(self, point, payload_template: str, delay: float) -> HttpResponse | None:
+        """Send the timing payload rendered with a specific `{{delay}}` and return the response."""
+        value = render_payload_template(payload_template, delay=delay)
+        return await self._send(build_mutated_request(point, value))
+
+    async def _try_time_based(self, rule: Rule, point, baseline: BaselineProfile) -> Finding | None:
+        """Confirm time-based blind injection by *proportional delay*, not a single slow hit.
+
+        A slow response alone is weak: a constantly-slow endpoint, network spikes, or heavy
+        parsing of a long payload all fake it. Instead we send the same injection with three
+        sleep values — 0 (control), D and 2D — and require the *added* delay to both clear the
+        threshold/jitter and to scale with the injected time (SLEEP(2D) adds clearly more than
+        SLEEP(D)). Only a backend actually executing our SLEEP produces that proportionality,
+        so constant or parse-driven slowness can't false-positive.
+        """
+        floor = 3 * baseline.jitter_ms
+        for check in _time_based_checks(rule):
+            assert check.payload is not None and check.delay is not None
+            delay, threshold = float(check.delay), check.threshold_ms or 0.0
+
+            slow = await self._timed_probe(point, check.payload, delay)
+            if slow is None:
+                continue
+            control = await self._timed_probe(point, check.payload, 0)  # same payload, no sleep
+            if control is None:
+                continue
+            added = slow.elapsed_ms - control.elapsed_ms
+            if added < threshold or added < floor:
+                continue  # not slow enough beyond the app's own baseline/noise
+
+            double = await self._timed_probe(point, check.payload, delay * 2)
+            if double is None:
+                continue
+            added_double = double.elapsed_ms - control.elapsed_ms
+            if added_double < 1.5 * added:  # doubling the sleep must add clearly more time
+                continue  # delay doesn't scale with the injected sleep — not a real injection
+
+            evidence = [
+                Evidence(
+                    type="time_based",
+                    data=(
+                        f"time-based blind confirmed by proportional delay: SLEEP({delay:.0f}) added "
+                        f"{added:.0f}ms and SLEEP({delay * 2:.0f}) added {added_double:.0f}ms over a "
+                        f"zero-delay control (threshold {threshold:.0f}ms)"
+                    )[:200],
+                    confidence="high",
+                )
+            ]
+            request = build_mutated_request(point, render_payload_template(check.payload, delay=delay))
+            return self._build_finding(rule, point, evidence, request, slow)
+        return None
 
     # --- OOB ---------------------------------------------------------------------------
 

@@ -27,6 +27,7 @@ EXPECTED: dict[str, str | None] = {
     # --- true positives (24) ---
     "/b/sqli-error": "sqli",  # error-based, query
     "/b/sqli-blind": "sqli",  # boolean-blind, query
+    "/b/sqli-time": "sqli",  # time-based blind (sleeps proportionally to the injected SLEEP)
     "/b/sqli-post": "sqli",  # error-based, POST body
     "/b/xss-html": "xss",  # reflected in HTML text
     "/b/xss-attr": "xss",  # reflected in a quoted attribute (breakout)
@@ -118,6 +119,7 @@ _SAMPLES = {
     "/b/xpath-generic-500": "q=x",
     "/b/redirect-relative": "url=/",
     "/b/redirect-param": "url=/",
+    "/b/sqli-time": "id=1",
     "/b/xss-attr-numeric": "v=1",
     "/b/csv": "field=name",
     "/b/csv-safe": "field=name",
@@ -187,6 +189,15 @@ def create_app() -> Flask:
         cond = _BOOL.search(request.args.get("id", "1"))
         truthy = (cond.group(1) == cond.group(2)) if cond else True
         return Response(f"<h1>Item</h1><p>{'in stock' if truthy else 'not found'}</p>", mimetype="text/html")
+
+    @app.get("/b/sqli-time")
+    def sqli_time() -> Response:
+        # Time-based blind: the injected SLEEP(n) is "executed" — the response is delayed by
+        # n seconds, so the delay scales with the injected value (what the oracle confirms).
+        sleep = re.search(r"SLEEP\((\d+)\)", request.args.get("id", "1"), re.IGNORECASE)
+        if sleep:
+            time.sleep(int(sleep.group(1)))
+        return Response("<h1>Item</h1><p>ok</p>", mimetype="text/html")
 
     @app.get("/b/xss-html")
     def xss_html() -> Response:

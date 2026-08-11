@@ -97,6 +97,13 @@ def applicable_payloads(rule: Rule) -> list[Payload]:
     return [Payload(value=value, family=rule.family, oob=False) for value in values]
 
 
+def inband_payloads(rule: Rule) -> list[Payload]:
+    """Only the declared in-band payloads. Timing probes (a check's own templated
+    `payload`) are driven separately by the scanner's proportional-delay confirmation,
+    so they are deliberately excluded here."""
+    return [Payload(value=value, family=rule.family, oob=False) for value in rule.payloads]
+
+
 def build_mutated_request(point: InjectionPoint, payload_value: str) -> HttpRequest:
     """Returns a copy of the point's request_template with exactly this one parameter replaced."""
     request = point.request_template

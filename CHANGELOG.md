@@ -11,6 +11,15 @@ minor releases.
 
 ### Changed
 
+- **Time-based blind SQLi precision (proportional-delay confirmation)**: a single slow
+  response is no longer enough. The scanner now sends the same injection with three sleep
+  values — 0 (control), D and 2D — and confirms only when the *added* delay both clears the
+  threshold/jitter and **scales with the injected sleep** (SLEEP(2D) adds clearly more than
+  SLEEP(D)). A constantly-slow endpoint, a network spike, or heavy payload parsing can't
+  produce that proportionality, so they no longer false-positive; the timing probe is also
+  removed from the in-band payload loop so timing is confirmed only through this path. A
+  real time-based positive was added to the accuracy benchmark (1.00 / 1.00 / 1.00, now
+  25 vulns + 25 decoys).
 - **Boolean-blind SQLi precision**: the boolean oracle now abstains when the page isn't
   stable across repeated identical requests (after masking known volatile regions). A
   page with its own rotating content (a "promo of the day" banner, a shifting widget)
