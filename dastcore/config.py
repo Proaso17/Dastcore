@@ -54,12 +54,16 @@ class AuthConfig(BaseModel):
     """How the scanner authenticates. Static types (cookie/header/bearer) carry the material
     directly; ``form``/``oauth2`` log in dynamically and can re-login when the session drops."""
 
-    type: Literal["none", "cookie", "header", "bearer", "form", "oauth2"] = "none"
+    type: Literal["none", "cookie", "header", "bearer", "form", "oauth2", "macro"] = "none"
     cookies: dict[str, str] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
     bearer_token: str | None = None
     form: FormLoginConfig | None = None
     oauth2: OAuth2Config | None = None
+    # Browser login macro (type "macro"): a recorded JS-login replayed headlessly to get
+    # the session cookies. `macro_runtime` fills `{{name}}` placeholders (password/OTP).
+    macro_path: str = ""
+    macro_runtime: dict[str, str] = Field(default_factory=dict)
 
     # Dropped-session detection: a response matching either signal triggers an auto re-login.
     logged_out_status: int = 401
@@ -72,6 +76,8 @@ class AuthConfig(BaseModel):
             raise ValueError("auth.type 'form' requires auth.form to be set")
         if self.type == "oauth2" and self.oauth2 is None:
             raise ValueError("auth.type 'oauth2' requires auth.oauth2 to be set")
+        if self.type == "macro" and not self.macro_path:
+            raise ValueError("auth.type 'macro' requires auth.macro_path to be set")
         return self
 
 

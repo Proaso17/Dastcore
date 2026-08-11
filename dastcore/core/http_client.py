@@ -148,6 +148,11 @@ class HttpClient:
         """Current cookies in the jar — used to share an authenticated session with the browser."""
         return {cookie.name: cookie.value or "" for cookie in self._client.cookies.jar}
 
+    def set_cookies(self, cookies: dict[str, str]) -> None:
+        """Push cookies into the jar (e.g. a browser login macro's session cookies), so every
+        subsequent request carries them like any Set-Cookie the client received itself."""
+        self._client.cookies.update(cookies)
+
     def session_headers(self) -> dict[str, str]:
         """Header material the session injects (bearer/oauth2 tokens, custom headers)."""
         if self._session is None:

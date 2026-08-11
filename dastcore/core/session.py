@@ -54,7 +54,7 @@ class SessionManager:
 
     @property
     def can_relogin(self) -> bool:
-        return self._auth.type in ("form", "oauth2")
+        return self._auth.type in ("form", "oauth2", "macro")
 
     @property
     def is_established(self) -> bool:
@@ -111,7 +111,24 @@ class SessionManager:
             return await self._form_login(client)
         if self._auth.type == "oauth2":
             return await self._oauth2_login(client)
+        if self._auth.type == "macro":
+            return await self._macro_login(client)
         return False
+
+    async def _macro_login(self, client: HttpClient) -> bool:
+        """Replay a recorded browser login macro headlessly and adopt its session cookies."""
+        from dastcore.auth.recorder import load_macro, replay_macro
+        from dastcore.discovery.crawler_headless import HeadlessUnavailableError
+
+        try:
+            cookies = await replay_macro(load_macro(self._auth.macro_path), runtime=self._auth.macro_runtime)
+        except (HeadlessUnavailableError, OSError):
+            return False
+        if not cookies:
+            return False
+        self.cookies.update(cookies)
+        client.set_cookies(cookies)
+        return True
 
     async def _form_login(self, client: HttpClient) -> bool:
         cfg = self._auth.form

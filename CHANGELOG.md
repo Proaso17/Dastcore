@@ -11,6 +11,14 @@ minor releases.
 
 ### Added
 
+- **Browser login macros** (Module 12): record a JavaScript-driven login once and replay it
+  headlessly to authenticate a scan — the classic "the scanner can't log in" pain point.
+  `dastcore auth record <login-url>` opens a browser and captures your fills/clicks into a
+  replayable macro (passwords stored as the `{{password}}` placeholder, never the literal);
+  `dastcore auth replay <macro>` verifies it and prints the session cookies. A new auth type
+  `macro` (`dastcore scan … --auth-macro macro.json --auth-macro-var password=…`) replays the
+  macro to seed the session and re-runs it automatically when the session drops. Runtime
+  `{{name}}` placeholders keep secrets/OTPs out of the file.
 - **JWT attacks: signature-not-verified, kid injection, RS256→HS256 confusion** (CWE-347,
   Module 10): three new active checks that run when a scan carries a JWT bearer, each gated
   by a differential control so they can't fire on an unauthenticated endpoint. (1) A JWT

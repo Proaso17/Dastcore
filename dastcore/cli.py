@@ -97,6 +97,11 @@ app = typer.Typer(
 )
 console = Console()
 
+auth_app = typer.Typer(
+    no_args_is_help=True, help="Grabar y reproducir macros de login de navegador (auth compleja / JS)."
+)
+app.add_typer(auth_app, name="auth")
+
 LEGAL_BANNER = (
     "dastcore es una herramienta de pentesting ACTIVA e INTRUSIVA.\n\n"
     "Solo debe usarse contra sistemas para los que tienes autorización EXPLÍCITA\n"
@@ -345,8 +350,16 @@ def _build_auth_config(
     oauth_client_id: str,
     oauth_client_secret: str,
     oauth_scope: str,
+    login_macro: str = "",
+    macro_var: list[str] | None = None,
 ) -> AuthConfig:
     """Resolve the auth flags into a single AuthConfig. Most 'active' flow wins."""
+    if login_macro:
+        return AuthConfig(
+            type="macro",
+            macro_path=login_macro,
+            macro_runtime=_parse_kv_list(macro_var or [], "--auth-macro-var"),
+        )
     if oauth_token_url:
         return AuthConfig(
             type="oauth2",
@@ -747,6 +760,12 @@ def scan(
     oauth_client_id: str = typer.Option("", "--oauth-client-id", help="OAuth2: client_id."),
     oauth_client_secret: str = typer.Option("", "--oauth-client-secret", help="OAuth2: client_secret."),
     oauth_scope: str = typer.Option("", "--oauth-scope", help="OAuth2: scope opcional."),
+    auth_macro: str = typer.Option(
+        "", "--auth-macro", help="Login por macro de navegador: fichero .json grabado con 'dastcore auth record'."
+    ),
+    auth_macro_var: list[str] = typer.Option(
+        [], "--auth-macro-var", help="Valor runtime para un placeholder {{name}} de la macro: 'name=valor' (repetible)."
+    ),
 ) -> None:
     """Run a scan against TARGET (gated behind explicit authorization)."""
     logging.basicConfig(
@@ -847,6 +866,8 @@ def scan(
             oauth_client_id=oauth_client_id,
             oauth_client_secret=oauth_client_secret,
             oauth_scope=oauth_scope,
+            login_macro=auth_macro,
+            macro_var=auth_macro_var,
         )
         if auth.type == "none" and scan_file.auth is not None:
             auth = scan_file.auth
@@ -1579,6 +1600,58 @@ def runner(
     except httpx.HTTPError as exc:
         console.print(f"\n[bold red]Error hablando con el control-plane:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
+
+
+@auth_app.command("record")
+def auth_record(
+    url: str = typer.Argument(..., help="URL de la página de login por la que empezar la grabación."),
+    out: str = typer.Option("login-macro.json", "--out", "-o", help="Fichero donde guardar la macro."),
+) -> None:
+    """Abre un navegador, graba tu login (fills/clicks) y guarda una macro reproducible.
+
+    Las contraseñas se graban como el placeholder {{password}}, nunca el valor literal —
+    lo aportas al reproducir con --auth-macro-var password=…"""
+    from dastcore.auth.recorder import record_macro, save_macro
+    from dastcore.discovery.crawler_headless import HeadlessUnavailableError
+
+    console.print(f"\n[green]Grabando login[/green] desde [bold]{url}[/bold] (navegador headed)…")
+    try:
+        macro = asyncio.run(record_macro(url))
+    except HeadlessUnavailableError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        raise typer.Exit(code=1) from exc
+    save_macro(macro, out)
+    console.print(f"[green]Macro guardada[/green] en [bold]{out}[/bold] · {len(macro.steps)} paso(s).")
+    console.print(
+        f"Úsala con: [bold]dastcore scan <url> --i-have-authorization --auth-macro {out} "
+        "--auth-macro-var password=…[/bold]"
+    )
+
+
+@auth_app.command("replay")
+def auth_replay(
+    macro_file: str = typer.Argument(..., help="Fichero de macro (.json) a reproducir."),
+    base_url: str = typer.Option("", "--base-url", help="Reapunta el login grabado a otro origen (mismo path)."),
+    var: list[str] = typer.Option([], "--var", help="Valor runtime de un placeholder: 'name=valor' (repetible)."),
+) -> None:
+    """Reproduce una macro headless y muestra las cookies de sesión obtenidas (para verificarla)."""
+    from dastcore.auth.recorder import load_macro, replay_macro
+    from dastcore.discovery.crawler_headless import HeadlessUnavailableError
+
+    try:
+        runtime = _parse_kv_list(var, "--var")
+        cookies = asyncio.run(replay_macro(load_macro(macro_file), runtime=runtime, base_url=base_url or None))
+    except HeadlessUnavailableError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        raise typer.Exit(code=1) from exc
+    except (OSError, ValueError) as exc:
+        console.print(f"[bold red]No se pudo leer/reproducir la macro:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    if not cookies:
+        console.print("[bold yellow]La macro no estableció cookies de sesión.[/bold yellow] Revisa los pasos.")
+        raise typer.Exit(code=1)
+    console.print(f"[green]{len(cookies)} cookie(s) de sesión:[/green]")
+    console.print(_json.dumps(cookies, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
