@@ -16,7 +16,7 @@ import logging
 
 import httpx
 
-from dastcore.cli import _Budget, _build_auth_config, _run_scan
+from dastcore.cli import _Budget, _build_auth_config, _run_ai_discover_scan, _run_scan
 from dastcore.cloud.models import JobSpec
 from dastcore.config import OutputConfig, RateLimitConfig, ScanConfig, ScopeConfig
 from dastcore.core.models import Finding
@@ -53,7 +53,31 @@ def _config_for(spec: JobSpec) -> tuple[ScanConfig, str, int]:
     return config, engine, max_pages
 
 
+def _ai_config(spec: JobSpec) -> ScanConfig:
+    return ScanConfig(
+        target=spec.target,  # type: ignore[arg-type]
+        scope=ScopeConfig(allow_domains=list(spec.allow_domains)),
+        rate_limit=RateLimitConfig(requests_per_second=spec.rps if spec.rps > 0 else 5.0),
+        output=OutputConfig(format="json"),
+        i_have_authorization=True,
+    )
+
+
+async def _run_ai_job(spec: JobSpec) -> list[Finding]:
+    """Discover the target's embedded chatbot and run the LLM checks (OWASP LLM Top 10),
+    including the cross-tenant read/action checks when a victim identity is provided."""
+    config = _ai_config(spec)
+    headers = {"Authorization": f"Bearer {spec.auth_bearer}"} if spec.auth_bearer else {}
+    victim_headers = {"Authorization": f"Bearer {spec.victim_bearer}"} if spec.victim_bearer else None
+    _, findings = await _run_ai_discover_scan(
+        config, spec.target, headers, "", spec.max_pages, victim_headers, list(spec.victim_refs)
+    )
+    return findings
+
+
 async def _run_job(spec: JobSpec) -> list[Finding]:
+    if spec.mode == "ai":
+        return await _run_ai_job(spec)
     config, engine, max_pages = _config_for(spec)
     return await _run_scan(config, max_pages, engine, budget=_Budget(None, None))
 

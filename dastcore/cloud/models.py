@@ -11,12 +11,17 @@ class JobSpec(BaseModel):
     """What to scan — the payload a user enqueues and a runner receives."""
 
     target: str
+    mode: Literal["scan", "ai"] = "scan"  # "scan" = web/API; "ai" = embedded-chatbot (OWASP LLM)
     engine: str = "http"
     profile: str = ""
     rps: float = 5.0
     auth_bearer: str = ""
     auth_cookie: str = ""
     allow_domains: list[str] = Field(default_factory=list)
+    # Embedded-chatbot ("ai") scans only:
+    max_pages: int = 200
+    victim_bearer: str = ""  # a second identity for the cross-tenant (BOLA/BFLA) checks
+    victim_refs: list[str] = Field(default_factory=list)  # how to name the victim tenant
 
 
 class JobResult(BaseModel):

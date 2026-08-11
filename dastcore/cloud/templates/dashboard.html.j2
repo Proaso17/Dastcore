@@ -21,16 +21,36 @@
   <div class="panel">
     <h2>Encolar escaneo</h2>
     <form method="post" action="/ui/jobs">
+      <label for="mode">Tipo</label>
+      <select id="mode" name="mode" onchange="cpToggleMode(this.value)">
+        <option value="scan">Web (vulnerabilidades clásicas)</option>
+        <option value="ai">Chatbot embebido (IA / OWASP LLM)</option>
+      </select>
       <label for="target">URL objetivo</label>
       <input id="target" name="target" placeholder="https://staging.example.com" required>
-      <div class="row3">
+      <div class="row3" data-mode="scan">
         <div><label for="engine">Motor</label>
           <select id="engine" name="engine"><option value="http">http</option><option value="headless">headless</option><option value="both">both</option></select></div>
         <div><label for="profile">Perfil</label>
           <select id="profile" name="profile"><option value="">(personalizado)</option><option value="quick">quick</option><option value="full">full</option><option value="api">api</option></select></div>
         <div style="display:flex; align-items:flex-end"><button type="submit" style="width:100%">Encolar</button></div>
       </div>
+      <div class="row3" data-mode="ai" hidden>
+        <div><label for="auth_bearer">Bearer (tenant)</label><input id="auth_bearer" name="auth_bearer" placeholder="eyJ…"></div>
+        <div><label for="victim_bearer">Bearer víctima (2.º tenant)</label><input id="victim_bearer" name="victim_bearer" placeholder="eyJ… (opcional)"></div>
+        <div style="display:flex; align-items:flex-end"><button type="submit" style="width:100%">Encolar</button></div>
+      </div>
+      <div data-mode="ai" hidden>
+        <label for="victim_ref">Cómo nombrar a la víctima (una por línea)</label>
+        <textarea id="victim_ref" name="victim_ref" rows="2" placeholder="unit 4B&#10;bob"></textarea>
+      </div>
     </form>
+    <script>
+      function cpToggleMode(mode) {
+        document.querySelectorAll('[data-mode]').forEach(function (el) { el.hidden = el.getAttribute('data-mode') !== mode; });
+      }
+      cpToggleMode(document.getElementById('mode').value);
+    </script>
   </div>
 
   <div class="panel">

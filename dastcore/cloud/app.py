@@ -43,6 +43,7 @@ def _job_summary(job: JobRow) -> dict:
     return {
         "id": job.id,
         "target": job.target,
+        "mode": job.mode,
         "engine": job.engine,
         "profile": job.profile,
         "status": job.status,
@@ -266,16 +267,33 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
 
     @app.post("/ui/jobs")
     def ui_enqueue(
-        request: Request, target: str = Form(...), engine: str = Form("http"), profile: str = Form("")
+        request: Request,
+        target: str = Form(...),
+        mode: str = Form("scan"),
+        engine: str = Form("http"),
+        profile: str = Form(""),
+        auth_bearer: str = Form(""),
+        victim_bearer: str = Form(""),
+        victim_ref: str = Form(""),
     ) -> Response:
         project_id = ui_project(request)
         if project_id is None:
             return RedirectResponse("/", status_code=303)
-        spec = JobSpec(
-            target=target.strip(),
-            engine=engine if engine in ("http", "headless", "both") else "http",
-            profile=profile if profile in ("quick", "full", "api") else "",
-        )
+        if mode == "ai":
+            spec = JobSpec(
+                target=target.strip(),
+                mode="ai",
+                auth_bearer=auth_bearer.strip(),
+                victim_bearer=victim_bearer.strip(),
+                victim_refs=[r.strip() for r in victim_ref.splitlines() if r.strip()],
+            )
+        else:
+            spec = JobSpec(
+                target=target.strip(),
+                engine=engine if engine in ("http", "headless", "both") else "http",
+                profile=profile if profile in ("quick", "full", "api") else "",
+                auth_bearer=auth_bearer.strip(),
+            )
         store.enqueue_job(project_id, spec)
         return RedirectResponse("/ui", status_code=303)
 

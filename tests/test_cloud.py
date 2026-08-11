@@ -142,6 +142,57 @@ async def test_runner_scans_target_and_reports(client: httpx.AsyncClient, mini_t
         assert "sqli-injection" in {f["rule_id"] for f in got["findings"]}
 
 
+async def test_runner_runs_embedded_chatbot_scan(client: httpx.AsyncClient, chatbot_app_url: str, monkeypatch) -> None:
+    """The whole SaaS loop for an 'ai' job: enqueue a chatbot scan with a second identity,
+    a runner claims it, discovers the bot and runs the LLM checks, and reports the findings.
+
+    The static crawler can't reach a JS chat XHR, so we feed the runner the requests the
+    headless engine would capture (same shim as the CLI/web discovery tests)."""
+    import dastcore.cli as cli
+    from dastcore.core.models import HttpRequest
+
+    auth_a = {"Authorization": "Bearer tok-a"}
+    candidates = [
+        HttpRequest(method="POST", url=f"{chatbot_app_url}/api/chat", headers=auth_a, json_body={"message": "hi"}),
+        HttpRequest(method="POST", url=f"{chatbot_app_url}/api/messages", headers=auth_a, json_body={"text": "n"}),
+    ]
+
+    class _FakeCrawler:
+        def __init__(self, http_client, max_pages=200):
+            pass
+
+        async def crawl(self, start_url):
+            return candidates
+
+    monkeypatch.setattr(cli, "HttpCrawler", _FakeCrawler)
+    async with client:
+        key = await _new_project(client)
+        runner_token = await _new_runner(client, key)
+        proj_h = {"Authorization": f"Bearer {key}"}
+        job_id = (
+            await client.post(
+                "/api/jobs",
+                json={
+                    "target": chatbot_app_url,
+                    "mode": "ai",
+                    "rps": 50,
+                    "auth_bearer": "tok-a",
+                    "victim_bearer": "tok-b",
+                    "victim_refs": ["unit 4B"],
+                },
+                headers=proj_h,
+            )
+        ).json()["id"]
+
+        assert await run_once(client, runner_token) is True
+
+        got = (await client.get(f"/api/jobs/{job_id}", headers=proj_h)).json()
+        assert got["status"] == "done"
+        rule_ids = {f["rule_id"] for f in got["findings"]}
+        assert "llm-stored-injection" in rule_ids
+        assert "llm-cross-tenant-leak" in rule_ids
+
+
 async def test_runner_with_empty_queue_returns_false(client: httpx.AsyncClient) -> None:
     async with client:
         key = await _new_project(client)
@@ -209,3 +260,27 @@ async def test_ui_login_and_dashboard(client: httpx.AsyncClient) -> None:
         assert dash.status_code == 200
         assert "Encolar escaneo" in dash.text
         assert "Runners" in dash.text
+        assert "Chatbot embebido" in dash.text  # the AI scan mode is offered in the enqueue form
+
+
+async def test_ui_enqueues_an_ai_chatbot_job(client: httpx.AsyncClient) -> None:
+    async with client:
+        key = await _new_project(client)
+        proj_h = {"Authorization": f"Bearer {key}"}
+        await client.post("/ui/login", data={"api_key": key}, follow_redirects=False)
+
+        enq = await client.post(
+            "/ui/jobs",
+            data={
+                "target": "https://app.test",
+                "mode": "ai",
+                "auth_bearer": "tok-a",
+                "victim_bearer": "tok-b",
+                "victim_ref": "unit 4B\nbob",
+            },
+            follow_redirects=False,
+        )
+        assert enq.status_code == 303
+
+        jobs = (await client.get("/api/jobs", headers=proj_h)).json()["jobs"]
+        assert len(jobs) == 1 and jobs[0]["mode"] == "ai"

@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     auth_bearer     TEXT,
     auth_cookie     TEXT,
     allow_domains   TEXT NOT NULL DEFAULT '[]',
+    mode            TEXT NOT NULL DEFAULT 'scan',
+    max_pages       INTEGER NOT NULL DEFAULT 200,
+    victim_bearer   TEXT,
+    victim_refs     TEXT NOT NULL DEFAULT '[]',
     status          TEXT NOT NULL DEFAULT 'queued',
     runner          TEXT,
     created_at      REAL NOT NULL,
@@ -81,6 +85,10 @@ CREATE TABLE IF NOT EXISTS schedules (
     auth_bearer      TEXT,
     auth_cookie      TEXT,
     allow_domains    TEXT NOT NULL DEFAULT '[]',
+    mode             TEXT NOT NULL DEFAULT 'scan',
+    max_pages        INTEGER NOT NULL DEFAULT 200,
+    victim_bearer    TEXT,
+    victim_refs      TEXT NOT NULL DEFAULT '[]',
     interval_minutes INTEGER NOT NULL,
     enabled          INTEGER NOT NULL DEFAULT 1,
     created_at       REAL NOT NULL,
@@ -91,6 +99,13 @@ CREATE TABLE IF NOT EXISTS schedules (
 
 # Columns added after the initial release, applied to pre-existing DBs on open.
 _JOB_MIGRATIONS = {"attempts": "INTEGER NOT NULL DEFAULT 0", "max_attempts": "INTEGER NOT NULL DEFAULT 3"}
+# Embedded-chatbot ("ai" mode) columns, added to both jobs and schedules.
+_AI_MIGRATIONS = {
+    "mode": "TEXT NOT NULL DEFAULT 'scan'",
+    "max_pages": "INTEGER NOT NULL DEFAULT 200",
+    "victim_bearer": "TEXT",
+    "victim_refs": "TEXT NOT NULL DEFAULT '[]'",
+}
 
 
 @dataclass
@@ -125,16 +140,24 @@ class ScheduleRow:
     created_at: float
     last_run_at: float | None
     next_run_at: float
+    mode: str = "scan"
+    max_pages: int = 200
+    victim_bearer: str | None = None
+    victim_refs: list[str] = field(default_factory=list)
 
     def spec(self) -> JobSpec:
         return JobSpec(
             target=self.target,
+            mode="ai" if self.mode == "ai" else "scan",
             engine=self.engine,
             profile=self.profile or "",
             rps=self.rps,
             auth_bearer=self.auth_bearer or "",
             auth_cookie=self.auth_cookie or "",
             allow_domains=self.allow_domains,
+            max_pages=self.max_pages,
+            victim_bearer=self.victim_bearer or "",
+            victim_refs=self.victim_refs,
         )
 
 
@@ -158,16 +181,24 @@ class JobRow:
     num_findings: int = 0
     severity_counts: dict[str, int] = field(default_factory=dict)
     error: str | None = None
+    mode: str = "scan"
+    max_pages: int = 200
+    victim_bearer: str | None = None
+    victim_refs: list[str] = field(default_factory=list)
 
     def spec(self) -> JobSpec:
         return JobSpec(
             target=self.target,
+            mode="ai" if self.mode == "ai" else "scan",
             engine=self.engine,
             profile=self.profile or "",
             rps=self.rps,
             auth_bearer=self.auth_bearer or "",
             auth_cookie=self.auth_cookie or "",
             allow_domains=self.allow_domains,
+            max_pages=self.max_pages,
+            victim_bearer=self.victim_bearer or "",
+            victim_refs=self.victim_refs,
         )
 
 
@@ -190,14 +221,16 @@ class Store:
         self._migrate()
 
     def _migrate(self) -> None:
-        if self._db.dialect == "postgres":
-            for name, decl in _JOB_MIGRATIONS.items():
-                self._db.execute(f"ALTER TABLE jobs ADD COLUMN IF NOT EXISTS {name} {decl}")
-        else:
-            existing = {row["name"] for row in self._db.query("PRAGMA table_info(jobs)")}
-            for name, decl in _JOB_MIGRATIONS.items():
-                if name not in existing:
-                    self._db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
+        columns = {"jobs": {**_JOB_MIGRATIONS, **_AI_MIGRATIONS}, "schedules": dict(_AI_MIGRATIONS)}
+        for table, migrations in columns.items():
+            if self._db.dialect == "postgres":
+                for name, decl in migrations.items():
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {decl}")
+            else:
+                existing = {row["name"] for row in self._db.query(f"PRAGMA table_info({table})")}
+                for name, decl in migrations.items():
+                    if name not in existing:
+                        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
         self._db.close()
@@ -250,13 +283,18 @@ class Store:
             num_findings=row["num_findings"],
             severity_counts=json.loads(row["severity_counts"] or "{}"),
             error=row["error"],
+            mode=row["mode"] if "mode" in row.keys() else "scan",
+            max_pages=row["max_pages"] if "max_pages" in row.keys() else 200,
+            victim_bearer=row["victim_bearer"] if "victim_bearer" in row.keys() else None,
+            victim_refs=json.loads(row["victim_refs"] or "[]") if "victim_refs" in row.keys() else [],
         )
 
     def enqueue_job(self, project_id: str, spec: JobSpec) -> str:
         job_id = uuid.uuid4().hex[:12]
         self._db.execute(
             "INSERT INTO jobs (id, project_id, target, engine, profile, rps, auth_bearer, auth_cookie, "
-            "allow_domains, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+            "allow_domains, mode, max_pages, victim_bearer, victim_refs, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
             (
                 job_id,
                 project_id,
@@ -267,6 +305,10 @@ class Store:
                 spec.auth_bearer or None,
                 spec.auth_cookie or None,
                 json.dumps(spec.allow_domains),
+                spec.mode,
+                spec.max_pages,
+                spec.victim_bearer or None,
+                json.dumps(spec.victim_refs),
                 time.time(),
             ),
         )
@@ -413,6 +455,10 @@ class Store:
             created_at=row["created_at"],
             last_run_at=row["last_run_at"],
             next_run_at=row["next_run_at"],
+            mode=row["mode"] if "mode" in row.keys() else "scan",
+            max_pages=row["max_pages"] if "max_pages" in row.keys() else 200,
+            victim_bearer=row["victim_bearer"] if "victim_bearer" in row.keys() else None,
+            victim_refs=json.loads(row["victim_refs"] or "[]") if "victim_refs" in row.keys() else [],
         )
 
     def create_schedule(self, project_id: str, spec: ScheduleCreate, now: float) -> str:
@@ -420,8 +466,8 @@ class Store:
         interval = max(1, spec.interval_minutes)
         self._db.execute(
             "INSERT INTO schedules (id, project_id, target, engine, profile, rps, auth_bearer, auth_cookie, "
-            "allow_domains, interval_minutes, enabled, created_at, next_run_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            "allow_domains, mode, max_pages, victim_bearer, victim_refs, interval_minutes, enabled, created_at, "
+            "next_run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
             (
                 schedule_id,
                 project_id,
@@ -432,6 +478,10 @@ class Store:
                 spec.auth_bearer or None,
                 spec.auth_cookie or None,
                 json.dumps(spec.allow_domains),
+                spec.mode,
+                spec.max_pages,
+                spec.victim_bearer or None,
+                json.dumps(spec.victim_refs),
                 interval,
                 now,
                 now + interval * 60,
