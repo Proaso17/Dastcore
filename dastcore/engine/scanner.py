@@ -25,6 +25,7 @@ import httpx
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.detectors.active_checks import check_cors_reflection
+from dastcore.detectors.exposure import check_source_map
 from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
 from dastcore.engine.oast import OastInteraction, OastProvider, substitute_oast
@@ -163,6 +164,7 @@ class Scanner:
         # Active per-request check that needs a crafted header rather than a fuzzed param.
         if self._active_checks and request.method == "GET":
             findings.extend(await check_cors_reflection(self._http, request))
+            findings.extend(await check_source_map(self._http, request, base_response))
 
         return findings
 

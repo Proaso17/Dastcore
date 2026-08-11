@@ -28,6 +28,16 @@ _SENSITIVE_FILES: list[tuple[str, str, str, str]] = [
     (".htpasswd", "Exposed .htpasswd", r":\$(?:apr1|2y|1)\$", "high"),
     ("config.php.bak", "Exposed PHP config backup", r"<\?php|\$db|password", "high"),
     (".DS_Store", "Exposed .DS_Store", r"Bud1|\x00\x00\x00", "low"),
+    # API schemas: reachable but a recon surface (info) — signature keeps it unambiguous.
+    ("swagger.json", "Exposed OpenAPI/Swagger schema", r'"swagger"\s*:|"openapi"\s*:', "info"),
+    ("openapi.json", "Exposed OpenAPI/Swagger schema", r'"openapi"\s*:|"swagger"\s*:', "info"),
+    # Spring Boot Actuator: /env leaks config + property sources (often with secrets).
+    ("actuator/env", "Exposed Spring Actuator /env", r'"propertySources"\s*:|"activeProfiles"\s*:', "high"),
+    ("actuator", "Exposed Spring Actuator index", r'"_links"\s*:.*"(?:env|health|beans)"', "medium"),
+    # Apache/Nginx server status pages.
+    ("server-status", "Exposed server-status page", r"Apache Server Status|Server Version:|Total Accesses", "medium"),
+    # Common editor/backup leftovers of a config file.
+    (".env.bak", "Exposed .env backup", r"(?im)^[A-Z0-9_]+\s*=", "high"),
 ]
 
 

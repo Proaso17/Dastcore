@@ -746,6 +746,7 @@ _RULE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("active-dangerous-methods", "http_methods"),
     ("active-graphql-", "graphql"),
     ("active-sensitive-file", "sensitive_file"),
+    ("source-map-exposure", "sensitive_file"),
     ("dom-xss", "xss"),
     # LLM classes (findings carry family "llm", which is intentionally not a guide key so
     # these rule-specific guides win; the trailing "llm-" is the catch-all for the rest).

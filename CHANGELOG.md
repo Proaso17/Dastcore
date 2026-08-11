@@ -9,6 +9,17 @@ minor releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Exposed JavaScript source maps** (CWE-540, Module 14): a passive check that, when a
+  served `.js` references a `//# sourceMappingURL=`, fetches it and reports only a
+  *reachable* map that parses as Source Map v3 — reconstructing the original frontend
+  source. Inline (`data:`) maps and missing/non-map URLs never fire. Wired into the
+  scanner's per-request active checks.
+- **More exposed-path probes**: `swagger.json` / `openapi.json` (recon surface, info),
+  Spring Boot `actuator` / `actuator/env` (config + secrets), `server-status`, and an
+  `.env.bak` backup — all content-signature gated to stay false-positive-free.
+
 ### Changed
 
 - **LLM improper output handling (LLM05) precision**: the insecure-output check now confirms
