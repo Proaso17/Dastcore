@@ -153,6 +153,12 @@ acceso a datos (RAG), ambas confirmadas con canary fresco → sin falsos positiv
   leyendo el estado de la víctima. Solo reporta si el canary aparece allí → la herramienta
   no aplica autorización por tenant ni confirmación. (Misma segunda identidad que arriba.)
 
+Estas comprobaciones están disponibles en las tres superficies del producto: el CLI
+(`dastcore ai --discover`), el **panel web** (`dastcore serve`, modo "Chatbot embebido"),
+el **runner cloud** (job con `mode: ai`, encolable desde la UI o la API) y como **job de
+CI** (ver [`examples/github-action-chatbot.yml`](examples/github-action-chatbot.yml), que
+sube SARIF a code scanning).
+
 ## Base de avisos de versiones (componentes con CVE conocido)
 
 dastcore hace fingerprint de `producto + versión` (cabeceras `Server`/`X-Powered-By`,

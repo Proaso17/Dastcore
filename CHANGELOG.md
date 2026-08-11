@@ -114,6 +114,13 @@ minor releases.
   (`dastcore/vulndb/nvd.py`) is pure and unit-tested; the merge de-dupes and preserves
   curated entries. `--since-days` / `--min-severity` keep the diff small. A weekly CI
   workflow (`.github/workflows/nvd-sync.yml`) opens a review PR — never auto-merges.
+- **Embedded-chatbot scan on the cloud runner + in CI**: the self-hosted runner can now
+  run the `ai --discover` pipeline for an internal app's chatbot — a new `mode: "ai"` job
+  (with an optional second identity for the cross-tenant checks), enqueuable from the
+  control-plane UI or API, with findings/attack-chain flowing back like any other job
+  (`JobSpec`/store gained `mode`/`max_pages`/`victim_bearer`/`victim_refs` columns +
+  migrations). An example CI workflow (`examples/github-action-chatbot.yml`) runs it and
+  uploads SARIF to GitHub code scanning.
 - **Embedded-chatbot scan in the web dashboard** (`dastcore serve`): the new form mode
   "Chatbot embebido (IA / OWASP LLM)" launches the `ai --discover` pipeline from the UI —
   crawl, auto-detect the bot, run the LLM checks — with an optional second identity

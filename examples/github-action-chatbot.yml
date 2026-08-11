@@ -1,0 +1,57 @@
+# Example GitHub Actions workflow: analyze your app's EMBEDDED CHATBOT (OWASP LLM Top 10)
+# with dastcore and upload the results to GitHub code scanning (Security tab) as SARIF.
+#
+# Copy to .github/workflows/dastcore-chatbot.yml in your repo and adjust STAGING_URL.
+# `ai --discover` crawls the app, auto-detects the chat endpoint and runs the LLM checks
+# (prompt injection, stored/second-order injection, and — with a second identity — the
+# cross-tenant read/action checks). Only ever point this at an app you are authorized to test.
+name: dastcore chatbot (OWASP LLM)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1" # weekly, Mondays 04:00 UTC
+
+permissions:
+  security-events: write # required to upload SARIF to code scanning
+  contents: read
+
+jobs:
+  llm:
+    runs-on: ubuntu-latest
+    env:
+      STAGING_URL: https://staging.example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dastcore
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[headless]"
+          python -m playwright install --with-deps chromium # captures the chat widget's XHR
+
+      - name: Scan the embedded chatbot
+        # Auth for a first tenant via a repo secret; add a second identity
+        #   --victim-bearer "${{ secrets.DASTCORE_VICTIM_BEARER }}" --victim-ref "unit 4B"
+        # to also run the cross-tenant (BOLA/BFLA) checks.
+        # --fail-on none: let the SARIF upload + code-scanning alerts be the gate
+        # (use --fail-on high to break the build on high/critical instead).
+        run: |
+          dastcore ai "$STAGING_URL" \
+            --discover \
+            --i-have-authorization \
+            --auth-bearer "${{ secrets.DASTCORE_BEARER }}" \
+            --format sarif \
+            --output dastcore-llm.sarif \
+            --fail-on none
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: dastcore-llm.sarif
+          category: dastcore-llm

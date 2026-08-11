@@ -126,7 +126,7 @@ Presets disponibles: `openai`, `azure-openai`, `anthropic`, `ollama`, `cohere`, 
 
 Si el endpoint responde en **streaming** (SSE/NDJSON, típico de OpenAI/Ollama), añade `--ai-stream` y dastcore reensambla los *deltas* automáticamente. El reporte HTML de `dastcore ai` (`-f html -o report.html`) se agrupa por categoría OWASP LLM.
 
-Documentación: **[Manual de uso](docs/manual.html)** (guía visual con capturas: CLI, panel web y cloud) · [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · [`examples/github-action.yml`](examples/github-action.yml) (CI/CD).
+Documentación: **[Manual de uso](docs/manual.html)** (guía visual con capturas: CLI, panel web y cloud) · [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · CI/CD: [`examples/github-action.yml`](examples/github-action.yml) (escaneo web) y [`examples/github-action-chatbot.yml`](examples/github-action-chatbot.yml) (chatbot embebido / OWASP LLM, SARIF a code scanning).
 
 ## Estado del proyecto
 
