@@ -719,6 +719,26 @@ _GUIDES: dict[str, dict] = {
             ),
         ),
     },
+    "race": {
+        "steps": (
+            "Make the check-and-act atomic: don't read a flag and then update it in two steps.",
+            "Enforce the limit in the database — a UNIQUE constraint, a row lock (SELECT … FOR UPDATE), or a conditional/compare-and-set update whose affected-row count you check.",
+            "Use idempotency keys for one-time actions so a retry/replay can't double-apply.",
+            "Avoid TOCTOU across services; hold the invariant where the state actually lives.",
+        ),
+        "example": CodeExample(
+            lang="sql",
+            bad="SELECT used FROM coupons WHERE id=?;  -- app checks, then:\nUPDATE coupons SET used=1 WHERE id=?;",
+            good="UPDATE coupons SET used=1 WHERE id=? AND used=0;  -- atomic; apply only if 1 row changed",
+            note="A single conditional UPDATE (or a unique constraint) can't be raced the way check-then-act can.",
+        ),
+        "references": (
+            Reference(
+                "OWASP WSTG: Test for Process Timing / Race Conditions",
+                "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/",
+            ),
+        ),
+    },
     "llm_generic": {
         "steps": (
             "Keep secrets and system prompts out of the model's reachable context; assume anything in context can be extracted.",

@@ -71,6 +71,7 @@ from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
 from dastcore.discovery.openapi import fetch_and_parse_openapi
 from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
+from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 from dastcore.report import render_html, render_json, render_sarif
@@ -438,6 +439,7 @@ async def _run_scan(
     progress: _ProgressAdapter | None = None,
     stored_scan: bool = False,
     waf_evasion: bool = False,
+    test_race: bool = False,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -506,6 +508,9 @@ async def _run_scan(
             )
             all_requests = list(discovered.values())
             extra_findings.extend(await check_shellshock(client, all_requests))
+            if test_race:
+                progress.status("Probando race conditions (single-packet)…")
+                extra_findings.extend(await run_race_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
     finally:
@@ -737,6 +742,12 @@ def scan(
         help="Si el WAF bloquea un payload, reintenta con encoders/tampers para confirmar la vuln enmascarada "
         "(intrusivo; no se activa en el perfil quick).",
     ),
+    test_race: bool = typer.Option(
+        False,
+        "--test-race",
+        help="Prueba race conditions en endpoints de escritura con una ráfaga concurrente (intrusivo; "
+        "no se activa en el perfil quick).",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -952,6 +963,7 @@ def scan(
                     _ProgressAdapter(progress),
                     stored_scan=stored,
                     waf_evasion=waf_evasion and profile != "quick",
+                    test_race=test_race and profile != "quick",
                 )
             )
     except SessionLoginError as exc:
