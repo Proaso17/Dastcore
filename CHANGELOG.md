@@ -11,6 +11,16 @@ minor releases.
 
 ### Added
 
+- **JWT attacks: signature-not-verified, kid injection, RS256→HS256 confusion** (CWE-347,
+  Module 10): three new active checks that run when a scan carries a JWT bearer, each gated
+  by a differential control so they can't fire on an unauthenticated endpoint. (1) A JWT
+  with a *wrong* signature accepted while a non-JWT bearer is rejected → the server never
+  verifies the signature (claims can be tampered). (2) A path-traversal `kid` pointing at
+  `/dev/null` with an empty-key HMAC signature accepted → attacker-controlled signing key.
+  (3) For RS* tokens, the server's RSA public key is fetched from JWKS and used to forge an
+  HS256 token — a naive verifier that trusts the token's `alg` accepts it. Also hardened
+  `forge_bad_signature` to flip the *first* signature char (the trailing char can carry too
+  few significant bits to change an RSA signature's decoded bytes).
 - **Exposed JavaScript source maps** (CWE-540, Module 14): a passive check that, when a
   served `.js` references a `//# sourceMappingURL=`, fetches it and reports only a
   *reachable* map that parses as Source Map v3 — reconstructing the original frontend

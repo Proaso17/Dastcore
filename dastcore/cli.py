@@ -56,7 +56,14 @@ from dastcore.detectors.active_checks import (
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
-from dastcore.detectors.jwt import check_jwt_none_acceptance, check_jwt_weak_secret, looks_like_jwt
+from dastcore.detectors.jwt import (
+    check_jwt_algorithm_confusion,
+    check_jwt_kid_injection,
+    check_jwt_none_acceptance,
+    check_jwt_signature_not_verified,
+    check_jwt_weak_secret,
+    looks_like_jwt,
+)
 from dastcore.detectors.shellshock import check_shellshock
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
@@ -466,8 +473,12 @@ async def _run_scan(
             extra_findings.extend(await check_trace_method(client, target))
             extra_findings.extend(await check_dangerous_methods(client, target))
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
-                extra_findings.extend(await check_jwt_none_acceptance(client, target, config.auth.bearer_token))
-                extra_findings.extend(await check_jwt_weak_secret(client, target, config.auth.bearer_token))
+                jwt_token = config.auth.bearer_token
+                extra_findings.extend(await check_jwt_none_acceptance(client, target, jwt_token))
+                extra_findings.extend(await check_jwt_weak_secret(client, target, jwt_token))
+                extra_findings.extend(await check_jwt_signature_not_verified(client, target, jwt_token))
+                extra_findings.extend(await check_jwt_kid_injection(client, target, jwt_token))
+                extra_findings.extend(await check_jwt_algorithm_confusion(client, target, jwt_token))
 
             scanner = Scanner(
                 client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency, stored_scan=stored_scan

