@@ -81,11 +81,12 @@ class Scanner:
         self._oob_poll_delay = oob_poll_delay
         self._baseline_samples = max(1, baseline_samples)
         self._stored_scan = stored_scan
-        # Extra baseline samples only pay off for timing oracles (to measure jitter);
-        # skip them entirely when no rule is time-based, keeping request volume down.
+        # Extra baseline samples pay off for two blind oracles: timing (to measure jitter)
+        # and boolean-blind (to check the page is stable enough to trust a TRUE/FALSE diff).
+        # Skip them otherwise to keep request volume down.
         self._needs_baseline = any(
             check.type == "time_based" for rule in rules if rule.oracle for check in rule.oracle.checks
-        )
+        ) or any(rule.is_boolean for rule in rules)
 
     async def _send(self, request: HttpRequest) -> HttpResponse | None:
         try:
@@ -241,7 +242,14 @@ class Scanner:
 
     async def _try_boolean(self, rule: Rule, point, baseline: BaselineProfile) -> Finding | None:
         """Boolean-based blind confirmation: send a TRUE and a FALSE condition and report
-        only when the TRUE one behaves like the baseline while the FALSE one differs."""
+        only when the TRUE one behaves like the baseline while the FALSE one differs.
+
+        Gated on baseline stability: if the page isn't identical across repeated identical
+        requests (after masking known volatile regions), its own noise could masquerade as
+        the FALSE-vs-baseline difference — so we abstain rather than risk a false positive.
+        """
+        if not baseline.stable:
+            return None
         base = baseline.primary
         for pair in rule.boolean_pairs:
             true_value = pair.when_true.replace("{{base}}", point.base_value)

@@ -11,6 +11,13 @@ minor releases.
 
 ### Changed
 
+- **Boolean-blind SQLi precision**: the boolean oracle now abstains when the page isn't
+  stable across repeated identical requests (after masking known volatile regions). A
+  page with its own rotating content (a "promo of the day" banner, a shifting widget)
+  could otherwise make the FALSE-vs-baseline difference look like an injection signal —
+  a false positive. The baseline is now sampled for boolean rules too (not only timing),
+  so stability can be judged. The benchmark's stable boolean positive still detects
+  (1.00 / 1.00 / 1.00 unchanged).
 - **Open-redirect precision**: a new target-host oracle confirms the redirect's actual
   destination host is the injected probe, instead of matching the probe string anywhere
   in the `Location` header. A same-origin URL that reflects the probe in a query param

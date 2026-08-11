@@ -82,3 +82,29 @@ async def test_no_false_positive_when_input_is_echoed() -> None:
     scanner = Scanner(_EchoClient(), [_boolean_rule()], active_checks=False)
     findings = await scanner.scan_request(_request())
     assert not any(f.rule_id == "sqli-boolean-blind" for f in findings)
+
+
+class _UnstablePageClient:
+    """A page with a rotating banner (unstable), where TRUE happens to match one baseline
+    sample and FALSE differs — exactly the shape that would fool a naive boolean oracle."""
+
+    def __init__(self) -> None:
+        self.base_calls = 0
+
+    async def request(self, method: str, url: str, **kwargs) -> HttpResponse:
+        value = (kwargs.get("params") or {}).get("id", "1")
+        if "and" not in value.lower():  # the base request (no condition), sampled repeatedly
+            self.base_calls += 1
+            banner = "" if self.base_calls == 1 else "<aside>promo of the day: buy one get one</aside>"
+            return HttpResponse(status_code=200, text=TRUE_PAGE + banner, url=url)
+        page = TRUE_PAGE if "1=1" in value else FALSE_PAGE
+        return HttpResponse(status_code=200, text=page, url=url)
+
+
+async def test_no_false_positive_when_baseline_is_unstable() -> None:
+    # Without the stability gate this confirms (TRUE == first baseline sample, FALSE differs);
+    # with it, the unstable baseline makes the scanner abstain — the page's own noise is not
+    # a reliable TRUE/FALSE signal.
+    scanner = Scanner(_UnstablePageClient(), [_boolean_rule()], active_checks=False)
+    findings = await scanner.scan_request(_request())
+    assert not any(f.rule_id == "sqli-boolean-blind" for f in findings)
