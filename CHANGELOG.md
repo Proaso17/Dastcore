@@ -11,6 +11,18 @@ minor releases.
 
 ### Changed
 
+- **LLM improper output handling (LLM05) precision**: the insecure-output check now confirms
+  via a `markup` oracle that verifies the canary landed inside an *executable* HTML/markdown
+  sink in the model's answer (a `<script>` body, an `on*` event handler, a `javascript:`/
+  `data:` URL) — not merely that the token appeared as text (which a refusal or paraphrase
+  produces). Payloads cover script, event-handler, SVG and markdown-link sinks.
+- **System-prompt-leak (LLM07) precision**: the loose persona pattern (`You are [A-Z]…`,
+  which matched conversational "You are asking/right/welcome") now requires a role keyword
+  to follow; strong signals (leaked instructions/rules, `SECRET_KEY`, `sk-…`) are kept.
+- **Resilient multi-probe LLM scans**: an embedded-chatbot scan (`ai --discover`) no longer
+  aborts if a single probe hits a transient network error/timeout — the chat client is
+  `tolerant` in discovery (empty answer for that probe), while the direct `ai <url>` mode
+  still surfaces an unreachable endpoint. Fixes a flaky web-dashboard AI scan under load.
 - **Time-based blind SQLi precision (proportional-delay confirmation)**: a single slow
   response is no longer enough. The scanner now sends the same injection with three sleep
   values — 0 (control), D and 2D — and confirms only when the *added* delay both clears the

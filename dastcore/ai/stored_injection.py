@@ -21,6 +21,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+import httpx
+
 from dastcore.ai.client import AiChatClient
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import ChainStep, Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
@@ -83,7 +85,7 @@ class StoredInjectionScanner:
             return await self._http.request(
                 sink.method, sink.url, headers=sink.headers or None, json={sink.field: text}
             )
-        except (OutOfScopeError, BudgetExceededError):
+        except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
             return None
 
     async def _plant_and_trigger(self, sink: WriteEndpoint) -> tuple[str, str] | None:

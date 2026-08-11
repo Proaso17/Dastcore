@@ -1171,7 +1171,9 @@ async def _run_ai_scan(
 def _chat_for(client: HttpClient, profile: ChatEndpointProfile, headers: dict[str, str]) -> AiChatClient:
     kwargs = profile.client_kwargs()
     kwargs["headers"] = {**(kwargs.get("headers") or {}), **headers}  # CLI auth headers win
-    return AiChatClient(client, profile.url, **kwargs)
+    # Discovery already proved the endpoint reachable, so treat later per-probe failures as
+    # transient (empty answer) rather than aborting the whole multi-probe scan.
+    return AiChatClient(client, profile.url, tolerant=True, **kwargs)
 
 
 async def _run_ai_discover_scan(

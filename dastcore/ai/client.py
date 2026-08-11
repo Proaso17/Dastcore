@@ -15,7 +15,9 @@ from __future__ import annotations
 import json
 import secrets
 
-from dastcore.core.http_client import HttpClient
+import httpx
+
+from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import HttpRequest, HttpResponse
 
 # Response fields tried, in order, when no explicit path is configured.
@@ -112,6 +114,7 @@ class AiChatClient:
         headers: dict[str, str] | None = None,
         stream: bool = False,
         stream_path: str | None = None,
+        tolerant: bool = False,
     ) -> None:
         self._http = http_client
         self._url = url
@@ -123,6 +126,10 @@ class AiChatClient:
         self._headers = headers or {}
         self._stream = stream
         self._stream_path = stream_path
+        # When tolerant, a single probe's network failure yields an empty answer instead of
+        # raising — so one flaky/rate-limited request can't abort a whole multi-probe scan.
+        # Off by default so the direct `ai <url>` mode still surfaces an unreachable endpoint.
+        self._tolerant = tolerant
 
     def _build_body(
         self,
@@ -154,9 +161,14 @@ class AiChatClient:
         return HttpRequest(method=self._method, url=self._url, headers=dict(self._headers), json_body=body)  # type: ignore[arg-type]
 
     async def _send(self, request: HttpRequest) -> tuple[str, HttpRequest, HttpResponse]:
-        response = await self._http.request(
-            request.method, request.url, headers=request.headers or None, json=request.json_body
-        )
+        try:
+            response = await self._http.request(
+                request.method, request.url, headers=request.headers or None, json=request.json_body
+            )
+        except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
+            if self._tolerant:
+                return "", request, HttpResponse(status_code=0, text="", url=request.url)
+            raise
         if self._stream:
             return reassemble_stream(response.text, self._stream_path), request, response
         try:

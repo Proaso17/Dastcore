@@ -21,6 +21,8 @@ import secrets
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+import httpx
+
 from dastcore.ai.client import AiChatClient
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import ChainStep, Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
@@ -69,7 +71,7 @@ class ActionAgencyScanner:
         rb = self._readback
         try:
             response = await self._http.request(rb.method, rb.url, headers=rb.headers or None)
-        except (OutOfScopeError, BudgetExceededError):
+        except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
             return ""
         return response.text if response is not None else ""
 

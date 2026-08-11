@@ -21,6 +21,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+import httpx
+
 from dastcore.ai.client import AiChatClient
 from dastcore.ai.stored_injection import WriteEndpoint, _new_canary
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
@@ -70,7 +72,7 @@ class CrossTenantScanner:
             response = await self._http.request(
                 sink.method, sink.url, headers=sink.headers or None, json={sink.field: f"memo {canary}"}
             )
-        except (OutOfScopeError, BudgetExceededError):
+        except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
             return None
         return canary if response is not None else None
 
