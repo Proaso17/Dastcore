@@ -583,6 +583,25 @@ class Store:
     def delete_notification(self, project_id: str) -> None:
         self._db.execute("DELETE FROM notifications WHERE project_id=?", (project_id,))
 
+    def trend_points(self, project_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        """Completed scans for a project, oldest→newest, as lightweight points for trend charts:
+        id, target, finished_at, num_findings, severity_counts. Bounded by ``limit``."""
+        rows = self._db.query(
+            "SELECT id, target, finished_at, num_findings, severity_counts FROM jobs "
+            "WHERE project_id=? AND status='done' ORDER BY finished_at ASC, id ASC LIMIT ?",
+            (project_id, limit),
+        )
+        return [
+            {
+                "id": row["id"],
+                "target": row["target"],
+                "finished_at": row["finished_at"],
+                "num_findings": row["num_findings"],
+                "severity_counts": json.loads(row["severity_counts"] or "{}"),
+            }
+            for row in rows
+        ]
+
     def new_findings_since_last(self, project_id: str, job_id: str) -> list[Finding]:
         """Findings present in ``job_id`` but not in the project's previous completed scan of
         the same target — the regression set. Empty for the first scan of a target (no prior

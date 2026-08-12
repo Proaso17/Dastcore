@@ -80,6 +80,46 @@ def _schedule_summary(sched: ScheduleRow) -> dict:
     }
 
 
+def _sparkline_points(values: list[int], width: int = 130, height: int = 30, pad: int = 3) -> str:
+    """An SVG polyline `points` string plotting ``values`` (findings-per-scan) over time."""
+    if not values:
+        return ""
+    low, high = min(values), max(values)
+    span = (high - low) or 1
+    step = (width - 2 * pad) / (len(values) - 1) if len(values) > 1 else 0.0
+    coords = []
+    for i, value in enumerate(values):
+        x = pad + i * step
+        y = height - pad - (value - low) / span * (height - 2 * pad)
+        coords.append(f"{x:.1f},{y:.1f}")
+    return " ".join(coords)
+
+
+def _build_trends(points: list[dict]) -> list[dict]:
+    """Group completed scans by target into a trend row: scan count, latest/previous finding
+    counts and their delta, the latest severity breakdown, and a sparkline of counts over time."""
+    by_target: dict[str, list[dict]] = {}
+    for point in points:
+        by_target.setdefault(point["target"], []).append(point)
+    trends = []
+    for target, series in by_target.items():
+        counts = [p["num_findings"] for p in series]
+        latest, previous = counts[-1], (counts[-2] if len(counts) > 1 else None)
+        trends.append(
+            {
+                "target": target,
+                "scans": len(series),
+                "latest": latest,
+                "previous": previous,
+                "delta": (latest - previous) if previous is not None else None,
+                "severity_counts": series[-1]["severity_counts"],
+                "sparkline": _sparkline_points(counts),
+            }
+        )
+    trends.sort(key=lambda t: (t["latest"], t["scans"]), reverse=True)
+    return trends
+
+
 def _build_env() -> Environment:
     env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=select_autoescape(["html", "j2"]))
     env.filters["datetime"] = lambda ts: _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "—"
@@ -155,6 +195,16 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
     def list_jobs(authorization: str = Header(default="")) -> dict:
         project_id = require_project(authorization)
         return {"jobs": [_job_summary(job) for job in store.list_jobs(project_id)]}
+
+    @app.get("/api/trends")
+    def get_trends(authorization: str = Header(default="")) -> dict:
+        project_id = require_project(authorization)
+        trends = _build_trends(store.trend_points(project_id))
+        return {
+            "trends": [
+                {k: t[k] for k in ("target", "scans", "latest", "previous", "delta", "severity_counts")} for t in trends
+            ]
+        }
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, authorization: str = Header(default="")) -> dict:
@@ -328,6 +378,7 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
             jobs=[_job_summary(j) for j in store.list_jobs(project_id)],
             runners=[_runner_summary(r) for r in store.list_runners(project_id)],
             schedules=[_schedule_summary(s) for s in store.list_schedules(project_id)],
+            trends=_build_trends(store.trend_points(project_id)),
             intervals=_INTERVALS,
             notification=notification,
             new_runner_token=new_runner_token,

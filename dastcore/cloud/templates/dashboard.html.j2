@@ -76,6 +76,33 @@
     {% else %}<div class="empty">Sin trabajos. Encola uno arriba.</div>{% endif %}
   </div>
 
+  {% if trends %}
+  <div class="panel">
+    <h2>Tendencias por objetivo</h2>
+    <p class="muted">Hallazgos por escaneo a lo largo del tiempo. La flecha compara el último escaneo con el anterior.</p>
+    <div class="overflow"><table>
+      <thead><tr><th>Objetivo</th><th>Escaneos</th><th>Últimos hallazgos</th><th>Δ</th><th>Tendencia</th></tr></thead>
+      <tbody>
+        {% for t in trends %}
+        <tr>
+          <td>{{ t.target }}</td>
+          <td class="muted">{{ t.scans }}</td>
+          <td><strong>{{ t.latest }}</strong>
+            {% for sev in ['critical','high','medium','low'] %}{% if t.severity_counts.get(sev) %}<span class="badge sev-{{ sev }}">{{ t.severity_counts[sev] }}</span>{% endif %}{% endfor %}</td>
+          <td>{% if t.delta is none %}<span class="muted">—</span>
+              {% elif t.delta > 0 %}<span class="delta-up">▲ +{{ t.delta }}</span>
+              {% elif t.delta < 0 %}<span class="delta-down">▼ {{ t.delta }}</span>
+              {% else %}<span class="muted">= 0</span>{% endif %}</td>
+          <td><svg width="130" height="30" viewBox="0 0 130 30" preserveAspectRatio="none" aria-label="tendencia">
+              <polyline fill="none" stroke="currentColor" stroke-width="1.5" points="{{ t.sparkline }}"/>
+            </svg></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+  {% endif %}
+
   <div class="panel">
     <h2>Runners ({{ runners | length }})</h2>
     {% if runners %}
