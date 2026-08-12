@@ -67,6 +67,8 @@ from dastcore.detectors.jwt import (
     check_jwt_weak_secret,
     looks_like_jwt,
 )
+from dastcore.detectors.mass_assignment import run_mass_assignment_checks
+from dastcore.detectors.nosqli import run_nosql_checks
 from dastcore.detectors.shellshock import check_shellshock
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
@@ -513,6 +515,8 @@ async def _run_scan(
             )
             all_requests = list(discovered.values())
             extra_findings.extend(await check_shellshock(client, all_requests))
+            extra_findings.extend(await run_nosql_checks(client, all_requests))
+            extra_findings.extend(await run_mass_assignment_checks(client, all_requests))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))

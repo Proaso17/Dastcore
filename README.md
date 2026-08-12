@@ -52,7 +52,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | Clase | Cómo | CWE / OWASP |
 |---|---|---|
 | SQL Injection (error + **boolean-blind TRUE/FALSE** + blind time-based) | regla YAML | CWE-89 / WSTG-INPV-05 |
-| NoSQL Injection (error-based) | regla YAML | CWE-943 / WSTG-INPV-05 |
+| NoSQL Injection (error-based **+ operator injection `$ne`/`$eq` con oráculo diferencial de 3 vías → bypass de auth**, JSON y form/qs bracket) | regla YAML + detector activo | CWE-943 / WSTG-INPV-05 |
 | **XPath Injection** (error-based) | regla YAML | CWE-643 / WSTG-INPV-09 |
 | **LDAP Injection** (error-based) | regla YAML | CWE-90 / WSTG-INPV-06 |
 | XSS reflejado (múltiples contextos) + DOM-based + **almacenado/2º orden** (`--stored`) | regla YAML + headless | CWE-79 / WSTG-INPV-01/02 |
@@ -72,6 +72,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Host header injection** | regla YAML (headers) | CWE-644 / WSTG-INPV-17 |
 | CORS mal configurado (wildcard+creds **y origin reflejado**) | pasivo + activo | CWE-942 / WSTG-CLNT-07 |
 | BOLA/IDOR, BFLA, missing-auth | detector multi-sesión | CWE-639/285/306 / API1/5/2 |
+| **Mass assignment / over-posting** (inyecta un campo privilegiado — `role`/`is_admin`/`owner`/`balance` — y confirma por reflexión diferencial que el servidor lo bindeó) | detector activo | CWE-915 / API3:2023 |
 | **JWT: `alg:none`, secreto HMAC débil, firma no verificada, `kid` injection, confusión RS256→HS256** (todos con control diferencial anti-FP) | detector activo (bearer JWT) | CWE-347 / API2:2023 |
 | **Exposición de objeto serializado** (Java/PHP/pickle → sink de deserialización) | pasivo | CWE-502 / A08:2021 |
 | **Envío de credenciales en claro** (form password → acción `http://`) | pasivo | CWE-319 / WSTG-ATHN-01 |
