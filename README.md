@@ -65,6 +65,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |
 | **XML Injection** (error-based, rompe el parser XML) | regla YAML | CWE-91 / WSTG-INPV-07 |
 | CRLF / HTTP header injection (OAST) | regla YAML | CWE-93 / WSTG-INPV-16 |
+| **CSRF: token no verificado** (reenvía la escritura sin el token y con `Origin` ajeno; si la acción se completa igual, el token no se valida) — `--test-csrf`, intrusivo, no en quick | detector activo | CWE-352 / WSTG-SESS-05 |
 | **CSV / Formula Injection** (fórmula reflejada sin escapar en export CSV/Excel) | regla YAML (gated por content-type) | CWE-1236 / A03:2021 |
 | Path traversal / LFI | regla YAML | CWE-22 / WSTG-ATHZ-01 |
 | **LFI vía wrapper PHP** (`php://filter` → divulgación de código fuente) | regla YAML | CWE-98 / WSTG-INPV-11 |

@@ -57,6 +57,7 @@ from dastcore.detectors.active_checks import (
 )
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
+from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
 from dastcore.detectors.jwt import (
@@ -447,6 +448,7 @@ async def _run_scan(
     stored_scan: bool = False,
     waf_evasion: bool = False,
     test_race: bool = False,
+    test_csrf: bool = False,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -520,6 +522,9 @@ async def _run_scan(
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))
+            if test_csrf:
+                progress.status("Probando CSRF (enforcement de token)…")
+                extra_findings.extend(await run_csrf_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
     finally:
@@ -757,6 +762,12 @@ def scan(
         help="Prueba race conditions en endpoints de escritura con una ráfaga concurrente (intrusivo; "
         "no se activa en el perfil quick).",
     ),
+    test_csrf: bool = typer.Option(
+        False,
+        "--test-csrf",
+        help="Comprueba si un token anti-CSRF se valida de verdad reenviando la acción sin el token "
+        "(intrusivo: reejecuta escrituras; no se activa en el perfil quick).",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -993,6 +1004,7 @@ def scan(
                     stored_scan=stored,
                     waf_evasion=waf_evasion and profile != "quick",
                     test_race=test_race and profile != "quick",
+                    test_csrf=test_csrf and profile != "quick",
                 )
             )
     except SessionLoginError as exc:
