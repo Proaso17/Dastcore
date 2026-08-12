@@ -24,6 +24,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
+from rich.text import Text
 
 from dastcore import __version__
 from dastcore.ai.agency import ActionAgencyScanner, ReadBack
@@ -86,6 +87,7 @@ from dastcore.retest import (
 )
 from dastcore.severity import meets_threshold
 from dastcore.suppressions import Suppression, apply_suppressions, resolve_suppressions
+from dastcore.triage import triage_findings
 
 # Distinct from operational-error exit code 1: findings met the --fail-on bar.
 EXIT_FINDINGS_OVER_THRESHOLD = 2
@@ -791,6 +793,15 @@ def scan(
     auth_macro_var: list[str] = typer.Option(
         [], "--auth-macro-var", help="Valor runtime para un placeholder {{name}} de la macro: 'name=valor' (repetible)."
     ),
+    ai_triage: bool = typer.Option(
+        False,
+        "--ai-triage",
+        help="Capa IA opcional: clasifica, agrupa por causa raíz y redacta remediación a partir de los hallazgos "
+        "YA confirmados por el oráculo (nunca confirma ni crea hallazgos). Usa ANTHROPIC_API_KEY.",
+    ),
+    ai_triage_key: str = typer.Option(
+        "", "--ai-triage-key", help="API key de Anthropic para --ai-triage (si se omite, usa ANTHROPIC_API_KEY)."
+    ),
 ) -> None:
     """Run a scan against TARGET (gated behind explicit authorization)."""
     logging.basicConfig(
@@ -985,6 +996,48 @@ def scan(
         target=str(config.target),
         duration_s=time.monotonic() - started_at,
         suppressions=suppressions,
+        ai_triage=ai_triage,
+        ai_triage_key=ai_triage_key or None,
+    )
+
+
+def _print_ai_triage(findings: list[Finding], *, api_key: str | None) -> None:
+    """Run the optional AI triage layer over confirmed findings and print its editorial output.
+
+    Everything shown here is AI-authored and clearly labelled as such: the AI classifies,
+    groups by root cause, and drafts remediation from evidence an oracle already confirmed —
+    it never confirms, creates, or elevates a finding. Degrades to a dim note if unavailable.
+    """
+    result = triage_findings(findings, api_key=api_key)
+    if not result.generated:
+        console.print(f"\n[dim]IA triage: {result.error or 'sin hallazgos que triar'}.[/dim]")
+        return
+
+    body = Text(result.executive_summary)
+    console.print()
+    console.print(Panel(body, title=f"[bold]Resumen ejecutivo (IA · {result.model})[/bold]", border_style="cyan"))
+
+    if result.root_cause_groups:
+        table = Table(title="Causas raíz (IA)", show_lines=True)
+        table.add_column("Grupo", style="bold")
+        table.add_column("Causa raíz")
+        table.add_column("Hallazgos", justify="right")
+        table.add_column("Remediación")
+        for group in result.root_cause_groups:
+            table.add_row(group.title, group.root_cause, str(len(group.finding_ids)), group.remediation)
+        console.print(table)
+
+    if result.business_severity:
+        table = Table(title="Severidad de negocio (IA · orientativa, no sustituye a la técnica)")
+        table.add_column("Hallazgo")
+        table.add_column("Negocio", justify="center")
+        table.add_column("Justificación")
+        for item in result.business_severity:
+            table.add_row(item.finding_id, item.level.upper(), item.rationale)
+        console.print(table)
+    console.print(
+        "[dim]La IA solo clasifica y redacta a partir de evidencia ya confirmada por el oráculo; "
+        "no confirma ni crea hallazgos.[/dim]"
     )
 
 
@@ -1000,6 +1053,8 @@ def _emit_report_and_gate(
     html_title: str = "dastcore — Dynamic Security Report",
     group_by_category: bool = False,
     suppressions: list[Suppression] | None = None,
+    ai_triage: bool = False,
+    ai_triage_key: str | None = None,
 ) -> None:
     """Shared reporting/exit-gate used by `scan` and `ai`.
 
@@ -1024,6 +1079,8 @@ def _emit_report_and_gate(
         _print_summary(active, duration_s)
         if suppressed:
             _print_suppressed_note(suppressed)
+        if ai_triage:
+            _print_ai_triage(active, api_key=ai_triage_key)
 
     if output_path:
         Path(output_path).write_text(report, encoding="utf-8")
