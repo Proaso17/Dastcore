@@ -53,6 +53,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 |---|---|---|
 | SQL Injection (error + **boolean-blind TRUE/FALSE** + blind time-based) | regla YAML | CWE-89 / WSTG-INPV-05 |
 | NoSQL Injection (error-based **+ operator injection `$ne`/`$eq` con oráculo diferencial de 3 vías → bypass de auth**, JSON y form/qs bracket) | regla YAML + detector activo | CWE-943 / WSTG-INPV-05 |
+| **Prototype pollution server-side** (Node/Express: inyecta `__proto__` y confirma por el oráculo *json spaces* — la respuesta JSON pasa a indentada; restaura el prototipo) — `--test-proto-pollution`, intrusivo, no en quick | detector activo | CWE-1321 / A08:2021 |
 | **XPath Injection** (error-based) | regla YAML | CWE-643 / WSTG-INPV-09 |
 | **LDAP Injection** (error-based) | regla YAML | CWE-90 / WSTG-INPV-06 |
 | XSS reflejado (múltiples contextos) + DOM-based + **almacenado/2º orden** (`--stored`) | regla YAML + headless | CWE-79 / WSTG-INPV-01/02 |

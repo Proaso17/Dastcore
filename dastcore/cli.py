@@ -74,6 +74,7 @@ from dastcore.detectors.jwt import (
 )
 from dastcore.detectors.mass_assignment import run_mass_assignment_checks
 from dastcore.detectors.nosqli import run_nosql_checks
+from dastcore.detectors.proto_pollution import run_proto_pollution_checks
 from dastcore.detectors.shellshock import check_shellshock
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
@@ -466,6 +467,7 @@ async def _run_scan(
     waf_evasion: bool = False,
     test_race: bool = False,
     test_csrf: bool = False,
+    test_proto_pollution: bool = False,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -546,6 +548,9 @@ async def _run_scan(
             if test_csrf:
                 progress.status("Probando CSRF (enforcement de token)…")
                 extra_findings.extend(await run_csrf_checks(client, all_requests))
+            if test_proto_pollution:
+                progress.status("Probando prototype pollution (json spaces)…")
+                extra_findings.extend(await run_proto_pollution_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
     finally:
@@ -789,6 +794,12 @@ def scan(
         help="Comprueba si un token anti-CSRF se valida de verdad reenviando la acción sin el token "
         "(intrusivo: reejecuta escrituras; no se activa en el perfil quick).",
     ),
+    test_proto_pollution: bool = typer.Option(
+        False,
+        "--test-proto-pollution",
+        help="Prueba prototype pollution server-side (Node) inyectando __proto__ y observando el cambio de "
+        "formato JSON (intrusivo: contamina y restaura el prototipo global; no se activa en el perfil quick).",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1026,6 +1037,7 @@ def scan(
                     waf_evasion=waf_evasion and profile != "quick",
                     test_race=test_race and profile != "quick",
                     test_csrf=test_csrf and profile != "quick",
+                    test_proto_pollution=test_proto_pollution and profile != "quick",
                 )
             )
     except SessionLoginError as exc:
