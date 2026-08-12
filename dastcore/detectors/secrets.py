@@ -26,8 +26,19 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
 ]
 
 
-def _mask(value: str) -> str:
+def mask_secret(value: str) -> str:
+    """Mask a matched secret so the report references it without re-leaking it."""
     return f"{value[:6]}…{value[-2:]}" if len(value) > 10 else f"{value[:3]}…"
+
+
+def find_secrets(text: str) -> list[tuple[str, str, str]]:
+    """Every high-signal secret in ``text`` as (label, matched value, severity), one per type."""
+    hits: list[tuple[str, str, str]] = []
+    for label, pattern, severity in _SECRET_PATTERNS:
+        match = pattern.search(text)
+        if match is not None:
+            hits.append((label, match.group(0), severity))
+    return hits
 
 
 def _point(request: HttpRequest) -> InjectionPoint:
@@ -38,10 +49,7 @@ def check_exposed_secrets(request: HttpRequest, response: HttpResponse) -> list[
     """Report any high-signal secret found in the response body (one per type)."""
     findings: list[Finding] = []
     path = urlsplit(request.url).path or "/"
-    for label, pattern, severity in _SECRET_PATTERNS:
-        match = pattern.search(response.text)
-        if match is None:
-            continue
+    for label, value, severity in find_secrets(response.text):
         findings.append(
             Finding(
                 id=f"secret-exposure:{label}:{request.method}:{path}",
@@ -55,7 +63,7 @@ def check_exposed_secrets(request: HttpRequest, response: HttpResponse) -> list[
                 evidence=[
                     Evidence(
                         type="response_match",
-                        data=f"{label} found in response body: {_mask(match.group(0))}",
+                        data=f"{label} found in response body: {mask_secret(value)}",
                         confidence="high",
                     )
                 ],

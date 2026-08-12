@@ -80,6 +80,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Token de sesión expuesto en la URL** (query con sessionid/access_token) | pasivo | CWE-598 / WSTG-SESS-04 |
 | Exposición de ficheros sensibles (`.env`, `.git`, claves, `swagger.json`, `actuator/env`, `server-status`) | detector activo | CWE-538 / WSTG-CONF-04 |
 | **Source maps expuestos** (`.js.map` alcanzable que reconstruye el código fuente del frontend) | pasivo + fetch | CWE-540 / WSTG-CONF-04 |
+| **Secretos incrustados en bundles JS** (descarga cada `.js` descubierto y busca claves de alta señal — AWS/Stripe/GitHub/Google/Slack/claves privadas — con el valor enmascarado) | detector activo | CWE-615 / WSTG-CONF-06 |
 | GraphQL: introspección habilitada, **field-suggestion leakage** ("Did you mean…"), **batching/aliasing abuse** (bypass de rate-limit/DoS), **CSRF** (GET/form), **inyección SQL vía argumentos de campo** (payload en el arg → error de BD, con selección `__typename` para campos que devuelven objetos) | detector activo (`--graphql`) | CWE-200/89 / API8:2023 |
 | **Método HTTP TRACE habilitado (Cross-Site Tracing)** | detector activo | CWE-16 / WSTG-CONF-06 |
 | **Métodos HTTP peligrosos habilitados** (PUT/DELETE/PATCH vía `Allow`) | detector activo | CWE-749 / WSTG-CONF-06 |

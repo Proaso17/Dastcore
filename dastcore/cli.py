@@ -62,6 +62,7 @@ from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
 from dastcore.detectors.graphql_authz import run_graphql_authz_checks
 from dastcore.detectors.graphql_injection import check_graphql_arg_injection
+from dastcore.detectors.js_secrets import run_js_secret_scan
 from dastcore.detectors.jwt import (
     check_jwt_algorithm_confusion,
     check_jwt_key_url_ssrf,
@@ -536,6 +537,7 @@ async def _run_scan(
             extra_findings.extend(await check_shellshock(client, all_requests))
             extra_findings.extend(await run_nosql_checks(client, all_requests))
             extra_findings.extend(await run_mass_assignment_checks(client, all_requests))
+            extra_findings.extend(await run_js_secret_scan(client, all_requests))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))
