@@ -64,6 +64,7 @@ from dastcore.detectors.graphql_authz import run_graphql_authz_checks
 from dastcore.detectors.graphql_injection import check_graphql_arg_injection
 from dastcore.detectors.jwt import (
     check_jwt_algorithm_confusion,
+    check_jwt_key_url_ssrf,
     check_jwt_kid_injection,
     check_jwt_none_acceptance,
     check_jwt_signature_not_verified,
@@ -514,6 +515,7 @@ async def _run_scan(
                 extra_findings.extend(await check_jwt_signature_not_verified(client, target, jwt_token))
                 extra_findings.extend(await check_jwt_kid_injection(client, target, jwt_token))
                 extra_findings.extend(await check_jwt_algorithm_confusion(client, target, jwt_token))
+                extra_findings.extend(await check_jwt_key_url_ssrf(client, target, jwt_token, oast))
 
             scanner = Scanner(
                 client,

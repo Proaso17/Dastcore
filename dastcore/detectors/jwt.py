@@ -11,6 +11,7 @@ forged/weakly-signed token — otherwise the endpoint just isn't checking auth.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -21,6 +22,7 @@ import httpx
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+from dastcore.engine.oast import OastProvider
 
 # alg values that bypass signature verification in a broken parser, most→least common.
 _NONE_ALGS = ("none", "None", "NONE", "nOnE")
@@ -435,3 +437,94 @@ async def check_jwt_weak_secret(client: HttpClient, target_url: str, token: str)
                 )
             ]
     return []
+
+
+# URL-valued JWT header parameters that tell the verifier where to fetch the key material.
+_KEY_URL_HEADERS = ("jku", "x5u")
+
+
+def _forge_header_url(token: str, field: str, url: str) -> str:
+    """A token whose ``jku``/``x5u`` header points at our URL. The verifier fetches the key set
+    to *resolve the key* — which happens before (or regardless of) signature verification — so
+    the now-invalid signature doesn't matter; the outbound fetch is the SSRF we're confirming."""
+    parts = token.split(".")
+    header = _header_of(token)
+    header[field] = url
+    head_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
+    payload = parts[1] if len(parts) > 1 else ""
+    signature = parts[2] if len(parts) > 2 else ""
+    return f"{head_b64}.{payload}.{signature}"
+
+
+async def _collect_callbacks(oast: OastProvider, tokens: set[str], attempts: int, delay: float) -> set[str]:
+    """Poll the collaborator until every token has called back or the attempts run out."""
+    hits: set[str] = set()
+    for _ in range(attempts):
+        for interaction in await oast.poll():
+            if interaction.token in tokens:
+                hits.add(interaction.token)
+        if hits >= tokens:
+            break
+        await asyncio.sleep(delay)
+    return hits
+
+
+def _jku_ssrf_finding(field: str, target_url: str, url: str) -> Finding:
+    request = HttpRequest(
+        method="GET", url=target_url, headers={"Authorization": f"Bearer <JWT with {field}=OAST URL>"}
+    )
+    return Finding(
+        id=f"jwt-{field}-ssrf:GET:{target_url}",
+        rule_id=f"jwt-{field}-ssrf",
+        name=f"Blind SSRF via JWT '{field}' header (key-set URL fetch)",
+        severity="high",
+        cwe="CWE-918",
+        owasp="API2:2023-Broken Authentication",
+        cvss="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N",
+        family="ssrf",
+        injection_point=_point(request),
+        evidence=[
+            Evidence(
+                type="oob",
+                data=(
+                    f"the server fetched the attacker-controlled '{field}' URL from the JWT header (out-of-band "
+                    f"callback to {url}) — it resolves the verification key from a URL in the token without an "
+                    "allowlist, so a forged token drives server-side requests (SSRF), and enables key injection"
+                )[:200],
+                confidence="high",
+            )
+        ],
+        request=request,
+        response=HttpResponse(status_code=0),
+        remediation=(
+            "Nunca resuelvas la clave de verificación desde una URL contenida en el token. Fija el JWKS/"
+            "certificado server-side (o una allowlist estricta de hosts para `jku`/`x5u`) e ignora esos "
+            "campos del atacante. Valida la firma contra la clave de confianza, no contra la que indica el token."
+        ),
+    )
+
+
+async def check_jwt_key_url_ssrf(
+    client: HttpClient,
+    target_url: str,
+    token: str,
+    oast: OastProvider | None,
+    *,
+    poll_attempts: int = 8,
+    poll_delay: float = 0.4,
+) -> list[Finding]:
+    """Confirm SSRF/key-injection via the JWT ``jku``/``x5u`` header, out-of-band.
+
+    Forge a token whose key-set URL points at a unique OAST handle; if the server fetches it,
+    the callback confirms it resolves the verification key from an attacker-controlled URL —
+    zero false positives, since only a real outbound request produces the correlated callback.
+    Requires an OAST collaborator (``--oast local|interactsh``); a no-op without one."""
+    if not looks_like_jwt(token) or oast is None or not oast.is_available():
+        return []
+    handles = {field: oast.new_handle() for field in _KEY_URL_HEADERS}
+    for field, handle in handles.items():
+        await _send_bearer(client, target_url, _forge_header_url(token, field, handle.url))
+    hits = await _collect_callbacks(oast, {h.token for h in handles.values()}, poll_attempts, poll_delay)
+    return [
+        _jku_ssrf_finding(field, target_url, handle.url) for field, handle in handles.items() if handle.token in hits
+    ]
