@@ -128,6 +128,10 @@
       <div><label for="whook">Webhook URL <span class="muted">(vacío para desactivar)</span></label>
         <input id="whook" name="webhook_url" placeholder="https://hooks.slack.com/services/…" value="{{ notification.webhook_url if notification else '' }}"></div>
       <div class="row3" style="margin-top:10px">
+        <div><label for="won">Disparador</label><select id="won" name="notify_on">
+          <option value="regression" {% if (notification.notify_on if notification else 'regression') == 'regression' %}selected{% endif %}>Solo regresiones</option>
+          <option value="any" {% if notification and notification.notify_on == 'any' %}selected{% endif %}>Cualquier escaneo</option>
+        </select></div>
         <div><label for="wformat">Formato</label><select id="wformat" name="format">
           <option value="slack" {% if notification and notification.format == 'slack' %}selected{% endif %}>Slack</option>
           <option value="generic" {% if notification and notification.format == 'generic' %}selected{% endif %}>Genérico (JSON)</option>

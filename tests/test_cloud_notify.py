@@ -77,10 +77,11 @@ def test_notification_crud_upserts(tmp_path) -> None:
     store = Store(tmp_path / "c.db")
     project_id, _ = store.create_project("acme")
     assert store.get_notification(project_id) is None
-    store.set_notification(project_id, "http://hook.test/a", "slack", "high", True)
-    store.set_notification(project_id, "http://hook.test/b", "generic", "medium", False)  # replace
+    store.set_notification(project_id, "http://hook.test/a", "slack", "regression", "high", True)
+    store.set_notification(project_id, "http://hook.test/b", "generic", "any", "medium", False)  # replace
     row = store.get_notification(project_id)
     assert row is not None and row.webhook_url == "http://hook.test/b" and row.enabled is False
+    assert row.notify_on == "any" and row.min_severity == "medium"
     store.delete_notification(project_id)
     assert store.get_notification(project_id) is None
 
@@ -111,16 +112,18 @@ def test_filter_by_severity_drops_below_floor() -> None:
     assert [f.id for f in kept] == ["a:1"]
 
 
-def test_slack_payload_names_the_new_findings() -> None:
+def test_slack_payload_names_the_findings() -> None:
     payload = build_slack_payload("acme", _job(), [_finding("sqli:1", severity="critical")])
     assert "text" in payload and "blocks" in payload
     assert "acme" in payload["text"] and "SQLI" in payload["text"]
 
 
-def test_generic_payload_is_structured() -> None:
-    payload = build_generic_payload("p1", "acme", _job(), [_finding("sqli:1")])
-    assert payload["event"] == "regression" and payload["new_findings_count"] == 1
-    assert payload["new_findings"][0]["rule_id"] == "sqli"
+def test_generic_payload_event_varies() -> None:
+    regression = build_generic_payload("p1", "acme", _job(), [_finding("sqli:1")])
+    assert regression["event"] == "regression" and regression["findings_count"] == 1
+    assert regression["findings"][0]["rule_id"] == "sqli"
+    completed = build_generic_payload("p1", "acme", _job(), [], event="completed")
+    assert completed["event"] == "scan_completed" and completed["findings_count"] == 0
 
 
 # --- integration: full alert path through the runner result endpoint -------------------
@@ -196,8 +199,35 @@ async def test_regression_triggers_webhook_second_scan_only(tmp_path) -> None:
 
     assert len(cap.received) == 1
     alert = cap.received[0]
-    assert alert["event"] == "regression" and alert["new_findings_count"] == 1
-    assert alert["new_findings"][0]["rule_id"] == "cmdi"
+    assert alert["event"] == "regression" and alert["findings_count"] == 1
+    assert alert["findings"][0]["rule_id"] == "cmdi"
+
+
+async def test_any_mode_alerts_on_every_completed_job(tmp_path) -> None:
+    cap = _Capture()
+    url, server = _serve(_capture_app(cap))
+    try:
+        app = create_app(tmp_path / "cloud.db", admin_token=ADMIN)
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://cp") as client:
+            key = (
+                await client.post("/api/projects", json={"name": "acme"}, headers={"Authorization": f"Bearer {ADMIN}"})
+            ).json()["api_key"]
+            token = (
+                await client.post("/api/runners", json={"name": "r1"}, headers={"Authorization": f"Bearer {key}"})
+            ).json()["token"]
+            await client.put(
+                "/api/notifications",
+                json={"webhook_url": f"{url}/hook", "format": "generic", "notify_on": "any", "min_severity": "high"},
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            # Even the FIRST scan of a target alerts under "any" (no baseline needed).
+            await client.post("/api/jobs", json={"target": "http://t.test"}, headers={"Authorization": f"Bearer {key}"})
+            await _runner_complete(client, token, [_finding("sqli:1")])
+    finally:
+        server.shutdown()
+
+    assert len(cap.received) == 1
+    assert cap.received[0]["event"] == "scan_completed" and cap.received[0]["findings_count"] == 1
 
 
 async def test_ui_form_sets_and_clears_the_webhook(tmp_path) -> None:

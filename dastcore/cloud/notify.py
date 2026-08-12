@@ -38,14 +38,23 @@ def _counts(findings: list[Finding]) -> dict[str, int]:
     return counts
 
 
-def build_slack_payload(project_name: str, job: JobRow, new_findings: list[Finding]) -> dict:
-    """A Slack incoming-webhook message summarising the regression."""
-    ordered = sorted(new_findings, key=lambda f: severity_rank(f.severity), reverse=True)
-    header = f":rotating_light: dastcore: {len(new_findings)} nuevo(s) hallazgo(s) en *{project_name}*"
+# Per-event copy: (Slack header verb, generic-payload event name).
+_EVENTS = {
+    "regression": (":rotating_light: {n} nuevo(s) hallazgo(s)", "regression"),
+    "completed": (":white_check_mark: escaneo completado — {n} hallazgo(s)", "scan_completed"),
+}
+
+
+def build_slack_payload(project_name: str, job: JobRow, findings: list[Finding], *, event: str = "regression") -> dict:
+    """A Slack incoming-webhook message summarising the alert."""
+    ordered = sorted(findings, key=lambda f: severity_rank(f.severity), reverse=True)
+    header = _EVENTS[event][0].format(n=len(findings)) + f" en *{project_name}*"
     lines = [f"Objetivo: `{job.target}` · job `{job.id}`", ""]
     lines += [f"• *{f.severity}* — {f.name} · `{_location(f)}`" for f in ordered[:20]]
     if len(ordered) > 20:
         lines.append(f"…y {len(ordered) - 20} más.")
+    elif not ordered:
+        lines.append("_Sin hallazgos por encima del umbral._")
     text = header + "\n" + "\n".join(lines)
     return {
         "text": text,
@@ -56,17 +65,19 @@ def build_slack_payload(project_name: str, job: JobRow, new_findings: list[Findi
     }
 
 
-def build_generic_payload(project_id: str, project_name: str, job: JobRow, new_findings: list[Finding]) -> dict:
+def build_generic_payload(
+    project_id: str, project_name: str, job: JobRow, findings: list[Finding], *, event: str = "regression"
+) -> dict:
     """A structured JSON body for any (non-Slack) webhook consumer."""
     return {
-        "event": "regression",
+        "event": _EVENTS[event][1],
         "project_id": project_id,
         "project": project_name,
         "job_id": job.id,
         "target": job.target,
-        "new_findings_count": len(new_findings),
-        "severity_counts": _counts(new_findings),
-        "new_findings": [
+        "findings_count": len(findings),
+        "severity_counts": _counts(findings),
+        "findings": [
             {
                 "rule_id": f.rule_id,
                 "name": f.name,
@@ -75,24 +86,26 @@ def build_generic_payload(project_id: str, project_name: str, job: JobRow, new_f
                 "owasp": f.owasp,
                 "location": _location(f),
             }
-            for f in sorted(new_findings, key=lambda f: severity_rank(f.severity), reverse=True)
+            for f in sorted(findings, key=lambda f: severity_rank(f.severity), reverse=True)
         ],
     }
 
 
-async def send_regression_alert(
+async def send_alert(
     notification: NotificationRow,
     project_id: str,
     project_name: str,
     job: JobRow,
-    new_findings: list[Finding],
+    findings: list[Finding],
+    *,
+    event: str = "regression",
 ) -> bool:
-    """POST the regression alert to the project's webhook. Best-effort: returns True on a 2xx,
-    False on any error (a down/slow webhook must never fail the job it describes)."""
+    """POST the alert to the project's webhook. Best-effort: returns True on a 2xx, False on any
+    error (a down/slow webhook must never fail the job it describes)."""
     if notification.format == "slack":
-        payload = build_slack_payload(project_name, job, new_findings)
+        payload = build_slack_payload(project_name, job, findings, event=event)
     else:
-        payload = build_generic_payload(project_id, project_name, job, new_findings)
+        payload = build_generic_payload(project_id, project_name, job, findings, event=event)
     try:
         async with httpx.AsyncClient(timeout=_SEND_TIMEOUT_S) as client:
             response = await client.post(notification.webhook_url, json=payload)

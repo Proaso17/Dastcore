@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     project_id   TEXT PRIMARY KEY,
     webhook_url  TEXT NOT NULL,
     format       TEXT NOT NULL DEFAULT 'slack',
+    on_event     TEXT NOT NULL DEFAULT 'regression',
     min_severity TEXT NOT NULL DEFAULT 'high',
     enabled      INTEGER NOT NULL DEFAULT 1,
     created_at   REAL NOT NULL
@@ -109,6 +110,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 # Columns added after the initial release, applied to pre-existing DBs on open.
 _JOB_MIGRATIONS = {"attempts": "INTEGER NOT NULL DEFAULT 0", "max_attempts": "INTEGER NOT NULL DEFAULT 3"}
+# Notification trigger mode, added after notifications shipped.
+_NOTIFICATION_MIGRATIONS = {"on_event": "TEXT NOT NULL DEFAULT 'regression'"}
 # Embedded-chatbot ("ai" mode) columns, added to both jobs and schedules.
 _AI_MIGRATIONS = {
     "mode": "TEXT NOT NULL DEFAULT 'scan'",
@@ -139,6 +142,7 @@ class NotificationRow:
     project_id: str
     webhook_url: str
     format: str
+    notify_on: str
     min_severity: str
     enabled: bool
 
@@ -240,7 +244,11 @@ class Store:
         self._migrate()
 
     def _migrate(self) -> None:
-        columns = {"jobs": {**_JOB_MIGRATIONS, **_AI_MIGRATIONS}, "schedules": dict(_AI_MIGRATIONS)}
+        columns = {
+            "jobs": {**_JOB_MIGRATIONS, **_AI_MIGRATIONS},
+            "schedules": dict(_AI_MIGRATIONS),
+            "notifications": dict(_NOTIFICATION_MIGRATIONS),
+        }
         for table, migrations in columns.items():
             if self._db.dialect == "postgres":
                 for name, decl in migrations.items():
@@ -536,22 +544,27 @@ class Store:
 
     # --- notifications & regression detection ------------------------------------------
 
-    def set_notification(self, project_id: str, webhook_url: str, fmt: str, min_severity: str, enabled: bool) -> None:
-        """Create or replace the project's regression-alert webhook (one per project)."""
+    def set_notification(
+        self, project_id: str, webhook_url: str, fmt: str, notify_on: str, min_severity: str, enabled: bool
+    ) -> None:
+        """Create or replace the project's alert webhook (one per project)."""
         now = time.time()
+        values = (project_id, webhook_url, fmt, notify_on, min_severity, 1 if enabled else 0, now)
         if self._db.dialect == "postgres":
             self._db.execute(
-                "INSERT INTO notifications (project_id, webhook_url, format, min_severity, enabled, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project_id) DO UPDATE SET "
-                "webhook_url=EXCLUDED.webhook_url, format=EXCLUDED.format, "
+                "INSERT INTO notifications "
+                "(project_id, webhook_url, format, on_event, min_severity, enabled, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (project_id) DO UPDATE SET "
+                "webhook_url=EXCLUDED.webhook_url, format=EXCLUDED.format, on_event=EXCLUDED.on_event, "
                 "min_severity=EXCLUDED.min_severity, enabled=EXCLUDED.enabled",
-                (project_id, webhook_url, fmt, min_severity, 1 if enabled else 0, now),
+                values,
             )
         else:
             self._db.execute(
                 "INSERT OR REPLACE INTO notifications "
-                "(project_id, webhook_url, format, min_severity, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (project_id, webhook_url, fmt, min_severity, 1 if enabled else 0, now),
+                "(project_id, webhook_url, format, on_event, min_severity, enabled, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                values,
             )
 
     def get_notification(self, project_id: str) -> NotificationRow | None:
@@ -562,6 +575,7 @@ class Store:
             project_id=row["project_id"],
             webhook_url=row["webhook_url"],
             format=row["format"],
+            notify_on=row["on_event"] if "on_event" in row.keys() else "regression",
             min_severity=row["min_severity"],
             enabled=bool(row["enabled"]),
         )

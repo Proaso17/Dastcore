@@ -47,12 +47,14 @@ class ScheduleCreate(JobSpec):
 
 
 class NotificationConfig(BaseModel):
-    """Where and when to alert on regressions. When a job finishes with findings that are
-    NEW versus the project's previous scan of the same target (and at/above ``min_severity``),
-    the control-plane POSTs to ``webhook_url``. ``slack`` sends a Slack-compatible message;
-    ``generic`` sends a structured JSON body for any consumer."""
+    """Where and when to alert. The control-plane POSTs to ``webhook_url`` (``slack`` sends a
+    Slack-compatible message; ``generic`` a structured JSON body). ``notify_on`` chooses the
+    trigger: ``regression`` fires only when a job introduces findings NEW versus the project's
+    previous scan of the same target; ``any`` fires on every completed job with a summary.
+    ``min_severity`` gates which findings are listed (and, for ``regression``, whether to fire)."""
 
     webhook_url: str
     format: Literal["slack", "generic"] = "slack"
+    notify_on: Literal["regression", "any"] = "regression"
     min_severity: Literal["info", "low", "medium", "high", "critical"] = "high"
     enabled: bool = True

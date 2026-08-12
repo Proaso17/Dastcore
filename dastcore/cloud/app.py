@@ -30,7 +30,7 @@ from dastcore.cloud.models import (
     RunnerCreate,
     ScheduleCreate,
 )
-from dastcore.cloud.notify import filter_by_severity, send_regression_alert
+from dastcore.cloud.notify import filter_by_severity, send_alert
 from dastcore.cloud.scheduler import Scheduler
 from dastcore.cloud.store import JobRow, RunnerRow, ScheduleRow, Store
 from dastcore.core.models import Finding
@@ -189,18 +189,26 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         return JSONResponse({"id": job.id, "spec": job.spec().model_dump()})
 
     async def _maybe_alert(project_id: str, job_id: str) -> None:
-        """Fire a regression webhook if this job introduced new findings (best-effort)."""
+        """Fire the project's webhook after a job completes (best-effort).
+
+        ``regression`` fires only when new findings appeared vs the previous scan; ``any`` fires
+        on every completed job with a summary of its findings at/above ``min_severity``."""
         notification = store.get_notification(project_id)
         if notification is None or not notification.enabled:
             return
-        new_findings = filter_by_severity(store.new_findings_since_last(project_id, job_id), notification.min_severity)
-        if not new_findings:
-            return
+        if notification.notify_on == "any":
+            findings = filter_by_severity(store.get_findings(project_id, job_id), notification.min_severity)
+            event = "completed"  # a completion heartbeat fires even with nothing above the floor
+        else:
+            findings = filter_by_severity(store.new_findings_since_last(project_id, job_id), notification.min_severity)
+            if not findings:
+                return  # no regression → stay quiet
+            event = "regression"
         job = store.get_job(project_id, job_id)
         project = store.get_project(project_id)
         if job is None or project is None:
             return
-        await send_regression_alert(notification, project_id, project.name, job, new_findings)
+        await send_alert(notification, project_id, project.name, job, findings, event=event)
 
     @app.post("/api/runner/jobs/{job_id}/result")
     def submit_result(
@@ -256,7 +264,9 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
     @app.put("/api/notifications")
     def set_notification(body: NotificationConfig, authorization: str = Header(default="")) -> dict:
         project_id = require_project(authorization)
-        store.set_notification(project_id, body.webhook_url, body.format, body.min_severity, body.enabled)
+        store.set_notification(
+            project_id, body.webhook_url, body.format, body.notify_on, body.min_severity, body.enabled
+        )
         return {"status": "ok"}
 
     @app.get("/api/notifications")
@@ -269,6 +279,7 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
             "notification": {
                 "webhook_url": notification.webhook_url,
                 "format": notification.format,
+                "notify_on": notification.notify_on,
                 "min_severity": notification.min_severity,
                 "enabled": notification.enabled,
             }
@@ -417,13 +428,14 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         request: Request,
         webhook_url: str = Form(""),
         format: str = Form("slack"),
+        notify_on: str = Form("regression"),
         min_severity: str = Form("high"),
     ) -> Response:
         project_id = ui_project(request)
         if project_id is None:
             return RedirectResponse("/", status_code=303)
         if webhook_url.strip():
-            store.set_notification(project_id, webhook_url.strip(), format, min_severity, True)
+            store.set_notification(project_id, webhook_url.strip(), format, notify_on, min_severity, True)
         else:
             store.delete_notification(project_id)  # empty URL clears the alert
         return RedirectResponse("/ui", status_code=303)
