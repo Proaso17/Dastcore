@@ -44,3 +44,15 @@ class ScheduleCreate(JobSpec):
     """A recurring job: a JobSpec plus how often to enqueue it (minutes)."""
 
     interval_minutes: int = 1440
+
+
+class NotificationConfig(BaseModel):
+    """Where and when to alert on regressions. When a job finishes with findings that are
+    NEW versus the project's previous scan of the same target (and at/above ``min_severity``),
+    the control-plane POSTs to ``webhook_url``. ``slack`` sends a Slack-compatible message;
+    ``generic`` sends a structured JSON body for any consumer."""
+
+    webhook_url: str
+    format: Literal["slack", "generic"] = "slack"
+    min_severity: Literal["info", "low", "medium", "high", "critical"] = "high"
+    enabled: bool = True

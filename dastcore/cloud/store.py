@@ -23,6 +23,7 @@ from typing import Any
 from dastcore.cloud.db import open_database
 from dastcore.cloud.models import JobSpec, ScheduleCreate
 from dastcore.core.models import Finding
+from dastcore.web.diff import diff_findings
 
 _SEVERITIES = ("critical", "high", "medium", "low", "info")
 
@@ -95,6 +96,15 @@ CREATE TABLE IF NOT EXISTS schedules (
     last_run_at      REAL,
     next_run_at      REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+    project_id   TEXT PRIMARY KEY,
+    webhook_url  TEXT NOT NULL,
+    format       TEXT NOT NULL DEFAULT 'slack',
+    min_severity TEXT NOT NULL DEFAULT 'high',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    created_at   REAL NOT NULL
+);
 """
 
 # Columns added after the initial release, applied to pre-existing DBs on open.
@@ -122,6 +132,15 @@ class RunnerRow:
     name: str
     created_at: float
     last_seen_at: float | None = None
+
+
+@dataclass
+class NotificationRow:
+    project_id: str
+    webhook_url: str
+    format: str
+    min_severity: str
+    enabled: bool
 
 
 @dataclass
@@ -514,3 +533,57 @@ class Store:
 
     def delete_schedule(self, project_id: str, schedule_id: str) -> None:
         self._db.execute("DELETE FROM schedules WHERE id=? AND project_id=?", (schedule_id, project_id))
+
+    # --- notifications & regression detection ------------------------------------------
+
+    def set_notification(self, project_id: str, webhook_url: str, fmt: str, min_severity: str, enabled: bool) -> None:
+        """Create or replace the project's regression-alert webhook (one per project)."""
+        now = time.time()
+        if self._db.dialect == "postgres":
+            self._db.execute(
+                "INSERT INTO notifications (project_id, webhook_url, format, min_severity, enabled, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project_id) DO UPDATE SET "
+                "webhook_url=EXCLUDED.webhook_url, format=EXCLUDED.format, "
+                "min_severity=EXCLUDED.min_severity, enabled=EXCLUDED.enabled",
+                (project_id, webhook_url, fmt, min_severity, 1 if enabled else 0, now),
+            )
+        else:
+            self._db.execute(
+                "INSERT OR REPLACE INTO notifications "
+                "(project_id, webhook_url, format, min_severity, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (project_id, webhook_url, fmt, min_severity, 1 if enabled else 0, now),
+            )
+
+    def get_notification(self, project_id: str) -> NotificationRow | None:
+        row = self._db.query_one("SELECT * FROM notifications WHERE project_id=?", (project_id,))
+        if row is None:
+            return None
+        return NotificationRow(
+            project_id=row["project_id"],
+            webhook_url=row["webhook_url"],
+            format=row["format"],
+            min_severity=row["min_severity"],
+            enabled=bool(row["enabled"]),
+        )
+
+    def delete_notification(self, project_id: str) -> None:
+        self._db.execute("DELETE FROM notifications WHERE project_id=?", (project_id,))
+
+    def new_findings_since_last(self, project_id: str, job_id: str) -> list[Finding]:
+        """Findings present in ``job_id`` but not in the project's previous completed scan of
+        the same target — the regression set. Empty for the first scan of a target (no prior
+        baseline to compare against) and when nothing new appeared. Compares by stable finding
+        id, exactly like the CLI ``dastcore diff``."""
+        job = self.get_job(project_id, job_id)
+        if job is None:
+            return []
+        previous = self._db.query_one(
+            "SELECT findings_json FROM jobs WHERE project_id=? AND target=? AND status='done' "
+            "AND id!=? AND created_at<=? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (project_id, job.target, job_id, job.created_at),
+        )
+        if previous is None:
+            return []  # first completed scan of this target → establishes the baseline, no alert
+        baseline = [Finding.model_validate(item) for item in json.loads(previous["findings_json"])]
+        current = self.get_findings(project_id, job_id)
+        return diff_findings(baseline, current).new

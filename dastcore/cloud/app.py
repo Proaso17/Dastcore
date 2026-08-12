@@ -18,11 +18,19 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from dastcore.cloud.models import JobResult, JobSpec, ProjectCreate, RunnerCreate, ScheduleCreate
+from dastcore.cloud.models import (
+    JobResult,
+    JobSpec,
+    NotificationConfig,
+    ProjectCreate,
+    RunnerCreate,
+    ScheduleCreate,
+)
+from dastcore.cloud.notify import filter_by_severity, send_regression_alert
 from dastcore.cloud.scheduler import Scheduler
 from dastcore.cloud.store import JobRow, RunnerRow, ScheduleRow, Store
 from dastcore.core.models import Finding
@@ -180,8 +188,24 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
             return Response(status_code=204)
         return JSONResponse({"id": job.id, "spec": job.spec().model_dump()})
 
+    async def _maybe_alert(project_id: str, job_id: str) -> None:
+        """Fire a regression webhook if this job introduced new findings (best-effort)."""
+        notification = store.get_notification(project_id)
+        if notification is None or not notification.enabled:
+            return
+        new_findings = filter_by_severity(store.new_findings_since_last(project_id, job_id), notification.min_severity)
+        if not new_findings:
+            return
+        job = store.get_job(project_id, job_id)
+        project = store.get_project(project_id)
+        if job is None or project is None:
+            return
+        await send_regression_alert(notification, project_id, project.name, job, new_findings)
+
     @app.post("/api/runner/jobs/{job_id}/result")
-    def submit_result(job_id: str, result: JobResult, authorization: str = Header(default="")) -> dict:
+    def submit_result(
+        job_id: str, result: JobResult, background: BackgroundTasks, authorization: str = Header(default="")
+    ) -> dict:
         runner = require_runner(authorization)
         if store.get_job(runner.project_id, job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -191,6 +215,8 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         findings = [Finding.model_validate(item) for item in result.findings]
         if not store.complete_job(runner.project_id, job_id, findings):
             raise HTTPException(status_code=409, detail="job is not in a running state")
+        # Regression alerting runs after the response so a slow webhook never delays the runner.
+        background.add_task(_maybe_alert, runner.project_id, job_id)
         return {"status": "done", "num_findings": len(findings)}
 
     @app.post("/api/runner/heartbeat")
@@ -225,6 +251,35 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         store.delete_schedule(project_id, schedule_id)
         return {"status": "deleted"}
 
+    # --- API: regression-alert notifications (project-scoped) -------------------------
+
+    @app.put("/api/notifications")
+    def set_notification(body: NotificationConfig, authorization: str = Header(default="")) -> dict:
+        project_id = require_project(authorization)
+        store.set_notification(project_id, body.webhook_url, body.format, body.min_severity, body.enabled)
+        return {"status": "ok"}
+
+    @app.get("/api/notifications")
+    def get_notification(authorization: str = Header(default="")) -> dict:
+        project_id = require_project(authorization)
+        notification = store.get_notification(project_id)
+        if notification is None:
+            return {"notification": None}
+        return {
+            "notification": {
+                "webhook_url": notification.webhook_url,
+                "format": notification.format,
+                "min_severity": notification.min_severity,
+                "enabled": notification.enabled,
+            }
+        }
+
+    @app.delete("/api/notifications")
+    def delete_notification(authorization: str = Header(default="")) -> dict:
+        project_id = require_project(authorization)
+        store.delete_notification(project_id)
+        return {"status": "deleted"}
+
     # --- UI (project API key in an httpOnly cookie) -----------------------------------
 
     @app.get("/", response_class=HTMLResponse)
@@ -255,6 +310,7 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         if project_id is None:
             return RedirectResponse("/", status_code=303)
         project = store.get_project(project_id)
+        notification = store.get_notification(project_id)
         return render(
             "dashboard.html.j2",
             project=project,
@@ -262,6 +318,7 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
             runners=[_runner_summary(r) for r in store.list_runners(project_id)],
             schedules=[_schedule_summary(s) for s in store.list_schedules(project_id)],
             intervals=_INTERVALS,
+            notification=notification,
             new_runner_token=new_runner_token,
         )
 
@@ -353,6 +410,22 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         if project_id is None:
             return RedirectResponse("/", status_code=303)
         store.delete_schedule(project_id, schedule_id)
+        return RedirectResponse("/ui", status_code=303)
+
+    @app.post("/ui/notifications")
+    def ui_set_notification(
+        request: Request,
+        webhook_url: str = Form(""),
+        format: str = Form("slack"),
+        min_severity: str = Form("high"),
+    ) -> Response:
+        project_id = ui_project(request)
+        if project_id is None:
+            return RedirectResponse("/", status_code=303)
+        if webhook_url.strip():
+            store.set_notification(project_id, webhook_url.strip(), format, min_severity, True)
+        else:
+            store.delete_notification(project_id)  # empty URL clears the alert
         return RedirectResponse("/ui", status_code=303)
 
     return app

@@ -120,4 +120,25 @@
       <button type="submit">Programar</button>
     </form>
   </div>
+
+  <div class="panel">
+    <h2>Alertas de regresión</h2>
+    <p class="muted">Avisa a un webhook (Slack u otro) cuando un escaneo encuentra hallazgos <strong>nuevos</strong> respecto al escaneo anterior del mismo objetivo. Solo se notifican regresiones, no la deuda ya conocida.</p>
+    <form method="post" action="/ui/notifications" style="margin-top:12px">
+      <div><label for="whook">Webhook URL <span class="muted">(vacío para desactivar)</span></label>
+        <input id="whook" name="webhook_url" placeholder="https://hooks.slack.com/services/…" value="{{ notification.webhook_url if notification else '' }}"></div>
+      <div class="row3" style="margin-top:10px">
+        <div><label for="wformat">Formato</label><select id="wformat" name="format">
+          <option value="slack" {% if notification and notification.format == 'slack' %}selected{% endif %}>Slack</option>
+          <option value="generic" {% if notification and notification.format == 'generic' %}selected{% endif %}>Genérico (JSON)</option>
+        </select></div>
+        <div><label for="wsev">Severidad mínima</label><select id="wsev" name="min_severity">
+          {% for sev in ['critical','high','medium','low','info'] %}
+          <option value="{{ sev }}" {% if (notification.min_severity if notification else 'high') == sev %}selected{% endif %}>{{ sev }}</option>
+          {% endfor %}
+        </select></div>
+      </div>
+      <button type="submit" style="margin-top:10px">Guardar</button>
+    </form>
+  </div>
 {% endblock %}
