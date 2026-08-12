@@ -60,6 +60,7 @@ from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
+from dastcore.detectors.graphql_authz import run_graphql_authz_checks
 from dastcore.detectors.graphql_injection import check_graphql_arg_injection
 from dastcore.detectors.jwt import (
     check_jwt_algorithm_confusion,
@@ -424,15 +425,20 @@ def _make_client(config: ScanConfig, budget: _Budget, session: SessionManager | 
     )
 
 
-async def _run_authz(config: ScanConfig, probes: list[HttpRequest], budget: _Budget) -> list[Finding]:
-    """Run BOLA/BFLA/missing-auth checks across the configured identities."""
+async def _run_authz(
+    config: ScanConfig, probes: list[HttpRequest], budget: _Budget, graphql_url: str = ""
+) -> list[Finding]:
+    """Run BOLA/BFLA/missing-auth checks across the configured identities (REST + GraphQL)."""
     async with AsyncExitStack() as stack:
         identities = []
         for identity_cfg in config.identities:
             client = await _open_authenticated_client(stack, config, identity_cfg.auth, budget)
             identities.append(AuthzIdentity(name=identity_cfg.name, role=identity_cfg.role, client=client))
         unauth_client = await stack.enter_async_context(_make_client(config, budget))
-        return await run_authz_checks(identities, probes, unauth_client=unauth_client)
+        findings = await run_authz_checks(identities, probes, unauth_client=unauth_client)
+        if graphql_url:
+            findings.extend(await run_graphql_authz_checks(identities, graphql_url, unauth_client=unauth_client))
+        return findings
 
 
 async def _run_scan(
@@ -536,7 +542,7 @@ async def _run_scan(
     authz_findings: list[Finding] = []
     if config.identities:
         progress.status("Pruebas de autorización (BOLA/BFLA)…")
-        authz_findings = await _run_authz(config, list(discovered.values()), budget)
+        authz_findings = await _run_authz(config, list(discovered.values()), budget, graphql_url=graphql_url)
 
     # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
     return cross_correlate(active_passive + dom_findings + authz_findings)

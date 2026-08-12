@@ -72,7 +72,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | Open redirect | regla YAML | CWE-601 / WSTG-CLNT-04 |
 | **Host header injection** | regla YAML (headers) | CWE-644 / WSTG-INPV-17 |
 | CORS mal configurado (wildcard+creds **y origin reflejado**) | pasivo + activo | CWE-942 / WSTG-CLNT-07 |
-| BOLA/IDOR, BFLA, missing-auth | detector multi-sesión | CWE-639/285/306 / API1/5/2 |
+| BOLA/IDOR, BFLA, missing-auth (REST) **+ BOLA en GraphQL** (fetchers `node(id)`/`order(id)`: mismo objeto *con dueño* devuelto a dos identidades vía resolver anidado sin authz) | detector multi-sesión (`--graphql` + identidades) | CWE-639/285/306 / API1/5/2 |
 | **Mass assignment / over-posting** (inyecta un campo privilegiado — `role`/`is_admin`/`owner`/`balance` — y confirma por reflexión diferencial que el servidor lo bindeó) | detector activo | CWE-915 / API3:2023 |
 | **JWT: `alg:none`, secreto HMAC débil, firma no verificada, `kid` injection, confusión RS256→HS256** (todos con control diferencial anti-FP) | detector activo (bearer JWT) | CWE-347 / API2:2023 |
 | **Exposición de objeto serializado** (Java/PHP/pickle → sink de deserialización) | pasivo | CWE-502 / A08:2021 |
