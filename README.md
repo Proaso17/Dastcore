@@ -80,7 +80,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Token de sesión expuesto en la URL** (query con sessionid/access_token) | pasivo | CWE-598 / WSTG-SESS-04 |
 | Exposición de ficheros sensibles (`.env`, `.git`, claves, `swagger.json`, `actuator/env`, `server-status`) | detector activo | CWE-538 / WSTG-CONF-04 |
 | **Source maps expuestos** (`.js.map` alcanzable que reconstruye el código fuente del frontend) | pasivo + fetch | CWE-540 / WSTG-CONF-04 |
-| GraphQL: introspección habilitada, **field-suggestion leakage** ("Did you mean…"), **batching/aliasing abuse** (bypass de rate-limit/DoS), **CSRF** (GET/form) | detector activo (`--graphql`) | CWE-200 / API8:2023 |
+| GraphQL: introspección habilitada, **field-suggestion leakage** ("Did you mean…"), **batching/aliasing abuse** (bypass de rate-limit/DoS), **CSRF** (GET/form), **inyección SQL vía argumentos de campo** (payload en el arg → error de BD, con selección `__typename` para campos que devuelven objetos) | detector activo (`--graphql`) | CWE-200/89 / API8:2023 |
 | **Método HTTP TRACE habilitado (Cross-Site Tracing)** | detector activo | CWE-16 / WSTG-CONF-06 |
 | **Métodos HTTP peligrosos habilitados** (PUT/DELETE/PATCH vía `Allow`) | detector activo | CWE-749 / WSTG-CONF-06 |
 | **Componentes con CVE conocido** (fingerprint de versión → BD de avisos offline: Apache/nginx/OpenSSL/jQuery/Bootstrap) | SCA-lite | CWE-1035 / A06:2021 |
