@@ -71,6 +71,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **LFI vía wrapper PHP** (`php://filter` → divulgación de código fuente) | regla YAML | CWE-98 / WSTG-INPV-11 |
 | Open redirect | regla YAML | CWE-601 / WSTG-CLNT-04 |
 | **Host header injection** | regla YAML (headers) | CWE-644 / WSTG-INPV-17 |
+| **Subdomain takeover** (host que sirve la página de "recurso no reclamado" de GitHub Pages/S3/Heroku/Fastly/Shopify… → DNS colgante reclamable) | detector pasivo (fingerprint) | CWE-284 / WSTG-CONF-10 |
 | CORS mal configurado (wildcard+creds **y origin reflejado**) | pasivo + activo | CWE-942 / WSTG-CLNT-07 |
 | BOLA/IDOR, BFLA, missing-auth (REST) **+ BOLA en GraphQL** (fetchers `node(id)`/`order(id)`: mismo objeto *con dueño* devuelto a dos identidades vía resolver anidado sin authz) | detector multi-sesión (`--graphql` + identidades) | CWE-639/285/306 / API1/5/2 |
 | **Mass assignment / over-posting** (inyecta un campo privilegiado — `role`/`is_admin`/`owner`/`balance` — y confirma por reflexión diferencial que el servidor lo bindeó) | detector activo | CWE-915 / API3:2023 |

@@ -75,6 +75,7 @@ from dastcore.detectors.jwt import (
 from dastcore.detectors.mass_assignment import run_mass_assignment_checks
 from dastcore.detectors.nosqli import run_nosql_checks
 from dastcore.detectors.shellshock import check_shellshock
+from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
@@ -538,6 +539,7 @@ async def _run_scan(
             extra_findings.extend(await run_nosql_checks(client, all_requests))
             extra_findings.extend(await run_mass_assignment_checks(client, all_requests))
             extra_findings.extend(await run_js_secret_scan(client, all_requests))
+            extra_findings.extend(await run_subdomain_takeover_check(client, target, all_requests))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))
