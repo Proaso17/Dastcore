@@ -121,6 +121,11 @@
   table.issues td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   table.issues td.num { text-align: right; font-weight: 700; }
   table.issues .rid { color: var(--muted); font-size: 11px; }
+  .compliance { margin: 28px 0 8px; }
+  .compliance h2 { font-size: 16px; margin: 0 0 4px; }
+  .compliance h3 { font-size: 13px; margin: 18px 0 4px; }
+  .compliance .fw-count { color: var(--muted); font-weight: 400; }
+  .compliance-note { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
 </style>
 </head>
 <body>
@@ -162,6 +167,30 @@
   </table>
   {% endif %}
 
+  {% if compliance %}
+  <section class="compliance">
+    <h2>Cumplimiento (indicativo)</h2>
+    <p class="compliance-note">Mapeo orientativo de los hallazgos confirmados a controles de PCI-DSS 4.0,
+      OWASP ASVS 4.0.3, ISO/IEC 27001:2022 y SOC 2. Señala el control afectado; no es un veredicto de certificación.</p>
+    {% for fw in compliance %}
+    <h3>{{ fw.framework }} <span class="fw-count">({{ fw.count }})</span></h3>
+    <table class="issues">
+      <thead><tr><th>Control</th><th>Título</th><th>Hallazgos</th><th>Peor severidad</th></tr></thead>
+      <tbody>
+      {% for c in fw.controls %}
+        <tr>
+          <td><code>{{ c.tag.control }}</code></td>
+          <td>{{ c.tag.title }}</td>
+          <td class="num">{{ c.count }}</td>
+          <td><span class="badge b-{{ c.max_severity }}">{{ c.max_severity }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endfor %}
+  </section>
+  {% endif %}
+
   {% macro finding_card(f) %}
     <article class="finding sev-{{ f.severity }}">
       <h3>
@@ -198,6 +227,7 @@
         {% endfor %}
       </ul>
 
+      {% if (audience | default("developer")) != "executive" %}
       <div class="section-label">Request</div>
       <pre>{{ f.request.method }} {{ f.request.url }}
 {%- if f.request.params %}
@@ -216,6 +246,7 @@ json: {{ f.request.json_body }}
 
       <div class="section-label">Reproducir (curl)</div>
       <pre class="repro">{{ f.repro_curl }}</pre>
+      {% endif %}
 
       {% set g = remediation_guide(f) %}
       <div class="fix">

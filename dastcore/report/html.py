@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from dastcore import __version__
 from dastcore.core.models import Finding
+from dastcore.report.compliance import compliance_summary
 from dastcore.report.correlation import correlate
 from dastcore.report.remediation import guide_for
 from dastcore.severity import SEVERITY_ORDER, severity_rank
@@ -55,7 +56,16 @@ def render_html(
     target: str | None = None,
     title: str = "dastcore — Dynamic Security Report",
     group_by_category: bool = False,
+    audience: str = "developer",
 ) -> str:
+    """Render the self-contained HTML report.
+
+    ``audience`` tailors the depth: ``developer`` (default) shows the full technical detail
+    (request/response payloads, reproduction curl); ``executive`` drops the raw payloads and
+    curl in favour of the issue overview, remediation, and a compliance-posture section — the
+    same confirmed findings, pitched at a decision-maker. The compliance section is shown to
+    both audiences.
+    """
     ordered = sorted(findings, key=lambda f: severity_rank(f.severity), reverse=True)
     template = _env.get_template("report.html.j2")
     return template.render(
@@ -67,6 +77,8 @@ def render_html(
         severity_order=list(reversed(SEVERITY_ORDER)),
         target=target,
         title=title,
+        audience=audience,
+        compliance=compliance_summary(findings),
         version=__version__,
         generated_at=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )

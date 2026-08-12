@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import sys
 import time
 from collections.abc import Sequence
 from contextlib import AsyncExitStack
@@ -77,6 +78,7 @@ from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate, cross_correlate, deduplicate
+from dastcore.report.markdown import render_markdown_diff
 from dastcore.retest import (
     RetestOutcome,
     base_requests_for,
@@ -88,6 +90,7 @@ from dastcore.retest import (
 from dastcore.severity import meets_threshold
 from dastcore.suppressions import Suppression, apply_suppressions, resolve_suppressions
 from dastcore.triage import triage_findings
+from dastcore.web.diff import diff_findings
 
 # Distinct from operational-error exit code 1: findings met the --fail-on bar.
 EXIT_FINDINGS_OVER_THRESHOLD = 2
@@ -802,6 +805,12 @@ def scan(
     ai_triage_key: str = typer.Option(
         "", "--ai-triage-key", help="API key de Anthropic para --ai-triage (si se omite, usa ANTHROPIC_API_KEY)."
     ),
+    audience: str = typer.Option(
+        "developer",
+        "--audience",
+        help="Audiencia del reporte HTML: developer (detalle técnico completo) | executive (resumen + "
+        "cumplimiento, sin payloads request/response ni curl).",
+    ),
 ) -> None:
     """Run a scan against TARGET (gated behind explicit authorization)."""
     logging.basicConfig(
@@ -876,6 +885,11 @@ def scan(
     valid_fail_on = ("info", "low", "medium", "high", "critical", "none")
     if fail_on not in valid_fail_on:
         console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r} (usa {' | '.join(valid_fail_on)}).")
+        raise typer.Exit(code=1)
+
+    audience = audience.lower()
+    if audience not in ("developer", "executive"):
+        console.print(f"[bold red]--audience inválido:[/bold red] {audience!r} (usa developer | executive).")
         raise typer.Exit(code=1)
 
     suppressions = _load_suppressions_or_exit(suppress)
@@ -998,6 +1012,7 @@ def scan(
         suppressions=suppressions,
         ai_triage=ai_triage,
         ai_triage_key=ai_triage_key or None,
+        audience=audience,
     )
 
 
@@ -1055,6 +1070,7 @@ def _emit_report_and_gate(
     suppressions: list[Suppression] | None = None,
     ai_triage: bool = False,
     ai_triage_key: str | None = None,
+    audience: str = "developer",
 ) -> None:
     """Shared reporting/exit-gate used by `scan` and `ai`.
 
@@ -1068,7 +1084,9 @@ def _emit_report_and_gate(
     suppressed = [f for f in findings if f.suppressed]
 
     if output_format == "html":
-        report = render_html(active, target=target, title=html_title, group_by_category=group_by_category)
+        report = render_html(
+            active, target=target, title=html_title, group_by_category=group_by_category, audience=audience
+        )
     else:
         # JSON/SARIF carry every finding; suppressed ones are flagged in place.
         report = _RENDERERS[output_format](findings)
@@ -1256,6 +1274,98 @@ def retest(
                 f"Saliendo con código {EXIT_FINDINGS_OVER_THRESHOLD} (--fail-on)."
             )
             raise typer.Exit(code=EXIT_FINDINGS_OVER_THRESHOLD)
+
+
+@app.command("diff")
+def diff(
+    baseline_file: str = typer.Argument(..., help="JSON de la línea base (salida de `scan -f json`)."),
+    current_file: str = typer.Argument(..., help="JSON del escaneo actual (salida de `scan -f json`)."),
+    output_format: str = typer.Option(
+        "markdown", "--format", "-f", help="Formato del reporte del diff: markdown | json | sarif | html."
+    ),
+    output_path: str = typer.Option("", "--output", "-o", help="Ruta del reporte (por defecto, stdout)."),
+    fail_on: str = typer.Option(
+        "high",
+        "--fail-on",
+        help="Falla (exit 2) solo si un hallazgo NUEVO alcanza este umbral: info | low | medium | high | critical | none.",
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Silencia la salida decorativa; solo emite el reporte."),
+) -> None:
+    """Compara dos reportes JSON del mismo objetivo por id estable de hallazgo y reporta lo
+    que CAMBIÓ: nuevos, corregidos y persistentes. El gate `--fail-on` se aplica SOLO a los
+    hallazgos NUEVOS — ideal para un job de CI que debe fallar ante regresiones pero no ante
+    deuda preexistente. Sin red y sin necesidad de autorización: es una comparación de ficheros."""
+    if not quiet:
+        _print_banner()
+
+    output_format = output_format.lower()
+    if output_format not in ("markdown", "json", "sarif", "html"):
+        console.print(f"[bold red]Formato inválido:[/bold red] {output_format!r} (usa markdown | json | sarif | html).")
+        raise typer.Exit(code=1)
+    fail_on = fail_on.lower()
+    valid_fail_on = ("info", "low", "medium", "high", "critical", "none")
+    if fail_on not in valid_fail_on:
+        console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r} (usa {' | '.join(valid_fail_on)}).")
+        raise typer.Exit(code=1)
+
+    try:
+        base = load_prior_findings(_json.loads(Path(baseline_file).read_text(encoding="utf-8")))
+        head = load_prior_findings(_json.loads(Path(current_file).read_text(encoding="utf-8")))
+    except (OSError, ValueError, ValidationError) as exc:
+        console.print(f"[bold red]JSON de hallazgos inválido:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    result = diff_findings(base, head)
+    target = _diff_target(head or base)
+
+    if not quiet:
+        c = result.counts
+        console.print(
+            f"\n[bold]Diff:[/bold] [red]{c['new']} nuevos[/red] · "
+            f"[green]{c['fixed']} corregidos[/green] · [dim]{c['persistent']} persistentes[/dim]"
+        )
+
+    if output_format == "markdown":
+        report = render_markdown_diff(result, target=target)
+    elif output_format == "html":
+        report = render_html(result.new, target=target, title="dastcore — Diff (hallazgos nuevos)")
+    else:
+        report = _RENDERERS[output_format](result.new)  # only-new findings for CI ingestion
+
+    if output_path:
+        Path(output_path).write_text(report, encoding="utf-8")
+        if not quiet:
+            console.print(f"\n[green]Reporte {output_format.upper()} escrito en {output_path}[/green]")
+    else:
+        _emit_text(report)
+
+    if fail_on != "none":
+        blocking = [f for f in result.new if meets_threshold(f.severity, fail_on)]  # type: ignore[arg-type]
+        if blocking:
+            console.print(
+                f"\n[bold red]{len(blocking)} hallazgo(s) NUEVO(s) con severidad >= {fail_on}.[/bold red] "
+                f"Saliendo con código {EXIT_FINDINGS_OVER_THRESHOLD} (--fail-on)."
+            )
+            raise typer.Exit(code=EXIT_FINDINGS_OVER_THRESHOLD)
+
+
+def _emit_text(report: str) -> None:
+    """Write a report to stdout UTF-8-safely (Markdown emoji break a cp1252 console)."""
+    try:
+        sys.stdout.write(report if report.endswith("\n") else report + "\n")
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write((report if report.endswith("\n") else report + "\n").encode("utf-8", "replace"))
+
+
+def _diff_target(findings: list[Finding]) -> str | None:
+    """Best-effort target label from a finding set (scheme+host of the first finding)."""
+    from urllib.parse import urlsplit
+
+    for finding in findings:
+        parts = urlsplit(finding.request.url)
+        if parts.scheme and parts.netloc:
+            return f"{parts.scheme}://{parts.netloc}"
+    return None
 
 
 async def _run_ai_scan(

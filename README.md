@@ -531,6 +531,26 @@ Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
   .venv\Scripts\dastcore retest hallazgos.json --i-have-authorization --rps 50 --fail-on high -o abiertos.json
   ```
 
+### Diff para CI (`dastcore diff`) — falla solo ante regresiones
+
+`dastcore diff base.json actual.json` compara **dos reportes JSON** del mismo objetivo por el `Finding.id` estable y los parte en **nuevos / corregidos / persistentes**. El gate `--fail-on` se aplica **solo a los hallazgos NUEVOS**, así que un job de CI puede fallar ante una regresión sin bloquear el PR por deuda preexistente que ya está en la línea base. No hace red ni requiere `--i-have-authorization`: es una comparación de ficheros. Formatos de salida: `markdown` (por defecto, pensado como **comentario de PR** — cuenta el cambio y tabula los nuevos), `json`/`sarif` (solo-nuevos, para ingestión) o `html`.
+
+```powershell
+# genera la línea base una vez, y en cada PR compara el escaneo nuevo contra ella
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization -f json -o base.json
+.venv\Scripts\dastcore diff base.json actual.json --format markdown -o diff.md --fail-on high
+```
+
+Hay un workflow de ejemplo en [`examples/github-action-diff.yml`](examples/github-action-diff.yml): escanea el deploy de preview en cada pull request, hace el diff contra `.dastcore/baseline.json`, **publica los hallazgos nuevos como comentario del PR** y falla el job solo si aparece una regresión ≥ umbral.
+
+### Cumplimiento y reportes por audiencia
+
+Cada reporte HTML incluye una sección de **cumplimiento (indicativo)** que mapea los hallazgos confirmados a controles de **PCI-DSS 4.0, OWASP ASVS 4.0.3, ISO/IEC 27001:2022 y SOC 2** (`dastcore/report/compliance.py`) — señala el control afectado por familia de vulnerabilidad; no es un veredicto de certificación. El flag `--audience` ajusta la profundidad del HTML: `developer` (por defecto, detalle técnico completo: request/response y curl de reproducción) o `executive` (resumen ejecutivo + cumplimiento, **sin** payloads ni curl) — los mismos hallazgos confirmados, con el nivel de detalle de cada audiencia. El renderer Markdown (`dastcore/report/markdown.py`) también emite la tabla de cumplimiento para cuerpos de issue o logs de CI.
+
+```powershell
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization -f html -o reporte-exec.html --audience executive
+```
+
 ## Panel web local (`dastcore serve`)
 
 Una UI **local, self-contained** sobre el mismo motor de escaneo, para quien prefiere no vivir en la terminal. Corre **donde tú la lanzas** → mantiene alcance a objetivos internos/staging y el tráfico intrusivo se queda en tu máquina (a diferencia de un SaaS multi-tenant).
