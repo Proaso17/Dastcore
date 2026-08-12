@@ -61,7 +61,7 @@ from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
-from dastcore.detectors.graphql_authz import run_graphql_authz_checks
+from dastcore.detectors.graphql_authz import run_graphql_authz_checks, run_graphql_field_authz_checks
 from dastcore.detectors.graphql_injection import check_graphql_arg_injection
 from dastcore.detectors.js_secrets import run_js_secret_scan
 from dastcore.detectors.jwt import (
@@ -450,6 +450,7 @@ async def _run_authz(
         findings = await run_authz_checks(identities, probes, unauth_client=unauth_client)
         if graphql_url:
             findings.extend(await run_graphql_authz_checks(identities, graphql_url, unauth_client=unauth_client))
+            findings.extend(await run_graphql_field_authz_checks(identities, graphql_url, unauth_client=unauth_client))
         return findings
 
 

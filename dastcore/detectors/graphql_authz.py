@@ -207,3 +207,128 @@ async def run_graphql_authz_checks(
                     fired = True
                     break
     return findings
+
+
+# Field names that should never be world-readable — the sensitivity signal for field-level authz.
+_SENSITIVE_FIELD = re.compile(
+    r"(e?mail|ssn|social_?security|passw(or)?d|pass_?hash|password_?hash|salt|secret|"
+    r"token|api_?key|private_?key|salary|wage|credit_?card|card_?number|iban|"
+    r"phone_?number|dob|date_?of_?birth|is_?admin|is_?staff|role|scope|permission|"
+    r"internal|admin_?notes|balance)",
+    re.IGNORECASE,
+)
+
+
+def _sensitive_scalar_fields(type_map: dict[str, dict], type_name: str | None) -> list[str]:
+    """Scalar/enum fields of a type whose *name* looks sensitive (and that take no required args)."""
+    type_def = type_map.get(type_name or "")
+    names: list[str] = []
+    for field in (type_def or {}).get("fields") or []:
+        name = field.get("name", "")
+        if not _SENSITIVE_FIELD.search(name) or any(_is_required(a) for a in field.get("args") or []):
+            continue
+        kind, _ = _unwrap(field.get("type"))
+        if kind in ("SCALAR", "ENUM"):
+            names.append(name)
+    return names[:_MAX_SUBFIELDS]
+
+
+def _object_fields(response: HttpResponse | None) -> dict[str, object] | None:
+    """The inner object dict of a successful, error-free GraphQL response (for per-field values)."""
+    if response is None or not _is_success(response.status_code):
+        return None
+    try:
+        payload = json.loads(response.text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if payload.get("errors"):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict) or not data:
+        return None
+    inner = next(iter(data.values()))
+    return inner if isinstance(inner, dict) else None
+
+
+def _field_authz_finding(
+    endpoint_url: str, document: str, fetcher: str, sensitive_field: str, who: list[str]
+) -> Finding:
+    request = HttpRequest(method="POST", url=endpoint_url, json_body={"query": document})
+    return Finding(
+        id=f"graphql-field-authz:{fetcher}:{sensitive_field}",
+        rule_id="graphql-field-authz",
+        name="Broken field-level authorization in GraphQL",
+        severity="high",
+        cwe="CWE-639",
+        owasp="API3:2023",
+        cvss="CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+        family="authz",
+        injection_point=InjectionPoint(
+            location="json", name=f"{fetcher}.{sensitive_field}", base_value="", request_template=request
+        ),
+        evidence=[
+            Evidence(
+                type="differential",
+                data=(
+                    f"the sensitive field '{sensitive_field}' on {fetcher} returned the identical non-null value to "
+                    f"multiple identities ({', '.join(who)}) — the resolver enforces (at most) object-level access "
+                    "but not field-level authorization, so a sensitive attribute leaks across users"
+                )[:200],
+                confidence="high",
+            )
+        ],
+        request=request,
+        response=HttpResponse(status_code=200),
+        remediation=(
+            "Aplica autorización a nivel de campo, no solo de objeto: comprueba en el resolver de cada campo "
+            "sensible (`email`, `ssn`, `role`, `balance`…) que la identidad autenticada puede verlo. No expongas "
+            "campos privados en tipos compartidos; usa tipos/vistas distintas por rol."
+        ),
+    )
+
+
+async def run_graphql_field_authz_checks(
+    identities: list[Identity], endpoint_url: str, *, unauth_client: HttpClient | None = None
+) -> list[Finding]:
+    """Field-level GraphQL authorization: a *sensitive* field that returns the same non-null value
+    to two different identities isn't access-scoped — a leak finer than whole-object BOLA."""
+    if len(identities) < 2:
+        return []
+    schema = await _introspect_full(identities[0].client, endpoint_url)
+    if schema is None:
+        return []
+    type_map = {t["name"]: t for t in schema.get("types", []) if t.get("name")}
+
+    findings: list[Finding] = []
+    reported: set[str] = set()
+    for field, id_arg, arg_type in _id_fetchers(schema)[:_MAX_FETCHERS]:
+        _, ret_type = _unwrap(field.get("type"))
+        sensitive = _sensitive_scalar_fields(type_map, ret_type)
+        if not sensitive:
+            continue
+        selection = " ".join([*sensitive, "__typename"])
+        probers: list[tuple[str, HttpClient]] = [(i.name, i.client) for i in identities]
+        if unauth_client is not None:
+            probers.append(("unauthenticated", unauth_client))
+
+        for id_value in _CANDIDATE_IDS:
+            document = _document(field, id_arg, arg_type, id_value, selection)
+            # For each sensitive field, which identities saw which non-null value.
+            by_field: dict[str, dict[str, list[str]]] = {name: {} for name in sensitive}
+            for name, client in probers:
+                obj = _object_fields(await _fetch(client, endpoint_url, document))
+                if obj is None:
+                    continue
+                for sfield in sensitive:
+                    value = obj.get(sfield)
+                    if value not in (None, "", [], {}):
+                        by_field[sfield].setdefault(json.dumps(value, sort_keys=True), []).append(name)
+            for sfield, values in by_field.items():
+                key = f"{field['name']}.{sfield}"
+                if key in reported:
+                    continue
+                if any(len(who) >= 2 for who in values.values()):  # same value seen by ≥2 identities
+                    who = next(w for w in values.values() if len(w) >= 2)
+                    findings.append(_field_authz_finding(endpoint_url, document, field["name"], sfield, who))
+                    reported.add(key)
+    return findings
