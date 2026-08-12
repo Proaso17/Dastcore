@@ -15,9 +15,13 @@ all see the same expiry triggers exactly one re-login, not one per request.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import re
+import secrets
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlsplit
 
 from dastcore.config import AuthConfig
 
@@ -54,7 +58,7 @@ class SessionManager:
 
     @property
     def can_relogin(self) -> bool:
-        return self._auth.type in ("form", "oauth2", "macro")
+        return self._auth.type in ("form", "oauth2", "oauth2_pkce", "macro")
 
     @property
     def is_established(self) -> bool:
@@ -111,6 +115,8 @@ class SessionManager:
             return await self._form_login(client)
         if self._auth.type == "oauth2":
             return await self._oauth2_login(client)
+        if self._auth.type == "oauth2_pkce":
+            return await self._oauth2_pkce_login(client)
         if self._auth.type == "macro":
             return await self._macro_login(client)
         return False
@@ -177,6 +183,83 @@ class SessionManager:
             return False
         self.headers[cfg.token_header] = f"{cfg.token_prefix}{token}"
         return True
+
+    async def _oauth2_pkce_login(self, client: HttpClient) -> bool:
+        """OAuth2 authorization-code + PKCE (RFC 7636), driven headlessly.
+
+        Establish an IdP session (optional), call the authorize endpoint with a fresh S256
+        challenge, capture the ``code`` from the redirect, and exchange it with the matching
+        verifier. The redirect is *not* followed (the client defaults to no-follow), so the
+        code is read straight from the ``Location`` header — the redirect_uri host is never hit.
+        """
+        cfg = self._auth.oauth2_pkce
+        assert cfg is not None
+        verifier, challenge = _pkce_pair()
+        state = secrets.token_urlsafe(16)
+
+        if cfg.login_url:  # establish an IdP session cookie so authorize can issue a code
+            login = await client.send_raw(
+                "POST",
+                cfg.login_url,
+                json=cfg.login_credentials if cfg.login_as_json else None,
+                data=None if cfg.login_as_json else cfg.login_credentials,
+            )
+            if login.status_code >= 400:
+                return False
+            self.cookies.update(login.cookies)
+
+        authorize_params = {
+            "response_type": "code",
+            "client_id": cfg.client_id,
+            "redirect_uri": cfg.redirect_uri,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        if cfg.scope:
+            authorize_params["scope"] = cfg.scope
+        authorized = await client.send_raw("GET", cfg.authorize_url, params=authorize_params)
+        code = _code_from_redirect(authorized, state)
+        if code is None:
+            return False
+
+        exchange = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": cfg.redirect_uri,
+            "client_id": cfg.client_id,
+            "code_verifier": verifier,
+        }
+        if cfg.client_secret:
+            exchange["client_secret"] = cfg.client_secret
+        token_response = await client.send_raw("POST", cfg.token_url, data=exchange)
+        if token_response.status_code >= 400:
+            return False
+        token = _extract_json_field(token_response.text, cfg.token_json_field)
+        if token is None:
+            return False
+        self.headers[cfg.token_header] = f"{cfg.token_prefix}{token}"
+        return True
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """A PKCE (verifier, S256 challenge) pair per RFC 7636 (base64url, no padding)."""
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii")
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+def _code_from_redirect(response, expected_state: str) -> str | None:
+    """Pull the authorization ``code`` from a redirect's Location, checking ``state`` first."""
+    location = response.headers.get("location") or response.headers.get("Location")
+    if not location:
+        return None
+    query = parse_qs(urlsplit(location).query)
+    if expected_state and query.get("state", [None])[0] != expected_state:
+        return None  # state mismatch → possible CSRF/mix-up; refuse the code
+    codes = query.get("code")
+    return codes[0] if codes else None
 
 
 def _extract_json_field(text: str, field: str) -> str | None:

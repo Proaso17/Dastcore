@@ -50,16 +50,40 @@ class OAuth2Config(BaseModel):
     token_prefix: str = "Bearer "
 
 
+class OAuth2PkceConfig(BaseModel):
+    """OAuth2 authorization-code grant with PKCE (RFC 7636), driven headlessly.
+
+    The scanner establishes an IdP session (optional ``login_url`` + credentials), calls the
+    authorization endpoint with a freshly generated ``code_challenge`` (S256), captures the
+    ``code`` from the redirect, and exchanges it at the token endpoint with the matching
+    ``code_verifier`` for a bearer token. ``client_secret`` is optional (public clients)."""
+
+    authorize_url: str
+    token_url: str
+    client_id: str
+    redirect_uri: str
+    client_secret: str | None = None
+    scope: str | None = None
+    # Optional IdP login POSTed before the authorize call to establish a session cookie.
+    login_url: str | None = None
+    login_credentials: dict[str, str] = Field(default_factory=dict)
+    login_as_json: bool = False
+    token_json_field: str = "access_token"
+    token_header: str = "Authorization"
+    token_prefix: str = "Bearer "
+
+
 class AuthConfig(BaseModel):
     """How the scanner authenticates. Static types (cookie/header/bearer) carry the material
     directly; ``form``/``oauth2`` log in dynamically and can re-login when the session drops."""
 
-    type: Literal["none", "cookie", "header", "bearer", "form", "oauth2", "macro"] = "none"
+    type: Literal["none", "cookie", "header", "bearer", "form", "oauth2", "oauth2_pkce", "macro"] = "none"
     cookies: dict[str, str] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
     bearer_token: str | None = None
     form: FormLoginConfig | None = None
     oauth2: OAuth2Config | None = None
+    oauth2_pkce: OAuth2PkceConfig | None = None
     # Browser login macro (type "macro"): a recorded JS-login replayed headlessly to get
     # the session cookies. `macro_runtime` fills `{{name}}` placeholders (password/OTP).
     macro_path: str = ""
@@ -76,6 +100,8 @@ class AuthConfig(BaseModel):
             raise ValueError("auth.type 'form' requires auth.form to be set")
         if self.type == "oauth2" and self.oauth2 is None:
             raise ValueError("auth.type 'oauth2' requires auth.oauth2 to be set")
+        if self.type == "oauth2_pkce" and self.oauth2_pkce is None:
+            raise ValueError("auth.type 'oauth2_pkce' requires auth.oauth2_pkce to be set")
         if self.type == "macro" and not self.macro_path:
             raise ValueError("auth.type 'macro' requires auth.macro_path to be set")
         return self

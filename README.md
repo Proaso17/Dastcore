@@ -294,6 +294,15 @@ La Fase 3 entrega autenticación y gestión de sesiones, propagadas de forma tra
   - **cookie / header / bearer estáticos** (material de auth fijo desde config).
   - **form-login**: POST de credenciales a una URL; la cookie de sesión resultante se persiste en el cookie jar de httpx (y opcionalmente se extrae un token del JSON de respuesta).
   - **OAuth2 client-credentials**: intercambia `client_id`/`client_secret` por un bearer token.
+  - **OAuth2 authorization-code + PKCE** (RFC 7636, headless): establece sesión en el IdP (login opcional), llama al endpoint de autorización con un `code_challenge` S256, captura el `code` del redirect (sin seguirlo — se lee del `Location`, así el `redirect_uri` nunca se solicita) y lo canjea con el `code_verifier` por un bearer. Para clientes públicos (`client_secret` opcional). Se configura por fichero (`--config`), p. ej.:
+    ```json
+    { "auth": { "type": "oauth2_pkce", "oauth2_pkce": {
+        "authorize_url": "https://idp.example/authorize",
+        "token_url": "https://idp.example/token",
+        "login_url": "https://idp.example/login",
+        "login_credentials": {"username": "alice", "password": "…"},
+        "client_id": "spa-client", "redirect_uri": "https://app.example/callback" } } }
+    ```
   - **login por macro de navegador** (auth compleja / JS): graba tu login una vez con `dastcore auth record <url>` (captura fills/clicks; la contraseña se guarda como `{{password}}`, nunca literal) y reprodúcelo headless para autenticar el scan con `--auth-macro macro.json --auth-macro-var password=…`. Verifícalo con `dastcore auth replay macro.json`. Resuelve el "no puedo autenticar el scan" de logins JavaScript; se re-reproduce solo si la sesión cae.
   - **detección de sesión caída + re-login automático**: si una respuesta trae la señal de "deslogueado" (por defecto `401`, o un patrón configurable en el body), el cliente re-loguea y reintenta la petición una vez. El re-login está serializado y protegido por *epoch*, de modo que una ráfaga de peticiones concurrentes que ven la misma expiración dispara **un solo** re-login, no uno por petición.
 - El `HttpClient` inyecta el material de sesión en cada petición y aplica el re-login; el crawler y el scanner operan autenticados **sin cambios** (ambos usan el mismo `HttpClient`).
