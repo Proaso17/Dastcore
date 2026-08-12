@@ -563,6 +563,14 @@ Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
 
 Hay un workflow de ejemplo en [`examples/github-action-diff.yml`](examples/github-action-diff.yml): escanea el deploy de preview en cada pull request, hace el diff contra `.dastcore/baseline.json`, **publica los hallazgos nuevos como comentario del PR** y falla el job solo si aparece una regresión ≥ umbral.
 
+**Gestión de la línea base** (`dastcore baseline`): cuando aceptas deliberadamente el estado actual de hallazgos (deuda conocida), promueve un escaneo a línea base para que los siguientes `diff` solo fallen ante regresiones nuevas. `baseline status` muestra un resumen de la línea base actual.
+
+```powershell
+.venv\Scripts\dastcore scan http://127.0.0.1:5000 --i-have-authorization -f json -o actual.json
+.venv\Scripts\dastcore baseline promote actual.json          # → .dastcore/baseline.json (por defecto)
+.venv\Scripts\dastcore baseline status
+```
+
 ### Cumplimiento y reportes por audiencia
 
 Cada reporte HTML incluye una sección de **cumplimiento (indicativo)** que mapea los hallazgos confirmados a controles de **PCI-DSS 4.0, OWASP ASVS 4.0.3, ISO/IEC 27001:2022 y SOC 2** (`dastcore/report/compliance.py`) — señala el control afectado por familia de vulnerabilidad; no es un veredicto de certificación. El flag `--audience` ajusta la profundidad del HTML: `developer` (por defecto, detalle técnico completo: request/response y curl de reproducción) o `executive` (resumen ejecutivo + cumplimiento, **sin** payloads ni curl) — los mismos hallazgos confirmados, con el nivel de detalle de cada audiencia. El renderer Markdown (`dastcore/report/markdown.py`) también emite la tabla de cumplimiento para cuerpos de issue o logs de CI.

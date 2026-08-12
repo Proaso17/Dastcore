@@ -1,73 +1,77 @@
-"""Baseline profiling + volatile-region normalization (and the timing jitter guard)."""
+"""`dastcore baseline promote/status`: adopt a scan JSON as the CI baseline for `dastcore diff`."""
 
 from __future__ import annotations
 
-from dastcore.core.models import HttpResponse
-from dastcore.validation.baseline import BaselineProfile, build_baseline, normalize_body
-from dastcore.validation.oracles import check_time_based
+import json
+
+from typer.testing import CliRunner
+
+from dastcore.cli import app
+from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+from dastcore.report import render_json
+
+runner = CliRunner()
 
 
-def _resp(text: str = "", elapsed_ms: float = 5.0) -> HttpResponse:
-    return HttpResponse(status_code=200, text=text, elapsed_ms=elapsed_ms, url="http://x/")
-
-
-def test_normalize_masks_common_volatiles() -> None:
-    out = normalize_body(
-        "id 550e8400-e29b-41d4-a716-446655440000 hex deadbeefdeadbeefcafe ts 2026-08-07T10:11:12Z n 1723030272"
+def _finding(fid: str, *, severity: str = "high") -> Finding:
+    request = HttpRequest(method="GET", url="http://t.test/a", params={"x": "1"})
+    point = InjectionPoint(location="query", name="x", request_template=request)
+    return Finding(
+        id=fid,
+        rule_id=fid.split(":")[0],
+        name=fid.split(":")[0].upper(),
+        severity=severity,  # type: ignore[arg-type]
+        cwe="CWE-1",
+        owasp="WSTG-1",
+        injection_point=point,
+        evidence=[Evidence(type="response_match", data="e")],
+        request=request,
+        response=HttpResponse(status_code=200),
+        remediation="fix",
     )
-    assert "{UUID}" in out and "{HEX}" in out and "{TS}" in out and "{NUM}" in out
-    # the volatile literals are gone
-    assert "550e8400" not in out and "deadbeefdeadbeef" not in out
 
 
-def test_normalize_masks_csrf_token_value_but_keeps_structure() -> None:
-    html = '<input type="hidden" name="csrf_token" value="Xy91acbz7Q">'
-    out = normalize_body(html)
-    assert 'name="csrf_token"' in out  # structure kept
-    assert "Xy91acbz7Q" not in out and "{TOKEN}" in out  # value masked
+def _scan_json(tmp_path, name: str, findings: list[Finding]) -> str:
+    path = tmp_path / name
+    path.write_text(render_json(findings), encoding="utf-8")
+    return str(path)
 
 
-def test_normalize_is_stable_for_non_volatile_content() -> None:
-    text = "<h1>Bienvenido</h1><p>Panel de control</p>"
-    assert normalize_body(text) == text
+def test_promote_writes_baseline_and_creates_dirs(tmp_path) -> None:
+    current = _scan_json(tmp_path, "current.json", [_finding("sqli:1"), _finding("xss:1", severity="low")])
+    baseline = tmp_path / ".dastcore" / "baseline.json"  # nested dir does not exist yet
+    result = runner.invoke(app, ["baseline", "promote", current, "--baseline", str(baseline)])
+    assert result.exit_code == 0
+    assert baseline.exists()
+    ids = {f["id"] for f in json.loads(baseline.read_text(encoding="utf-8"))}
+    assert ids == {"sqli:1", "xss:1"}
+    assert "2 hallazgos" in result.stdout
 
 
-def test_build_baseline_computes_median_and_jitter() -> None:
-    profile = build_baseline([_resp(elapsed_ms=10), _resp(elapsed_ms=14), _resp(elapsed_ms=12)])
-    assert profile.expected_ms == 12  # median
-    assert profile.jitter_ms == 4  # max - min
-    assert profile.primary.elapsed_ms == 10
+def test_promoted_baseline_feeds_diff(tmp_path) -> None:
+    # promote a baseline, then a scan with a new finding should be a regression via `diff`
+    base_src = _scan_json(tmp_path, "base_src.json", [_finding("sqli:1")])
+    baseline = tmp_path / "baseline.json"
+    runner.invoke(app, ["baseline", "promote", base_src, "--baseline", str(baseline), "--quiet"])
+    head = _scan_json(tmp_path, "head.json", [_finding("sqli:1"), _finding("cmdi:1", severity="critical")])
+    result = runner.invoke(app, ["diff", str(baseline), head, "--quiet", "-f", "json", "--fail-on", "high"])
+    assert result.exit_code == 2  # the new critical is a regression vs the promoted baseline
+    assert '"rule_id": "cmdi"' in result.stdout and '"rule_id": "sqli"' not in result.stdout
 
 
-def test_baseline_stability_and_extra_masks() -> None:
-    # Two samples that differ only by an app-specific volatile token -> stable + masked.
-    a = _resp(text="<p>hola</p><span>req=abc123def</span>")
-    b = _resp(text="<p>hola</p><span>req=zzz999yyy</span>")
-    profile = build_baseline([a, b])
-    assert profile.extra_masks  # discovered the differing token
-    assert profile.stable  # equal once the volatile part is masked
+def test_status_reports_summary_and_absence(tmp_path) -> None:
+    baseline = tmp_path / "baseline.json"
+    absent = runner.invoke(app, ["baseline", "status", "--baseline", str(baseline)])
+    assert absent.exit_code == 0 and "No hay línea base" in absent.stdout
+
+    current = _scan_json(tmp_path, "current.json", [_finding("sqli:1")])
+    runner.invoke(app, ["baseline", "promote", current, "--baseline", str(baseline), "--quiet"])
+    present = runner.invoke(app, ["baseline", "status", "--baseline", str(baseline)])
+    assert present.exit_code == 0 and "1 hallazgos" in present.stdout
 
 
-def test_baseline_detects_structural_instability() -> None:
-    a = _resp(text="<p>hola</p>")
-    b = _resp(text="<p>hola</p><div>anuncio aleatorio distinto cada vez</div>")
-    profile = build_baseline([a, b])
-    # These differ structurally, not just by a token; not fully maskable -> unstable.
-    assert profile.stable is False
-
-
-def test_time_based_ignores_delay_within_jitter() -> None:
-    # A 900ms delay over a noisy target (jitter 400ms -> 3x = 1200ms floor) must NOT fire.
-    mutated = _resp(elapsed_ms=1000)
-    assert check_time_based(mutated, threshold_ms=800, baseline_ms=100, jitter_ms=400) is None
-
-
-def test_time_based_fires_when_delay_clears_jitter_and_threshold() -> None:
-    mutated = _resp(elapsed_ms=5100)
-    ev = check_time_based(mutated, threshold_ms=4500, baseline_ms=100, jitter_ms=50)
-    assert ev is not None and ev.type == "time_based"
-
-
-def test_profile_normalize_uses_discovered_masks() -> None:
-    profile = BaselineProfile(responses=[_resp()], expected_ms=5, jitter_ms=0, extra_masks=("SESSION-XYZ",))
-    assert "SESSION-XYZ" not in profile.normalize("token=SESSION-XYZ end")
+def test_promote_rejects_invalid_json(tmp_path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    result = runner.invoke(app, ["baseline", "promote", str(bad)])
+    assert result.exit_code == 1 and "inválido" in result.stdout

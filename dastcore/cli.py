@@ -115,6 +115,13 @@ auth_app = typer.Typer(
 )
 app.add_typer(auth_app, name="auth")
 
+baseline_app = typer.Typer(
+    no_args_is_help=True, help="Gestiona la línea base de hallazgos para el diff de CI (dastcore diff)."
+)
+app.add_typer(baseline_app, name="baseline")
+
+_DEFAULT_BASELINE = ".dastcore/baseline.json"
+
 LEGAL_BANNER = (
     "dastcore es una herramienta de pentesting ACTIVA e INTRUSIVA.\n\n"
     "Solo debe usarse contra sistemas para los que tienes autorización EXPLÍCITA\n"
@@ -1872,6 +1879,66 @@ def auth_replay(
         raise typer.Exit(code=1)
     console.print(f"[green]{len(cookies)} cookie(s) de sesión:[/green]")
     console.print(_json.dumps(cookies, indent=2, ensure_ascii=False))
+
+
+def _load_findings_file(path: str) -> list[Finding]:
+    """Parse a scan JSON report (`scan -f json`) into findings, or exit with a clear error."""
+    try:
+        return load_prior_findings(_json.loads(Path(path).read_text(encoding="utf-8")))
+    except (OSError, ValueError, ValidationError) as exc:
+        console.print(f"[bold red]JSON de hallazgos inválido:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+def _severity_breakdown(findings: list[Finding]) -> str:
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding.severity] = counts.get(finding.severity, 0) + 1
+    parts = [f"{counts[sev]} {sev}" for sev in ("critical", "high", "medium", "low", "info") if counts.get(sev)]
+    return " · ".join(parts) if parts else "sin hallazgos"
+
+
+@baseline_app.command("promote")
+def baseline_promote(
+    current_file: str = typer.Argument(
+        ..., help="JSON del escaneo a adoptar como línea base (salida de scan -f json)."
+    ),
+    baseline_path: str = typer.Option(
+        _DEFAULT_BASELINE, "--baseline", "-b", help="Ruta del fichero de línea base a escribir."
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Silencia el resumen."),
+) -> None:
+    """Adopta un escaneo como la nueva línea base para `dastcore diff` en CI.
+
+    Valida el JSON, lo escribe normalizado en la ruta de línea base (creando los directorios
+    necesarios) y muestra un resumen. Ejecútalo cuando aceptes deliberadamente el estado actual
+    de hallazgos: a partir de ahí, `dastcore diff <baseline> <actual>` solo falla ante
+    hallazgos NUEVOS respecto a esta línea base."""
+    findings = _load_findings_file(current_file)
+    path = Path(baseline_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_json(findings), encoding="utf-8")
+    if not quiet:
+        console.print(
+            f"[green]Línea base actualizada:[/green] {len(findings)} hallazgos "
+            f"({_severity_breakdown(findings)}) → [bold]{path}[/bold]"
+        )
+
+
+@baseline_app.command("status")
+def baseline_status(
+    baseline_path: str = typer.Option(
+        _DEFAULT_BASELINE, "--baseline", "-b", help="Ruta del fichero de línea base a inspeccionar."
+    ),
+) -> None:
+    """Muestra un resumen de la línea base actual (cuántos hallazgos y de qué severidad)."""
+    if not Path(baseline_path).exists():
+        console.print(f"[yellow]No hay línea base en[/yellow] [bold]{baseline_path}[/bold] (usa 'baseline promote').")
+        raise typer.Exit(code=0)
+    findings = _load_findings_file(baseline_path)
+    console.print(
+        f"[bold]Línea base:[/bold] {baseline_path}\n{len(findings)} hallazgos · {_severity_breakdown(findings)}"
+    )
 
 
 if __name__ == "__main__":
