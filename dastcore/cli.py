@@ -33,6 +33,7 @@ from dastcore.ai.client import AiChatClient
 from dastcore.ai.cross_tenant import CrossTenantScanner, TenantProbe
 from dastcore.ai.discovery import ChatEndpointProfile, probe_chat_endpoints
 from dastcore.ai.engine import AiScanner, load_ai_rules
+from dastcore.ai.payload_gen import AiPayloadGenerator, build_payload_generator
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint, infer_write_endpoints
 from dastcore.config import (
@@ -468,6 +469,7 @@ async def _run_scan(
     test_race: bool = False,
     test_csrf: bool = False,
     test_proto_pollution: bool = False,
+    ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -535,6 +537,7 @@ async def _run_scan(
                 concurrency=config.rate_limit.max_concurrency,
                 stored_scan=stored_scan,
                 waf_evasion=waf_evasion,
+                ai_payloads=ai_payloads,
             )
             all_requests = list(discovered.values())
             extra_findings.extend(await check_shellshock(client, all_requests))
@@ -852,6 +855,16 @@ def scan(
     ai_triage_key: str = typer.Option(
         "", "--ai-triage-key", help="API key de Anthropic para --ai-triage (si se omite, usa ANTHROPIC_API_KEY)."
     ),
+    ai_payloads: bool = typer.Option(
+        False,
+        "--ai-payloads",
+        help="Capa IA opcional: cuando la entrada se refleja pero los payloads declarados no disparan, la IA "
+        "propone payloads según el contexto y el ORÁCULO los confirma (la IA nunca confirma). Usa "
+        "ANTHROPIC_API_KEY; intrusivo, no se activa en el perfil quick.",
+    ),
+    ai_payloads_key: str = typer.Option(
+        "", "--ai-payloads-key", help="API key de Anthropic para --ai-payloads (si se omite, usa ANTHROPIC_API_KEY)."
+    ),
     audience: str = typer.Option(
         "developer",
         "--audience",
@@ -940,6 +953,14 @@ def scan(
         raise typer.Exit(code=1)
 
     suppressions = _load_suppressions_or_exit(suppress)
+
+    payload_generator: AiPayloadGenerator | None = None
+    if ai_payloads and profile != "quick":
+        payload_generator = build_payload_generator(ai_payloads_key or None)
+        if payload_generator is None and not quiet:
+            console.print(
+                "[dim]--ai-payloads: sin ANTHROPIC_API_KEY; se ignora (la IA no está en la ruta crítica).[/dim]"
+            )
 
     identities: list[Identity] = []
     if roles_file:
@@ -1038,6 +1059,7 @@ def scan(
                     test_race=test_race and profile != "quick",
                     test_csrf=test_csrf and profile != "quick",
                     test_proto_pollution=test_proto_pollution and profile != "quick",
+                    ai_payloads=payload_generator,
                 )
             )
     except SessionLoginError as exc:

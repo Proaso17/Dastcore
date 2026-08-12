@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from dastcore.ai.payload_gen import AiPayloadGenerator
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.detectors.active_checks import check_cors_reflection
@@ -42,6 +43,17 @@ from dastcore.report.correlation import cross_correlate
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import OracleSpec, evaluate_oracle
 from dastcore.validation.reflection import analyze_reflection
+
+
+def _reflection_excerpt(body: str, marker: str, window: int = 120) -> str:
+    """A short slice of the response around where ``marker`` reflected, for the AI to see the
+    exact surrounding markup/quotes. Empty if the marker isn't present."""
+    idx = body.find(marker)
+    if idx == -1:
+        return ""
+    start = max(0, idx - window)
+    end = min(len(body), idx + len(marker) + window)
+    return body[start:end]
 
 
 def _time_based_checks(rule: Rule) -> list:
@@ -97,6 +109,8 @@ class Scanner:
         baseline_samples: int = 2,
         stored_scan: bool = False,
         waf_evasion: bool = False,
+        ai_payloads: AiPayloadGenerator | None = None,
+        ai_payload_budget: int = 15,
     ) -> None:
         self._http = http_client
         self._rules = rules
@@ -110,6 +124,12 @@ class Scanner:
         # When a raw payload is blocked, retry with encoding/case tampers to see if the vuln
         # is real but WAF-masked. Intrusive/noisy → opt-in (--waf-evasion), off in `quick`.
         self._waf_evasion = waf_evasion
+        # Optional AI-assisted payload generation: when the declared payloads don't fire but the
+        # input *reflects*, the AI proposes context-aware payloads. The rule's own oracle still
+        # confirms every one (the AI never confirms). Bounded by a per-scan LLM-call budget.
+        self._ai_payloads = ai_payloads
+        self._ai_budget = ai_payload_budget
+        self._ai_used = 0
         # Extra baseline samples pay off for two blind oracles: timing (to measure jitter)
         # and boolean-blind (to check the page is stable enough to trust a TRUE/FALSE diff).
         # Skip them otherwise to keep request volume down.
@@ -269,6 +289,75 @@ class Scanner:
                 evidence = evidence + [Evidence(type="differential", data=note, confidence="high")]
             return self._build_finding(rule, point, evidence, request, response)
 
+        # None of the declared payloads fired. If AI assistance is enabled and this point
+        # reflects input, let the model propose context-aware payloads (oracle still confirms).
+        if self._ai_payloads is not None and self._ai_used < self._ai_budget:
+            return await self._try_ai_payloads(rule, point, baseline, inband_oracle)
+        return None
+
+    async def _try_ai_payloads(self, rule: Rule, point, baseline: BaselineProfile, inband_oracle: OracleSpec):
+        """AI-assisted payloads: proposed by the model from the reflection context, confirmed by
+        the rule's oracle. The AI never confirms — a payload is a finding only if `evaluate_oracle`
+        fires on it (and reproduces), exactly like a declared payload."""
+        if rule.oracle is None:
+            return None
+        canary = "dcaix" + secrets.token_hex(5)
+        probe = await self._send(build_mutated_request(point, canary))
+        if probe is None:
+            return None
+        info = analyze_reflection(probe.text, canary)
+        if not (info.reflected or info.escaped):
+            return None  # input isn't reflected here → no context for the model to tailor to
+
+        self._ai_used += 1  # count the LLM call against the per-scan budget
+        excerpt = _reflection_excerpt(probe.text, canary)
+        context = (
+            f"HTML context={info.context}; {'escaped/inert' if info.escaped and not info.reflected else 'raw/verbatim'}"
+        )
+        tried = [p.value for p in inband_payloads(rule)]
+        try:
+            payloads = await self._ai_payloads.suggest(rule.family, context, excerpt, tried)
+        except Exception:  # noqa: BLE001 — a failed suggestion just means no AI payloads
+            return None
+
+        base_response = baseline.primary
+        for value in payloads:
+            request = build_mutated_request(point, value)
+            response = await self._send(request)
+            if response is None:
+                continue
+            evidence = evaluate_oracle(
+                inband_oracle, base_response=base_response, mutated_response=response, payload=value, baseline=baseline
+            )
+            if not evidence:
+                continue
+            if rule.catch_all_guard and await self._is_catch_all(point, response, baseline):
+                continue
+            if rule.confirm_reproducible:
+                confirm = await self._send(request)
+                if confirm is None:
+                    continue
+                confirm_evidence = evaluate_oracle(
+                    inband_oracle,
+                    base_response=base_response,
+                    mutated_response=confirm,
+                    payload=value,
+                    baseline=baseline,
+                )
+                if not confirm_evidence:
+                    continue
+                evidence = evidence + confirm_evidence
+            evidence = evidence + [
+                Evidence(
+                    type="differential",
+                    data=(
+                        "payload propuesto por la IA a partir del contexto de reflexión y confirmado por el "
+                        "oráculo — la IA no confirma hallazgos, solo amplía los inputs probados"
+                    ),
+                    confidence="high",
+                )
+            ]
+            return self._build_finding(rule, point, evidence, request, response)
         return None
 
     async def _try_waf_evasion(
