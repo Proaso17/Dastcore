@@ -456,6 +456,15 @@ Ejemplo E2E: `roles.json` con tres identidades (alice/bob rol user, admin rol ad
 ]
 ```
 
+**Identidades por macro de navegador (multi-rol, para apps JS/SPA):** cada identidad puede autenticarse con su propia macro grabada. Graba el login una vez (`dastcore auth record`) usando placeholders `{{username}}`/`{{password}}` en los campos, y **reutiliza la misma macro** para cada rol pasándole su propio `macro_runtime` — así BOLA/BFLA se prueban contra logins de navegador sin repetir la grabación:
+
+```json
+[
+  {"name":"alice","role":"user","auth":{"type":"macro","macro_path":"login.json","macro_runtime":{"username":"alice","password":"alice123"}}},
+  {"name":"bob","role":"user","auth":{"type":"macro","macro_path":"login.json","macro_runtime":{"username":"bob","password":"bob123"}}}
+]
+```
+
 ```powershell
 .venv\Scripts\dastcore scan http://127.0.0.1:5000/ --i-have-authorization --rps 50 `
   --openapi http://127.0.0.1:5000/openapi.json --roles-file roles.json
