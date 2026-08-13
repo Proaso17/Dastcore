@@ -96,7 +96,7 @@ def test_scan_writes_html_file(vuln_app_url: str, tmp_path) -> None:
 
 
 def test_scan_rejects_invalid_format(vuln_app_url: str) -> None:
-    result = runner.invoke(app, ["scan", vuln_app_url, "--i-have-authorization", "--format", "pdf"])
+    result = runner.invoke(app, ["scan", vuln_app_url, "--i-have-authorization", "--format", "xlsx"])
     assert result.exit_code == 1
     assert "Formato inválido" in result.stdout
 

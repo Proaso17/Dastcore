@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit
 
+import httpx
+
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 
@@ -34,7 +36,9 @@ async def _send(client: HttpClient, request: HttpRequest) -> HttpResponse | None
             data=request.data,
             json=request.json_body,
         )
-    except (OutOfScopeError, BudgetExceededError):
+    except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
+        # A concurrent burst can trip a transient read error; treat it as a non-success
+        # sample rather than crashing the check (the differential tolerates missing samples).
         return None
 
 
