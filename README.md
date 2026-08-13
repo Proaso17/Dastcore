@@ -92,7 +92,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **LLM: prompt injection (directa+indirecta), jailbreak, crescendo multi-turno, system-prompt leak, secretos/PII, excessive agency, output inseguro, denial of wallet** | `dastcore ai` | OWASP LLM01/02/05/06/07/10 |
 - **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.
 - **Motor async con concurrencia**: escaneo paralelo acotado (`--concurrency`), rate limiting (`--rps`), backoff ante HTTP 429, y presupuesto global (`--max-requests` / `--time-budget`) para escaneos seguros y acotados.
-- **Salidas**: JSON, SARIF 2.1.0 (CI/CD) y HTML autocontenido.
+- **Salidas**: JSON, SARIF 2.1.0 (CI/CD), HTML autocontenido, **PDF** (`-f pdf --output`, requiere `pip install 'dastcore[pdf]'`; respeta `--audience`) y **DefectDojo** (`-f defectdojo` → *Generic Findings Import* JSON, que también alimenta Jira vía DefectDojo; usa el `Finding.id` estable como `unique_id_from_tool` para deduplicar reimportaciones).
 
 ## Quickstart
 

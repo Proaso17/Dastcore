@@ -55,6 +55,7 @@ api = ["openapi-core>=0.19.0"]
 oast = ["cryptography>=42.0.0"]
 web = ["fastapi>=0.110.0", "uvicorn>=0.29.0", "python-multipart>=0.0.9"]
 pg = ["psycopg[binary]>=3.1.0"]  # PostgreSQL backend for the cloud control-plane
+pdf = ["fpdf2>=2.7.0"]  # PDF report export (dastcore scan -f pdf)
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.5",
@@ -66,6 +67,7 @@ dev = [
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
     "python-multipart>=0.0.9",
+    "fpdf2>=2.7.0",
     "ruff>=0.6.0",
     "mypy>=1.10.0",
 ]

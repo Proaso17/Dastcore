@@ -86,7 +86,7 @@ from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
-from dastcore.report import render_html, render_json, render_sarif
+from dastcore.report import render_defectdojo, render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate, cross_correlate, deduplicate
 from dastcore.report.markdown import render_markdown_diff
 from dastcore.retest import (
@@ -105,7 +105,7 @@ from dastcore.web.diff import diff_findings
 # Distinct from operational-error exit code 1: findings met the --fail-on bar.
 EXIT_FINDINGS_OVER_THRESHOLD = 2
 
-_RENDERERS = {"json": render_json, "sarif": render_sarif}
+_RENDERERS = {"json": render_json, "sarif": render_sarif, "defectdojo": render_defectdojo}
 
 app = typer.Typer(
     add_completion=False,
@@ -814,9 +814,11 @@ def scan(
         0, "--max-requests", help="Presupuesto total de peticiones (0 = sin límite). Detiene el escaneo al alcanzarlo."
     ),
     time_budget: float = typer.Option(0.0, "--time-budget", help="Presupuesto de tiempo en segundos (0 = sin límite)."),
-    output_format: str = typer.Option("json", "--format", "-f", help="Formato del reporte: json | sarif | html."),
+    output_format: str = typer.Option(
+        "json", "--format", "-f", help="Formato del reporte: json | sarif | html | defectdojo | pdf."
+    ),
     output_path: str = typer.Option(
-        "", "--output", "-o", help="Ruta de archivo para el reporte (por defecto, stdout)."
+        "", "--output", "-o", help="Ruta de archivo para el reporte (por defecto, stdout; pdf requiere --output)."
     ),
     fail_on: str = typer.Option(
         "high",
@@ -939,8 +941,13 @@ def scan(
         console.print(f"[bold red]--oast inválido:[/bold red] {oast_mode!r} (usa off | local | interactsh).")
         raise typer.Exit(code=1)
 
-    if output_format not in ("json", "sarif", "html"):
-        console.print(f"[bold red]Formato inválido:[/bold red] {output_format!r} (usa json | sarif | html).")
+    if output_format not in ("json", "sarif", "html", "defectdojo", "pdf"):
+        console.print(
+            f"[bold red]Formato inválido:[/bold red] {output_format!r} (usa json | sarif | html | defectdojo | pdf)."
+        )
+        raise typer.Exit(code=1)
+    if output_format == "pdf" and not output_path:
+        console.print("[bold red]--format pdf requiere --output[/bold red] (un PDF binario no va a stdout).")
         raise typer.Exit(code=1)
 
     valid_fail_on = ("info", "low", "medium", "high", "critical", "none")
@@ -1155,12 +1162,33 @@ def _emit_report_and_gate(
     active = [f for f in findings if not f.suppressed]
     suppressed = [f for f in findings if f.suppressed]
 
+    if output_format == "pdf":
+        from dastcore.report.pdf import render_pdf
+
+        try:
+            pdf_bytes = render_pdf(active, target=target, title=html_title, audience=audience)
+        except RuntimeError as exc:  # fpdf2 not installed
+            console.print(f"[bold red]{exc}[/bold red]")
+            raise typer.Exit(code=1) from exc
+        Path(output_path).write_bytes(pdf_bytes)  # --output is required for pdf (validated earlier)
+        if not quiet:
+            console.print()
+            _print_findings_table(active)
+            _print_summary(active, duration_s)
+            if suppressed:
+                _print_suppressed_note(suppressed)
+            if ai_triage:
+                _print_ai_triage(active, api_key=ai_triage_key)
+            console.print(f"\n[green]Reporte PDF escrito en {output_path}[/green]")
+        _fail_on_gate(active, fail_on)
+        return
+
     if output_format == "html":
         report = render_html(
             active, target=target, title=html_title, group_by_category=group_by_category, audience=audience
         )
     else:
-        # JSON/SARIF carry every finding; suppressed ones are flagged in place.
+        # JSON/SARIF/DefectDojo carry every finding; suppressed ones are flagged in place.
         report = _RENDERERS[output_format](findings)
 
     if not quiet:
@@ -1181,14 +1209,20 @@ def _emit_report_and_gate(
             console.print(f"\n[bold]{output_format.upper()}:[/bold]")
         print(report)
 
-    if fail_on != "none":
-        blocking = [f for f in active if meets_threshold(f.severity, fail_on)]  # type: ignore[arg-type]
-        if blocking:
-            console.print(
-                f"\n[bold red]{len(blocking)} hallazgo(s) con severidad >= {fail_on}.[/bold red] "
-                f"Saliendo con código {EXIT_FINDINGS_OVER_THRESHOLD} (--fail-on)."
-            )
-            raise typer.Exit(code=EXIT_FINDINGS_OVER_THRESHOLD)
+    _fail_on_gate(active, fail_on)
+
+
+def _fail_on_gate(active: list[Finding], fail_on: str) -> None:
+    """Exit with the CI failure code if any active finding meets the `--fail-on` threshold."""
+    if fail_on == "none":
+        return
+    blocking = [f for f in active if meets_threshold(f.severity, fail_on)]  # type: ignore[arg-type]
+    if blocking:
+        console.print(
+            f"\n[bold red]{len(blocking)} hallazgo(s) con severidad >= {fail_on}.[/bold red] "
+            f"Saliendo con código {EXIT_FINDINGS_OVER_THRESHOLD} (--fail-on)."
+        )
+        raise typer.Exit(code=EXIT_FINDINGS_OVER_THRESHOLD)
 
 
 @app.command("retest")
