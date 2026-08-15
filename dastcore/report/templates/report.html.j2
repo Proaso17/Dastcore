@@ -61,6 +61,9 @@
   .evidence li { font-size: 13px; padding: 6px 10px; background: var(--panel-2);
     border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
   .evidence .etype { font-weight: 700; color: var(--accent); }
+  /* --- proof of impact (bounded, read-only extraction) ----------------------- */
+  p.impact { font-size: 13px; margin: 4px 0 0; padding: 8px 12px; border-radius: 8px;
+    background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--critical); }
   /* --- attack chain (multi-stage narrative) ---------------------------------- */
   ol.chain { list-style: none; margin: 4px 0 0; padding-left: 0; counter-reset: chain; }
   ol.chain li { position: relative; padding: 8px 12px 8px 40px; margin-bottom: 6px; font-size: 13px;
@@ -216,6 +219,11 @@
         <li><span class="actor">{{ step.actor }}</span><span class="act">{{ step.action }}</span><span class="dtl">{{ step.detail }}</span></li>
         {% endfor %}
       </ol>
+      {% endif %}
+
+      {% if f.impact %}
+      <div class="section-label">Prueba de impacto</div>
+      <p class="impact">{{ f.impact }}</p>
       {% endif %}
 
       <div class="section-label">Evidence</div>

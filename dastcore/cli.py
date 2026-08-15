@@ -36,6 +36,7 @@ from dastcore.ai.engine import AiScanner, load_ai_rules
 from dastcore.ai.payload_gen import AiPayloadGenerator, build_payload_generator
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint, infer_write_endpoints
+from dastcore.analysis import prove_findings_impact
 from dastcore.config import (
     AuthConfig,
     FormLoginConfig,
@@ -474,6 +475,7 @@ async def _run_scan(
     test_csrf: bool = False,
     test_proto_pollution: bool = False,
     test_cache_poisoning: bool = False,
+    prove_impact: bool = False,
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
     rules = load_rules()
@@ -566,6 +568,9 @@ async def _run_scan(
                 extra_findings.extend(await run_cache_poisoning_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
+            if prove_impact:
+                progress.status("Probando impacto de los hallazgos confirmados…")
+                await prove_findings_impact(client, active_passive)
     finally:
         if oast is not None:
             await oast.stop()
@@ -819,6 +824,13 @@ def scan(
         help="Prueba web cache poisoning: envenena una URL única (cache-buster) con una cabecera no clavada y "
         "confirma con una petición limpia servida desde la caché (intrusivo: escribe una entrada de caché; "
         "no se activa en el perfil quick).",
+    ),
+    prove_impact: bool = typer.Option(
+        False,
+        "--prove-impact",
+        help="Sobre cada hallazgo ya confirmado, intenta una extracción de solo lectura y acotada que demuestre "
+        "el impacto real (SQLi → versión de la BD leída in-band). Solo enriquece hallazgos confirmados, nunca crea "
+        "nuevos (intrusivo: envía payloads de extracción; no se activa en el perfil quick).",
     ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
@@ -1084,6 +1096,7 @@ def scan(
                     test_csrf=test_csrf and profile != "quick",
                     test_proto_pollution=test_proto_pollution and profile != "quick",
                     test_cache_poisoning=test_cache_poisoning and profile != "quick",
+                    prove_impact=prove_impact and profile != "quick",
                     ai_payloads=payload_generator,
                 )
             )

@@ -139,6 +139,7 @@ class Finding(BaseModel):
     family: str = ""  # vulnerability family (from the rule); groups cross-technique confirmations
     corroborated_by: list[str] = Field(default_factory=list)  # other rules confirming the same scenario
     attack_chain: list[ChainStep] = Field(default_factory=list)  # ordered narrative for multi-stage attacks
+    impact: str | None = None  # proof-of-impact: bounded, read-only data an attacker could actually extract
 
     @computed_field  # type: ignore[prop-decorator]
     @property
