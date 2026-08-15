@@ -124,6 +124,17 @@
   table.issues td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   table.issues td.num { text-align: right; font-weight: 700; }
   table.issues .rid { color: var(--muted); font-size: 11px; }
+  .chains { margin: 28px 0 8px; }
+  .chains h2 { font-size: 16px; margin: 0 0 4px; }
+  .chain-card { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px;
+    background: var(--panel-2); padding: 12px 15px; margin: 10px 0; }
+  .chain-card.cc-critical { border-left-color: var(--critical); }
+  .chain-card.cc-high { border-left-color: var(--high); }
+  .chain-card.cc-medium { border-left-color: var(--medium); }
+  .chain-title { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .chain-summary { font-size: 13px; margin: 0 0 8px; }
+  ol.chain-legs { margin: 0; padding-left: 20px; }
+  ol.chain-legs li { font-size: 13px; margin: 4px 0; }
   .compliance { margin: 28px 0 8px; }
   .compliance h2 { font-size: 16px; margin: 0 0 4px; }
   .compliance h3 { font-size: 13px; margin: 18px 0 4px; }
@@ -168,6 +179,24 @@
     {% endfor %}
     </tbody>
   </table>
+  {% endif %}
+
+  {% if chains %}
+  <section class="chains">
+    <h2>Cadenas de explotación <span class="fw-count">({{ chains|length }})</span></h2>
+    <p class="compliance-note">Hallazgos que, combinados, elevan el impacto por encima de cualquiera por separado.</p>
+    {% for c in chains %}
+    <div class="chain-card cc-{{ c.severity }}">
+      <div class="chain-title"><span class="badge b-{{ c.severity }}">{{ c.severity }}</span><strong>{{ c.name }}</strong></div>
+      <p class="chain-summary">{{ c.summary }}</p>
+      <ol class="chain-legs">
+        {% for leg in c.legs %}
+        <li><strong>{{ leg.role }}</strong> — {{ leg.name }} <code class="rid">{{ leg.location }}</code></li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% endfor %}
+  </section>
   {% endif %}
 
   {% if compliance %}

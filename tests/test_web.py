@@ -159,6 +159,21 @@ async def test_scan_with_prove_impact_extracts_db_version(client: httpx.AsyncCli
         assert "Lectura de la base de datos" in panel.text  # the extracted-impact sentence
 
 
+async def test_scan_surfaces_attack_chains(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+    """The vuln target exposes both LFI and leaked secrets/files, which combine into the
+    'LFI -> secrets' exploit chain — surfaced in the panel's 'Cadenas de explotación' section."""
+    async with client:
+        resp = await client.post(
+            "/scans",
+            data={"target": vuln_app_url, "engine": "http", "rps": "50", "authorization": "on"},
+            follow_redirects=False,
+        )
+        scan_id = resp.headers["location"].rsplit("/", 1)[-1]
+        panel = await _wait_done(client, scan_id)
+    assert "Cadenas de explotación" in panel.text
+    assert "vía LFI" in panel.text  # the path-traversal + exposed-secrets chain
+
+
 async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         # 1) an initial scan to retest

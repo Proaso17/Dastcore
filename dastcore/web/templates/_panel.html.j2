@@ -62,6 +62,29 @@
     {% if accepted %}· {{ accepted | sum(attribute='count') }} aceptado(s){% endif %}
     {% if scan.duration_s %}· {{ scan.duration_s | round(1) }}s{% endif %}
   </p>
+  {% if chains %}
+  <div class="chains">
+    <div class="chains-head">
+      <strong>⛓ Cadenas de explotación ({{ chains | length }})</strong>
+      <span class="muted">hallazgos que, combinados, elevan el impacto</span>
+    </div>
+    {% for c in chains %}
+    <div class="chain-card lead-{{ c.severity }}">
+      <div class="chain-title">
+        <span class="badge sev-{{ c.severity }}">{{ c.severity }}</span>
+        <strong>{{ c.name }}</strong>
+      </div>
+      <p class="chain-summary">{{ c.summary }}</p>
+      <ol class="chain-legs">
+        {% for leg in c.legs %}
+        <li><span class="leg-role">{{ leg.role }}</span>
+          <span class="leg-detail">{{ leg.name }} · <code>{{ leg.location }}</code></span></li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
   {% if issues %}
   {% set top = issues[0] %}
   <div class="triage-lead lead-{{ top.severity }}">

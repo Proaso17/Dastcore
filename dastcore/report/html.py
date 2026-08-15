@@ -14,6 +14,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from dastcore import __version__
+from dastcore.analysis import correlate_chains
 from dastcore.core.models import Finding
 from dastcore.report.compliance import compliance_summary
 from dastcore.report.correlation import correlate
@@ -71,6 +72,7 @@ def render_html(
     return template.render(
         findings=ordered,
         issues=correlate(findings),
+        chains=correlate_chains(findings),
         grouped=_group_by_category(findings) if group_by_category else None,
         counts=_severity_counts(findings),
         total=len(findings),

@@ -161,6 +161,27 @@
     ul.nextsteps { margin: 8px 0 0; padding-left: 20px; }
     ul.nextsteps li { margin: 5px 0; font-size: 13.5px; }
     th[title], td .badge[title] { cursor: help; }
+    /* attack-path chains: compound exploit paths across findings */
+    .chains { margin: 12px 0 18px; }
+    .chains-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .chains-head strong { font-size: 14px; }
+    .chain-card { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px;
+      background: color-mix(in srgb, var(--accent) 4%, var(--panel)); padding: 12px 15px; margin-bottom: 10px; }
+    .chain-card.lead-critical { border-left-color: var(--crit); }
+    .chain-card.lead-high { border-left-color: var(--high); }
+    .chain-card.lead-medium { border-left-color: var(--med); }
+    .chain-title { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .chain-title strong { font-size: 14px; }
+    .chain-summary { margin: 0 0 10px; font-size: 13px; }
+    ol.chain-legs { list-style: none; margin: 0; padding: 0; counter-reset: leg; }
+    ol.chain-legs li { position: relative; padding: 5px 0 5px 30px; font-size: 13px; counter-increment: leg; }
+    ol.chain-legs li::before { content: counter(leg); position: absolute; left: 0; top: 4px; width: 20px; height: 20px;
+      border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700;
+      display: grid; place-items: center; }
+    ol.chain-legs li:not(:last-child)::after { content: ""; position: absolute; left: 9px; top: 25px; bottom: -1px;
+      width: 2px; background: var(--border); }
+    .chain-legs .leg-role { font-weight: 700; }
+    .chain-legs .leg-detail { color: var(--muted); }
     /* proof of impact: a demonstrated, read-only extraction attached to a confirmed issue */
     p.impact-proof { margin: 0 0 10px; padding: 9px 12px; font-size: 13px; border-radius: 8px;
       background: color-mix(in srgb, var(--crit) 7%, var(--bg)); border: 1px solid var(--border);

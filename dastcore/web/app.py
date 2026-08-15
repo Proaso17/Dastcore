@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 
+from dastcore.analysis import correlate_chains
 from dastcore.core.models import Finding
 from dastcore.httpsec import add_security_headers
 from dastcore.report import render_html, render_json, render_sarif
@@ -96,6 +97,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 apply_suppressions(findings, store.build_suppressions())
                 ctx["issues"] = correlate([f for f in findings if not f.suppressed])
                 ctx["accepted"] = correlate([f for f in findings if f.suppressed])
+                ctx["chains"] = correlate_chains(findings)  # exploit paths across the active findings
         return ctx, True
 
     def _with_triage(scan: ScanRow, suppressions: list) -> ScanRow:
