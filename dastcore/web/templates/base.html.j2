@@ -99,6 +99,51 @@
     .frefs a { font-size: 12px; border: 1px solid var(--border); background: var(--panel); border-radius: 999px;
       padding: 3px 11px; text-decoration: none; }
     .frefs a:hover { border-color: var(--accent); text-decoration: none; }
+    /* --- Asistente de escaneo paso a paso (wizard) --- */
+    ol.wz-steps { display: flex; gap: 8px; margin: 4px 0 22px; padding: 0; list-style: none; }
+    ol.wz-steps li { flex: 1; display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--muted);
+      padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+    ol.wz-steps li .n { width: 22px; height: 22px; border-radius: 50%; background: var(--border); color: var(--muted);
+      display: grid; place-items: center; font-size: 12px; font-weight: 700; flex: none; }
+    ol.wz-steps li.active { color: var(--ink); border-color: var(--accent); }
+    ol.wz-steps li.active .n { background: var(--accent); color: var(--accent-ink); }
+    ol.wz-steps li.done { color: var(--ink); }
+    ol.wz-steps li.done .n { background: var(--ok); color: #fff; }
+    @media (max-width: 720px) { ol.wz-steps li .lbl { display: none; } ol.wz-steps { gap: 6px; } }
+    /* progressive enhancement: with JS the form steps; without it, every step is just visible */
+    form.wizard.js .wz-step { display: none; }
+    form.wizard.js .wz-step.active { display: block; }
+    .wz-step > h3 { margin: 0 0 4px; font-size: 15px; }
+    .wz-step > .hint { font-size: 12.5px; color: var(--muted); margin: 0 0 14px; }
+    .hint { font-size: 12.5px; color: var(--muted); }
+    .wz-nav { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding-top: 16px;
+      border-top: 1px solid var(--border); }
+    button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--border); }
+    button.ghost:hover { border-color: var(--accent); filter: none; }
+    button[hidden] { display: none; }
+    .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 6px 0 4px; }
+    @media (max-width: 560px) { .choices { grid-template-columns: 1fr; } }
+    label.choice { display: block; position: relative; border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px 14px; cursor: pointer; background: var(--bg); margin: 0; color: var(--ink); }
+    label.choice input { position: absolute; opacity: 0; width: 0; height: 0; }
+    label.choice .t { font-weight: 700; font-size: 14px; }
+    label.choice .d { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+    label.choice:has(input:checked) { border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 7%, transparent); }
+    label.choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+    ul.recap { list-style: none; margin: 6px 0 0; padding: 0; }
+    ul.recap li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 2px;
+      border-bottom: 1px solid var(--border); font-size: 14px; }
+    ul.recap li span.k { color: var(--muted); }
+    details.guide { border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+      margin: 0 0 18px; overflow: hidden; }
+    details.guide > summary { cursor: pointer; list-style: none; padding: 11px 14px; font-size: 13.5px;
+      font-weight: 600; color: var(--accent); user-select: none; }
+    details.guide > summary::-webkit-details-marker { display: none; }
+    details.guide[open] > summary { border-bottom: 1px solid var(--border); }
+    details.guide .gbody { padding: 12px 16px 16px; font-size: 13.5px; }
+    details.guide .gbody ol { margin: 8px 0 0; padding-left: 20px; }
+    details.guide .gbody li { margin: 5px 0; }
     /* accessibility: visible keyboard focus + respect reduced-motion */
     a:focus-visible, button:focus-visible, summary:focus-visible,
     input:focus-visible, select:focus-visible {

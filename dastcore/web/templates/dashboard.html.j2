@@ -9,82 +9,229 @@
   <div class="panel">
     <h2>Nuevo escaneo</h2>
     {% if error %}<div class="panel err" style="margin:0 0 14px">{{ error }}</div>{% endif %}
-    <form method="post" action="/scans">
-      <label for="mode">Tipo de escaneo</label>
-      <select id="mode" name="mode" onchange="dcToggleMode(this.value)">
-        <option value="scan">Web (vulnerabilidades clásicas)</option>
-        <option value="ai">Chatbot embebido (IA / OWASP LLM)</option>
-      </select>
 
-      <label for="target">URL objetivo</label>
-      <input id="target" name="target" placeholder="https://staging.example.com" value="{{ target or '' }}" required>
+    <details class="guide">
+      <summary>Guía rápida · primeros pasos para probar tu aplicación</summary>
+      <div class="gbody">
+        <p style="margin:0"><strong>Antes de empezar</strong> necesitas tres cosas:</p>
+        <ol style="list-style:disc">
+          <li>Permiso por escrito del dueño del sistema (el escáner es intrusivo).</li>
+          <li>La URL de un entorno de <strong>pruebas o staging</strong> — evita producción.</li>
+          <li>Opcional: un token o cookie de sesión si la app requiere iniciar sesión.</li>
+        </ol>
+        <p style="margin:10px 0 0"><strong>El asistente te lleva en 4 pasos:</strong></p>
+        <ol>
+          <li><strong>Objetivo</strong> — elige si es una web clásica o una app con chatbot de IA y pega la URL.</li>
+          <li><strong>Alcance</strong> — cómo de a fondo escanear (rápido para una primera pasada, completo para todo).</li>
+          <li><strong>Acceso</strong> — si la app pide login, pega un token o cookie para escanear autenticado.</li>
+          <li><strong>Revisar y lanzar</strong> — confirma la autorización y arranca. Verás el progreso en vivo y, al
+            terminar, cada hallazgo con su guía de solución.</li>
+        </ol>
+      </div>
+    </details>
 
-      <div class="row3" data-mode="scan">
-        <div>
-          <label for="engine">Motor</label>
-          <select id="engine" name="engine">
-            <option value="http">http (estático)</option>
-            <option value="headless">headless (SPA)</option>
-            <option value="both">both</option>
-          </select>
+    <form class="wizard" method="post" action="/scans" id="scanForm">
+      <ol class="wz-steps">
+        <li data-step="1" class="active"><span class="n">1</span><span class="lbl">Objetivo</span></li>
+        <li data-step="2"><span class="n">2</span><span class="lbl">Alcance</span></li>
+        <li data-step="3"><span class="n">3</span><span class="lbl">Acceso</span></li>
+        <li data-step="4"><span class="n">4</span><span class="lbl">Revisar</span></li>
+      </ol>
+
+      <!-- Paso 1: qué y dónde -->
+      <div class="wz-step active" data-step="1">
+        <h3>¿Qué vas a probar?</h3>
+        <p class="hint">Elige el tipo de aplicación y pega su dirección.</p>
+        <div class="choices">
+          <label class="choice">
+            <input type="radio" name="mode" value="scan" checked>
+            <span class="t">Aplicación web</span>
+            <span class="d">Vulnerabilidades clásicas: inyección SQL, XSS, redirecciones, fugas de datos…</span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="mode" value="ai">
+            <span class="t">Chatbot embebido (IA)</span>
+            <span class="d">Comprobaciones OWASP LLM: prompt injection, inyección almacenada, fuga entre cuentas.</span>
+          </label>
         </div>
-        <div>
-          <label for="profile">Perfil</label>
-          <select id="profile" name="profile">
-            <option value="">(personalizado)</option>
-            <option value="quick">quick</option>
-            <option value="full">full</option>
-            <option value="api">api</option>
-          </select>
-        </div>
-        <div>
-          <label for="rps">Requests/segundo</label>
-          <input id="rps" name="rps" type="number" step="0.5" min="0.5" value="5">
-        </div>
+        <label for="target">URL objetivo</label>
+        <input id="target" name="target" placeholder="https://staging.example.com" value="{{ target or '' }}"
+               inputmode="url" required>
+        <p class="hint" style="margin-top:6px">Usa el entorno de pruebas, no producción.</p>
       </div>
 
-      <div class="row">
-        <div>
-          <label for="auth_bearer">Bearer token (opcional)</label>
-          <input id="auth_bearer" name="auth_bearer" placeholder="eyJ…">
-        </div>
+      <!-- Paso 2: alcance -->
+      <div class="wz-step" data-step="2">
         <div data-mode="scan">
-          <label for="auth_cookie">Cookie (opcional)</label>
-          <input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123">
+          <h3>¿Cómo de a fondo?</h3>
+          <p class="hint">Si es tu primera prueba, empieza por <strong>Rápido</strong>.</p>
+          <div class="choices">
+            <label class="choice">
+              <input type="radio" name="profile" value="quick" checked>
+              <span class="t">Rápido</span>
+              <span class="d">Una primera pasada segura y veloz. Recomendado para empezar.</span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="profile" value="full">
+              <span class="t">Completo</span>
+              <span class="d">Escaneo exhaustivo, incluye comprobaciones intrusivas. Tarda más.</span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="profile" value="api">
+              <span class="t">API</span>
+              <span class="d">Orientado a APIs REST/GraphQL y fallos de autorización (BOLA/BFLA).</span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="profile" value="">
+              <span class="t">Personalizado</span>
+              <span class="d">Sin perfil: usa los detectores por defecto y ajusta motor y ritmo abajo.</span>
+            </label>
+          </div>
+          <div class="row" style="margin-top:14px">
+            <div>
+              <label for="engine">Motor</label>
+              <select id="engine" name="engine">
+                <option value="http">Rápido (HTML estático)</option>
+                <option value="headless">Navegador (para SPAs React/Vue/Angular)</option>
+                <option value="both">Ambos</option>
+              </select>
+              <p class="hint" style="margin-top:5px">Elige «Navegador» si la web se construye con JavaScript.</p>
+            </div>
+            <div>
+              <label for="rps">Ritmo (peticiones por segundo)</label>
+              <input id="rps" name="rps" type="number" step="0.5" min="0.5" value="5">
+              <p class="hint" style="margin-top:5px">Bájalo si el servidor es frágil; súbelo para ir más rápido.</p>
+            </div>
+          </div>
+        </div>
+        <div data-mode="ai" hidden>
+          <h3>Descubrimiento automático</h3>
+          <p class="hint">El escaneo de chatbot crawlea la app y detecta solo el endpoint del asistente:
+            no necesitas elegir motor ni perfil. Continúa al siguiente paso.</p>
         </div>
       </div>
 
-      <div data-mode="ai" hidden>
-        <p class="muted" style="margin:6px 0 10px">
-          Crawlea la app, autodetecta el endpoint del chatbot y corre las comprobaciones OWASP LLM
-          (prompt injection, inyección almacenada). Para las pruebas <strong>cross-tenant</strong>
-          (BOLA/BFLA vía el asistente) añade una segunda identidad:
-        </p>
+      <!-- Paso 3: acceso -->
+      <div class="wz-step" data-step="3">
+        <h3>Acceso <span class="muted" style="font-weight:400">(opcional)</span></h3>
+        <p class="hint">Si la aplicación requiere iniciar sesión, dale al escáner una credencial para
+          que pruebe las zonas autenticadas. Si es pública, deja esto vacío.</p>
         <div class="row">
           <div>
-            <label for="victim_bearer">Bearer de un 2.º tenant (víctima)</label>
-            <input id="victim_bearer" name="victim_bearer" placeholder="eyJ… (otra cuenta)">
+            <label for="auth_bearer">Token Bearer</label>
+            <input id="auth_bearer" name="auth_bearer" placeholder="eyJ…">
           </div>
-          <div>
-            <label for="victim_ref">Cómo nombrar a la víctima (una por línea)</label>
-            <textarea id="victim_ref" name="victim_ref" rows="2" placeholder="unit 4B&#10;bob"></textarea>
+          <div data-mode="scan">
+            <label for="auth_cookie">Cookie de sesión</label>
+            <input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123">
+          </div>
+        </div>
+        <div data-mode="ai" hidden>
+          <p class="hint" style="margin:14px 0 10px">
+            Para detectar <strong>fugas entre cuentas</strong> (BOLA/BFLA vía el asistente) añade una segunda
+            identidad: el escáner intentará que el chatbot te muestre datos de esa otra cuenta.
+          </p>
+          <div class="row">
+            <div>
+              <label for="victim_bearer">Token de una 2.ª cuenta (víctima)</label>
+              <input id="victim_bearer" name="victim_bearer" placeholder="eyJ… (otra cuenta)">
+            </div>
+            <div>
+              <label for="victim_ref">Cómo referirse a esa cuenta (una por línea)</label>
+              <textarea id="victim_ref" name="victim_ref" rows="2" placeholder="unit 4B&#10;bob"></textarea>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="check">
-        <input id="authorization" name="authorization" type="checkbox" value="on">
-        <label for="authorization" style="margin:0">Tengo autorización explícita para escanear este objetivo.</label>
+      <!-- Paso 4: revisar y lanzar -->
+      <div class="wz-step" data-step="4">
+        <h3>Revisar y lanzar</h3>
+        <p class="hint">Comprueba el resumen y confirma que tienes autorización.</p>
+        <ul class="recap" id="recap"></ul>
+        <div class="check" style="margin-top:16px">
+          <input id="authorization" name="authorization" type="checkbox" value="on" required>
+          <label for="authorization" style="margin:0">Tengo autorización explícita y por escrito para escanear
+            este objetivo.</label>
+        </div>
       </div>
-      <button type="submit">Iniciar escaneo</button>
+
+      <div class="wz-nav">
+        <button type="button" class="ghost" id="wzBack" hidden>← Atrás</button>
+        <div style="margin-left:auto; display:flex; gap:10px">
+          <button type="button" id="wzNext">Siguiente →</button>
+          <button type="submit" id="wzLaunch" hidden>Iniciar escaneo</button>
+        </div>
+      </div>
     </form>
     <script>
-      function dcToggleMode(mode) {
-        document.querySelectorAll('[data-mode]').forEach(function (el) {
-          el.hidden = el.getAttribute('data-mode') !== mode;
+      (function () {
+        var form = document.getElementById('scanForm');
+        if (!form) return;
+        form.classList.add('js');  // progressive enhancement: only step when JS is available
+        var els = form.elements, cur = 1;
+        var PROFILES = { '': 'Personalizado', quick: 'Rápido', full: 'Completo', api: 'API' };
+
+        function mode() { return els.mode.value; }
+        function applyMode() {
+          var m = mode();
+          form.querySelectorAll('[data-mode]').forEach(function (el) {
+            el.hidden = el.getAttribute('data-mode') !== m;
+          });
+        }
+        function esc(s) {
+          return String(s).replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+          });
+        }
+        function fillRecap() {
+          var m = mode(), rows = [
+            ['Tipo', m === 'ai' ? 'Chatbot con IA (OWASP LLM)' : 'Aplicación web'],
+            ['Objetivo', els.target.value.trim() || '—']
+          ];
+          if (m !== 'ai') {
+            var p = form.querySelector('input[name=profile]:checked');
+            rows.push(['Profundidad', PROFILES[p ? p.value : ''] || 'Personalizado']);
+            rows.push(['Motor', els.engine.options[els.engine.selectedIndex].text]);
+            rows.push(['Ritmo', els.rps.value + ' req/s']);
+          }
+          var hasAuth = els.auth_bearer.value.trim()
+            || (els.auth_cookie && els.auth_cookie.value.trim())
+            || (els.victim_bearer && els.victim_bearer.value.trim());
+          rows.push(['Autenticación', hasAuth ? 'Configurada' : 'Sin autenticación']);
+          document.getElementById('recap').innerHTML = rows.map(function (r) {
+            return '<li><span class="k">' + r[0] + '</span><span>' + esc(r[1]) + '</span></li>';
+          }).join('');
+        }
+        function show(n) {
+          cur = n;
+          form.querySelectorAll('.wz-step').forEach(function (s) {
+            s.classList.toggle('active', +s.dataset.step === n);
+          });
+          form.querySelectorAll('.wz-steps li').forEach(function (li) {
+            var d = +li.dataset.step;
+            li.classList.toggle('active', d === n);
+            li.classList.toggle('done', d < n);
+          });
+          document.getElementById('wzBack').hidden = n === 1;
+          document.getElementById('wzNext').hidden = n === 4;
+          document.getElementById('wzLaunch').hidden = n !== 4;
+          if (n === 4) fillRecap();
+        }
+        document.getElementById('wzBack').addEventListener('click', function () { if (cur > 1) show(cur - 1); });
+        document.getElementById('wzNext').addEventListener('click', function () {
+          if (cur === 1) {
+            var t = els.target;
+            if (!t.value.trim()) { t.reportValidity ? t.reportValidity() : t.focus(); return; }
+          }
+          if (cur < 4) show(cur + 1);
         });
-      }
-      dcToggleMode(document.getElementById('mode').value);
+        Array.prototype.forEach.call(form.querySelectorAll('input[name=mode]'), function (r) {
+          r.addEventListener('change', applyMode);
+        });
+        applyMode();
+        show(1);
+      })();
     </script>
   </div>
 
