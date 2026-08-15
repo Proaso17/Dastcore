@@ -264,3 +264,81 @@ async def test_ssti_reflect_only_endpoint_is_not_claimed(reflect_only_url: str) 
         n = await prove_findings_impact(client, [finding])
     assert n == 0  # payload reflected but not evaluated → no impact
     assert finding.impact is None
+
+
+# --- OS command injection -------------------------------------------------------------------
+
+import re as _re  # noqa: E402
+
+
+def _cmdi_app(*, execute: bool):
+    from flask import Flask, Response, request
+
+    app = Flask(__name__)
+
+    def _fake_shell(host: str) -> str:
+        # Faithful mini-simulation of `sh -c "ping " + host`: command substitution then echo.
+        s = host.replace("$(id)", "uid=0(root) gid=0(root) groups=0(root)")
+        s = s.replace("$(uname -a)", "Linux testhost 6.1.0 x86_64 GNU/Linux")
+        m = _re.search(r"echo (\S.*)", s)
+        return m.group(1) if m else "PING localhost: 56 data bytes"
+
+    @app.get("/ping")
+    def ping() -> Response:
+        host = request.args.get("host", "localhost")
+        if execute:
+            return Response(_fake_shell(host), mimetype="text/plain")
+        return Response(f"PING {host}: 56 data bytes", mimetype="text/plain")  # reflect only, no shell
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def cmdi_url() -> Iterator[str]:
+    url, server = _serve(_cmdi_app(execute=True))
+    yield url
+    server.shutdown()
+
+
+@pytest.fixture(scope="module")
+def cmdi_reflect_url() -> Iterator[str]:
+    url, server = _serve(_cmdi_app(execute=False))
+    yield url
+    server.shutdown()
+
+
+def _cmdi_finding(base: str) -> Finding:
+    req = HttpRequest(method="GET", url=f"{base}/ping", params={"host": "localhost"})
+    point = InjectionPoint(location="query", name="host", base_value="localhost", request_template=req)
+    return Finding(
+        id="cmdi-inband:GET:/ping:query:host",
+        rule_id="cmdi-inband",
+        name="OS Command Injection (in-band)",
+        severity="critical",
+        cwe="CWE-78",
+        owasp="WSTG-INPV-12",
+        injection_point=point,
+        evidence=[Evidence(type="response_match", data="uid=")],
+        request=req,
+        response=HttpResponse(status_code=200),
+        remediation="No pases entrada de usuario a una shell.",
+        family="cmdi",
+    )
+
+
+async def test_confirmed_cmdi_shows_command_output(cmdi_url: str) -> None:
+    finding = _cmdi_finding(cmdi_url)
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 1
+    assert finding.impact is not None
+    assert "uid=0(root)" in finding.impact  # the real command output was read back
+    assert "`id`" in finding.impact
+
+
+async def test_cmdi_reflect_only_endpoint_is_not_claimed(cmdi_reflect_url: str) -> None:
+    finding = _cmdi_finding(cmdi_reflect_url)
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 0  # the payload is echoed but never executed → no impact
+    assert finding.impact is None

