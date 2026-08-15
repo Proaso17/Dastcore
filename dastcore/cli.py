@@ -59,6 +59,7 @@ from dastcore.detectors.active_checks import (
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.csrf import run_csrf_checks
+from dastcore.detectors.deserialization import run_deserialization_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
 from dastcore.detectors.graphql_authz import run_graphql_authz_checks, run_graphql_field_authz_checks
@@ -546,6 +547,7 @@ async def _run_scan(
             extra_findings.extend(await run_mass_assignment_checks(client, all_requests))
             extra_findings.extend(await run_js_secret_scan(client, all_requests))
             extra_findings.extend(await run_subdomain_takeover_check(client, target, all_requests))
+            extra_findings.extend(await run_deserialization_checks(client, all_requests, oast))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))
