@@ -42,6 +42,7 @@ class ScanRequest:
     concurrency: int = 5
     auth_bearer: str = ""
     auth_cookie: str = ""  # "name=value"
+    prove_impact: bool = False  # enrich confirmed findings with bounded, read-only proof of impact
     allow_domains: list[str] = field(default_factory=list)
     # Embedded-chatbot ("ai --discover") scans: a second identity for the cross-tenant checks.
     victim_bearer: str = ""
@@ -136,16 +137,23 @@ class ScanManager:
         self._live[scan_id] = job
         self._store.insert_running(scan_id, str(config.target), engine, req.profile or None, time.time())
 
-        task = asyncio.create_task(self._run(job, config, engine, max_pages))
+        task = asyncio.create_task(self._run(job, config, engine, max_pages, req.prove_impact))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return scan_id
 
-    async def _run(self, job: LiveJob, config: ScanConfig, engine: str, max_pages: int) -> None:
+    async def _run(
+        self, job: LiveJob, config: ScanConfig, engine: str, max_pages: int, prove_impact: bool = False
+    ) -> None:
         started = time.monotonic()
         try:
             findings = await _run_scan(
-                config, max_pages, engine, budget=_Budget(None, None), progress=_JobProgress(job)
+                config,
+                max_pages,
+                engine,
+                budget=_Budget(None, None),
+                progress=_JobProgress(job),
+                prove_impact=prove_impact,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

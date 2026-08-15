@@ -131,6 +131,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         auth_cookie: str = Form(""),
         victim_bearer: str = Form(""),
         victim_ref: str = Form(""),
+        prove_impact: str = Form(""),
         authorization: str = Form(""),
     ) -> Response:
         target = target.strip()
@@ -167,6 +168,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                         rps=rps if rps > 0 else 5.0,
                         auth_bearer=auth_bearer.strip(),
                         auth_cookie=auth_cookie.strip(),
+                        prove_impact=prove_impact == "on",
                     )
                 )
         except Exception as exc:  # noqa: BLE001 — bad target/config -> re-render the form with the reason

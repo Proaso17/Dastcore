@@ -141,6 +141,24 @@ async def test_ai_chatbot_scan_from_dashboard(client: httpx.AsyncClient, chatbot
         assert "chatbot IA" in home.text  # history labels the run as an AI scan
 
 
+async def test_scan_with_prove_impact_extracts_db_version(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+    """The wizard's 'Probar impacto' checkbox: a confirmed SQLi gets a read-only DB proof
+    attached and surfaced in the panel — without inventing any new finding."""
+    async with client:
+        resp = await client.post(
+            "/scans",
+            data={"target": vuln_app_url, "engine": "http", "rps": "50", "prove_impact": "on", "authorization": "on"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        scan_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+        panel = await _wait_done(client, scan_id)
+        assert "SQL Injection" in panel.text
+        assert "Impacto probado" in panel.text  # the proof callout rendered
+        assert "Lectura de la base de datos" in panel.text  # the extracted-impact sentence
+
+
 async def test_retest_from_ui_marks_unchanged_target_open(client: httpx.AsyncClient, mini_target_url: str) -> None:
     async with client:
         # 1) an initial scan to retest

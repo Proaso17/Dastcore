@@ -103,6 +103,14 @@
               <p class="hint" style="margin-top:5px">Bájalo si el servidor es frágil; súbelo para ir más rápido.</p>
             </div>
           </div>
+          <div class="check" style="margin-top:16px">
+            <input id="prove_impact" name="prove_impact" type="checkbox" value="on">
+            <label for="prove_impact" style="margin:0">Probar el <strong>impacto real</strong> de cada hallazgo
+              confirmado</label>
+          </div>
+          <p class="hint" style="margin:2px 0 0">Sobre lo ya confirmado, intenta una extracción de solo lectura y
+            acotada que lo demuestre (p. ej. SQLi → lee la versión de la base de datos). No genera falsos positivos:
+            solo enriquece hallazgos ya confirmados.</p>
         </div>
         <div data-mode="ai" hidden>
           <h3>Descubrimiento automático</h3>

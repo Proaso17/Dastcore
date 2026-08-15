@@ -830,7 +830,7 @@ def scan(
         "--prove-impact",
         help="Sobre cada hallazgo ya confirmado, intenta una extracción de solo lectura y acotada que demuestre "
         "el impacto real (SQLi → versión de la BD leída in-band). Solo enriquece hallazgos confirmados, nunca crea "
-        "nuevos (intrusivo: envía payloads de extracción; no se activa en el perfil quick).",
+        "nuevos (opt-in explícito: envía payloads de extracción de solo lectura, acotados a 24 peticiones/hallazgo).",
     ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
@@ -1096,7 +1096,7 @@ def scan(
                     test_csrf=test_csrf and profile != "quick",
                     test_proto_pollution=test_proto_pollution and profile != "quick",
                     test_cache_poisoning=test_cache_poisoning and profile != "quick",
-                    prove_impact=prove_impact and profile != "quick",
+                    prove_impact=prove_impact,  # opt-in explícito: enriquece confirmados, no depende del perfil
                     ai_payloads=payload_generator,
                 )
             )

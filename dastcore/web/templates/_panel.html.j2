@@ -108,6 +108,7 @@
           </td>
         </tr>
         <tr class="fix-row"><td colspan="6">{% set g = remediation_guide(i) %}
+          {% if i.impact %}<p class="impact-proof"><span class="ip-tag">Impacto probado</span>{{ i.impact }}</p>{% endif %}
           <details class="fix">
             <summary>
               <svg class="wr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"

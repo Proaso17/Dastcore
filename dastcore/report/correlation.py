@@ -77,6 +77,7 @@ class IssueGroup:
     confidence_score: float = 0.0
     family: str = ""  # lets guide_for() resolve remediation for this issue
     remediation: str = ""  # the rule's one-line fix, used as the guide summary
+    impact: str = ""  # proof-of-impact from the strongest instance, if any was demonstrated
 
 
 def _location_label(finding: Finding) -> str:
@@ -106,6 +107,8 @@ def correlate(findings: list[Finding]) -> list[IssueGroup]:
         if finding.confidence_score > group.confidence_score:  # keep the strongest instance's confidence
             group.confidence_score = finding.confidence_score
             group.confidence = finding.confidence
+        if finding.impact and not group.impact:  # surface the first proven impact for the issue
+            group.impact = finding.impact
         label = _location_label(finding)
         if label not in group.locations:
             group.locations.append(label)
