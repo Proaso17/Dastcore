@@ -11,12 +11,34 @@
     <div class="actions"><a href="/dastcore-ignore">Descargar .dastcore-ignore</a></div>
   </div>
 
+  <details class="guide">
+    <summary>Guía rápida · cuándo aceptar un hallazgo</summary>
+    <div class="gbody">
+      <p style="margin:0">«Triar» un hallazgo es <strong>marcarlo para que deje de aparecer</strong> como activo.
+        Hazlo solo cuando:</p>
+      <ol style="list-style:disc">
+        <li>Has confirmado que es un <strong>falso positivo</strong> (revisado a mano, no es explotable), o</li>
+        <li>Es un <strong>riesgo aceptado</strong> conscientemente (p. ej. lo mitiga otra capa).</li>
+      </ol>
+      <p style="margin:10px 0 0">El hallazgo no se borra: sigue en el JSON/SARIF como registro, solo sale de la
+        lista activa y del gate de CI. La forma normal de crear una regla es pulsar <strong>«Aceptar»</strong>
+        en un escaneo; el formulario de abajo es para casos manuales o por lotes.</p>
+    </div>
+  </details>
+
   <div class="panel">
     <h2>Reglas ({{ suppressions | length }})</h2>
     {% if suppressions %}
     <div class="overflow">
       <table>
-        <thead><tr><th>rule_id</th><th>id (finding)</th><th>url</th><th>motivo</th><th>expira</th><th></th></tr></thead>
+        <thead><tr>
+          <th title="Silencia todos los hallazgos de esta regla (p. ej. xss-reflected).">rule_id</th>
+          <th title="Silencia un hallazgo concreto por su id exacto.">id (finding)</th>
+          <th title="Silencia por ubicación; admite comodines (glob), p. ej. */legacy/*.">url</th>
+          <th title="Por qué se aceptó (queda como registro).">motivo</th>
+          <th title="Fecha en que la regla deja de aplicarse (opcional).">expira</th>
+          <th></th>
+        </tr></thead>
         <tbody>
           {% for s in suppressions %}
           <tr>
@@ -44,15 +66,16 @@
     <h2>Añadir regla manual</h2>
     <form method="post" action="/suppress">
       <div class="row3">
-        <div><label for="rule_id">rule_id</label><input id="rule_id" name="rule_id" placeholder="xss-reflected"></div>
-        <div><label for="finding_id">id de hallazgo</label><input id="finding_id" name="finding_id" placeholder="xss-reflected:GET:/x:query:q"></div>
-        <div><label for="url">url (glob)</label><input id="url" name="url" placeholder="*/legacy/*"></div>
+        <div><label for="rule_id">Por regla (rule_id)</label><input id="rule_id" name="rule_id" placeholder="xss-reflected"></div>
+        <div><label for="finding_id">Por hallazgo concreto (id)</label><input id="finding_id" name="finding_id" placeholder="xss-reflected:GET:/x:query:q"></div>
+        <div><label for="url">Por ubicación (url, admite *)</label><input id="url" name="url" placeholder="*/legacy/*"></div>
       </div>
       <div class="row">
-        <div><label for="reason">motivo</label><input id="reason" name="reason" placeholder="Aceptado: lo fija el CDN"></div>
-        <div><label for="expires">expira (YYYY-MM-DD)</label><input id="expires" name="expires" placeholder="2026-12-31"></div>
+        <div><label for="reason">Motivo</label><input id="reason" name="reason" placeholder="Aceptado: lo fija el CDN"></div>
+        <div><label for="expires">Expira (YYYY-MM-DD, opcional)</label><input id="expires" name="expires" placeholder="2026-12-31"></div>
       </div>
-      <p class="muted" style="font-size:13px">Debe cumplir al menos un selector (rule_id, id o url); si das varios, deben cumplirse todos.</p>
+      <p class="hint" style="font-size:13px">Rellena <strong>al menos uno</strong> de los tres selectores de arriba.
+        Si rellenas varios, el hallazgo debe cumplirlos <strong>todos</strong> para silenciarse (más específico).</p>
       <button type="submit">Añadir</button>
     </form>
   </div>

@@ -6,12 +6,35 @@
     Prográmalos solo contra objetivos para los que tienes autorización permanente.
   </div>
 
+  <details class="guide" style="max-width:1080px;margin:0 auto 20px">
+    <summary>Guía rápida · escaneos automáticos</summary>
+    <div class="gbody">
+      <p style="margin:0">Un escaneo programado <strong>repite un escaneo cada cierto tiempo</strong>, sin que
+        tengas que lanzarlo a mano. Es útil para:</p>
+      <ol style="list-style:disc">
+        <li>Vigilar un entorno de staging (p. ej. cada noche) y detectar regresiones pronto.</li>
+        <li>Mantener una línea base estable para tu CI/CD.</li>
+      </ol>
+      <p style="margin:10px 0 0">Como se ejecuta solo, necesita <strong>autorización permanente</strong> sobre el
+        objetivo. En cada fila puedes <strong>Ejecutar</strong> ahora, <strong>Pausar/Reanudar</strong> o
+        <strong>Borrar</strong> el programado.</p>
+    </div>
+  </details>
+
   <div class="panel">
     <h2>Escaneos programados ({{ schedules | length }})</h2>
     {% if schedules %}
     <div class="overflow">
       <table>
-        <thead><tr><th>Objetivo</th><th>Motor</th><th>Cada</th><th>Estado</th><th>Última</th><th>Próxima</th><th></th></tr></thead>
+        <thead><tr>
+          <th title="URL que se escaneará.">Objetivo</th>
+          <th title="Motor de escaneo: rápido (HTML) o navegador (SPAs).">Motor</th>
+          <th title="Cada cuánto se repite el escaneo.">Cada</th>
+          <th title="Activo = se ejecuta automáticamente; pausado = no.">Estado</th>
+          <th title="Cuándo se ejecutó por última vez.">Última</th>
+          <th title="Cuándo se ejecutará la próxima vez.">Próxima</th>
+          <th></th>
+        </tr></thead>
         <tbody>
           {% for s in schedules %}
           <tr>
@@ -57,18 +80,22 @@
         <div>
           <label for="engine">Motor</label>
           <select id="engine" name="engine">
-            <option value="http">http</option><option value="headless">headless</option><option value="both">both</option>
+            <option value="http">Rápido (HTML estático)</option>
+            <option value="headless">Navegador (SPAs React/Vue/Angular)</option>
+            <option value="both">Ambos</option>
           </select>
         </div>
         <div>
-          <label for="profile">Perfil</label>
+          <label for="profile">Profundidad</label>
           <select id="profile" name="profile">
-            <option value="">(personalizado)</option><option value="quick">quick</option>
-            <option value="full">full</option><option value="api">api</option>
+            <option value="">Personalizado</option>
+            <option value="quick">Rápido</option>
+            <option value="full">Completo</option>
+            <option value="api">API</option>
           </select>
         </div>
         <div>
-          <label for="interval_minutes">Frecuencia</label>
+          <label for="interval_minutes">Cada cuánto se repite</label>
           <select id="interval_minutes" name="interval_minutes">
             {% for mins, label in intervals %}
             <option value="{{ mins }}" {% if mins == 1440 %}selected{% endif %}>{{ label }}</option>
@@ -76,10 +103,14 @@
           </select>
         </div>
       </div>
+      <p class="hint" style="margin:6px 0 0">Usa «Navegador» solo si la web se construye con JavaScript. Para
+        vigilar regresiones cada noche, «Completo» + «diario» es una buena combinación.</p>
       <div class="row">
-        <div><label for="auth_bearer">Bearer token (opcional)</label><input id="auth_bearer" name="auth_bearer" placeholder="eyJ…"></div>
-        <div><label for="auth_cookie">Cookie (opcional)</label><input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123"></div>
+        <div><label for="auth_bearer">Token Bearer (opcional)</label><input id="auth_bearer" name="auth_bearer" placeholder="eyJ…"></div>
+        <div><label for="auth_cookie">Cookie de sesión (opcional)</label><input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123"></div>
       </div>
+      <p class="hint" style="margin:6px 0 0">Rellénalos si el objetivo requiere login, para que el escaneo
+        automático cubra también las zonas privadas.</p>
       <div class="check">
         <input id="authorization" name="authorization" type="checkbox" value="on">
         <label for="authorization" style="margin:0">Tengo autorización permanente para escanear este objetivo.</label>
