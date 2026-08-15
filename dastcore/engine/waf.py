@@ -54,7 +54,7 @@ def _mixed(text: str) -> str:
     return _sql_inline_comments(_swap_case(text))
 
 
-# (name, transform). Ordered cheapest/most-portable first.
+# (name, transform). Ordered cheapest/most-portable first. Applied for every family.
 TAMPERS: list[tuple[str, Callable[[str], str]]] = [
     ("case-swap", _swap_case),
     ("url-encode", _url_encode),
@@ -64,11 +64,58 @@ TAMPERS: list[tuple[str, Callable[[str], str]]] = [
 ]
 
 
-def tampered_variants(payload: str) -> list[tuple[str, str]]:
-    """Return (name, tampered) pairs that actually differ from the original payload."""
+# --- family-specific tampers: equivalent syntax that stays valid to the backend ----------------
+# Each keeps the payload's meaning for its family while dropping the token a signature keys on, so
+# a *blocking* WAF misses it and the oracle still fires on the backend's real behaviour.
+
+
+def _sql_ws_comment(text: str) -> str:
+    """Whitespace via inline comments — keeps keywords intact, so it stays valid SQL (``a b`` -> ``a/**/b``)."""
+    return text.replace(" ", "/**/")
+
+
+def _sql_ws_newline(text: str) -> str:
+    """Whitespace via a newline — SQL treats it as space, many space-based signatures don't."""
+    return text.replace(" ", "\n")
+
+
+_SHELL_CMD = re.compile(r"\b(id|whoami|cat|ls|uname|curl|wget|ping|nslookup|echo|dir|type)\b", re.IGNORECASE)
+
+
+def _cmdi_ifs(text: str) -> str:
+    """Shell whitespace via ``${IFS}`` — the shell still splits on it, a space filter is bypassed."""
+    return text.replace(" ", "${IFS}")
+
+
+def _cmdi_quote_insert(text: str) -> str:
+    """Break a command word with empty quotes (``id`` -> ``i""d``): the shell strips them and runs ``id``."""
+    return _SHELL_CMD.sub(lambda m: f'{m.group(0)[0]}""{m.group(0)[1:]}', text)
+
+
+def _cmdi_backslash(text: str) -> str:
+    """Break a command word with a backslash (``id`` -> ``i\\d``): the shell drops it and runs ``id``."""
+    return _SHELL_CMD.sub(lambda m: f"{m.group(0)[0]}\\{m.group(0)[1:]}", text)
+
+
+def _lfi_path_backslash(text: str) -> str:
+    """Backslash separators — Windows resolves ``..\\`` the same as ``../`` past ``../``-only filters."""
+    return text.replace("../", "..\\")
+
+
+# Appended after the generic TAMPERS when the rule's family is known.
+_FAMILY_TAMPERS: dict[str, list[tuple[str, Callable[[str], str]]]] = {
+    "sqli": [("ws-comment", _sql_ws_comment), ("ws-newline", _sql_ws_newline)],
+    "cmdi": [("ifs", _cmdi_ifs), ("quote-insert", _cmdi_quote_insert), ("cmd-backslash", _cmdi_backslash)],
+    "lfi": [("path-backslash", _lfi_path_backslash)],
+}
+
+
+def tampered_variants(payload: str, family: str = "") -> list[tuple[str, str]]:
+    """Return (name, tampered) pairs that differ from the original — generic tampers first, then
+    the family-specific equivalents (``family=""`` keeps the generic-only behaviour)."""
     seen: set[str] = {payload}
     variants: list[tuple[str, str]] = []
-    for name, transform in TAMPERS:
+    for name, transform in TAMPERS + _FAMILY_TAMPERS.get(family, []):
         candidate = transform(payload)
         if candidate not in seen:
             seen.add(candidate)

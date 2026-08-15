@@ -260,7 +260,7 @@ class Scanner:
 
             # If the raw payload was blocked and nothing fired, try to evade the WAF and confirm.
             if not evidence and self._waf_evasion and looks_blocked(response) is not None:
-                evaded = await self._try_waf_evasion(inband_oracle, point, value, base_response, baseline)
+                evaded = await self._try_waf_evasion(inband_oracle, point, value, base_response, baseline, rule.family)
                 if evaded is not None:
                     request, response, value, evidence, note = evaded
 
@@ -361,11 +361,17 @@ class Scanner:
         return None
 
     async def _try_waf_evasion(
-        self, oracle: OracleSpec, point, payload_value: str, base_response: HttpResponse, baseline: BaselineProfile
+        self,
+        oracle: OracleSpec,
+        point,
+        payload_value: str,
+        base_response: HttpResponse,
+        baseline: BaselineProfile,
+        family: str = "",
     ) -> tuple[HttpRequest, HttpResponse, str, list[Evidence], str] | None:
-        """Retry a blocked payload with encoding/case tampers; return the first variant that
-        gets past the WAF and fires the oracle (with a note), else None."""
-        for name, tampered in tampered_variants(payload_value):
+        """Retry a blocked payload with encoding/case tampers (plus family-specific equivalents);
+        return the first variant that gets past the WAF and fires the oracle (with a note), else None."""
+        for name, tampered in tampered_variants(payload_value, family):
             request = build_mutated_request(point, tampered)
             response = await self._send(request)
             if response is None or looks_blocked(response) is not None:
