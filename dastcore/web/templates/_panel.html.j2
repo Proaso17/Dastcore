@@ -48,6 +48,14 @@
     <a href="/scans/{{ scan.id }}/findings.sarif">SARIF abiertos</a>{% endif %}
   </div>
 {% else %}
+  {% set SEV_ONE = {'critical':'crítico','high':'alto','medium':'medio','low':'bajo','info':'informativo'} %}
+  {% set SEV_MANY = {'critical':'críticos','high':'altos','medium':'medios','low':'bajos','info':'informativos'} %}
+  {% set SEV_TIP = {
+    'critical':'Crítico — explotable y de alto impacto; corrígelo de inmediato.',
+    'high':'Alto — riesgo serio; prioriza su corrección.',
+    'medium':'Medio — riesgo moderado; planifica su corrección.',
+    'low':'Bajo — riesgo menor.',
+    'info':'Informativo — sin impacto directo, para tu conocimiento.'} %}
   <div class="status st-done">Completado</div>
   <p class="muted">
     {{ issues | sum(attribute='count') }} hallazgo(s) activo(s) · {{ issues | length }} issue(s)
@@ -55,13 +63,37 @@
     {% if scan.duration_s %}· {{ scan.duration_s | round(1) }}s{% endif %}
   </p>
   {% if issues %}
+  {% set top = issues[0] %}
+  <div class="triage-lead lead-{{ top.severity }}">
+    <div class="tl-head">
+      <strong>Empieza por aquí</strong>
+      <div class="sevbar">
+        {% for sev in ['critical','high','medium','low','info'] %}
+          {% set n = issues | selectattr('severity','equalto', sev) | sum(attribute='count') %}
+          {% if n %}<span class="badge sev-{{ sev }}" title="{{ SEV_TIP[sev] }}">{{ n }} {{ SEV_MANY[sev] if n > 1 else SEV_ONE[sev] }}</span>{% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    <p>
+      El hallazgo más grave es <strong>{{ top.name }}</strong> ({{ SEV_ONE[top.severity] }})
+      en <code>{{ top.locations[0] }}</code>. Corrígelo primero{% if top.count > 1 %} — se repite en {{ top.count }} ubicaciones{% endif %}.
+      <a href="#issue-{{ top.rule_id }}">Ver cómo solucionarlo ↓</a>
+    </p>
+  </div>
   <div class="overflow">
     <table>
-      <thead><tr><th>Severidad</th><th>CVSS</th><th>Issue</th><th>Inst.</th><th>Ubicaciones</th><th>Triaje</th></tr></thead>
+      <thead><tr>
+        <th title="Gravedad del hallazgo: de crítico (arréglalo ya) a informativo.">Severidad</th>
+        <th title="Gravedad técnica de 0 a 10 según el estándar CVSS 3.1.">CVSS</th>
+        <th>Issue</th>
+        <th title="Cuántas veces aparece este mismo problema en la aplicación.">Inst.</th>
+        <th>Ubicaciones</th>
+        <th title="Márcalo como aceptado o falso positivo para sacarlo de la lista activa.">Triaje</th>
+      </tr></thead>
       <tbody>
         {% for i in issues %}
-        <tr class="issue-row">
-          <td><span class="badge sev-{{ i.severity }}">{{ i.severity }}</span></td>
+        <tr class="issue-row" id="issue-{{ i.rule_id }}">
+          <td><span class="badge sev-{{ i.severity }}" title="{{ SEV_TIP[i.severity] }}">{{ i.severity }}</span></td>
           <td>{{ '%.1f' | format(i.cvss_score) }}</td>
           <td>{{ i.name }}</td>
           <td>{{ i.count }}</td>
@@ -106,9 +138,24 @@
     </table>
   </div>
   {% elif accepted %}
-    <div class="empty">Sin hallazgos activos (todo triado abajo).</div>
+    <div class="emptybox">
+      <p style="margin:0 0 4px"><strong>Sin hallazgos activos.</strong></p>
+      <p class="muted" style="margin:0">Todo lo detectado está triado como aceptado / falso positivo (abajo).
+        Puedes revisarlo o exportarlo en <a href="/suppressions">Triaje</a>.</p>
+    </div>
   {% else %}
-    <div class="empty">Sin hallazgos. 🎉</div>
+    <div class="emptybox">
+      <p style="font-size:15px; margin:0 0 6px">✅ <strong>Sin hallazgos en este escaneo.</strong></p>
+      <p class="muted" style="margin:0">dastcore no confirmó ninguna vulnerabilidad en lo que pudo alcanzar.
+        Para asegurarte de cubrir toda la aplicación, prueba a reejecutar así:</p>
+      <ul class="nextsteps">
+        <li>¿La app requiere iniciar sesión? Añade un <strong>token o cookie</strong> en el paso «Acceso»
+          para que el escáner cubra las zonas privadas.</li>
+        <li>¿Es una SPA (React/Vue/Angular)? Cambia el motor a <strong>Navegador</strong> para que descubra
+          las rutas que se cargan con JavaScript.</li>
+        <li>Sube al perfil <strong>Completo</strong> para incluir las comprobaciones más intrusivas.</li>
+      </ul>
+    </div>
   {% endif %}
   {% if accepted %}
   <div class="accepted">
