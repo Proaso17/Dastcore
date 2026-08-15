@@ -58,6 +58,7 @@ from dastcore.detectors.active_checks import (
 )
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
+from dastcore.detectors.cache_poison import run_cache_poisoning_checks
 from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.deserialization import run_deserialization_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
@@ -471,6 +472,7 @@ async def _run_scan(
     test_race: bool = False,
     test_csrf: bool = False,
     test_proto_pollution: bool = False,
+    test_cache_poisoning: bool = False,
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
     rules = load_rules()
@@ -557,6 +559,9 @@ async def _run_scan(
             if test_proto_pollution:
                 progress.status("Probando prototype pollution (json spaces)…")
                 extra_findings.extend(await run_proto_pollution_checks(client, all_requests))
+            if test_cache_poisoning:
+                progress.status("Probando web cache poisoning…")
+                extra_findings.extend(await run_cache_poisoning_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
     finally:
@@ -805,6 +810,13 @@ def scan(
         "--test-proto-pollution",
         help="Prueba prototype pollution server-side (Node) inyectando __proto__ y observando el cambio de "
         "formato JSON (intrusivo: contamina y restaura el prototipo global; no se activa en el perfil quick).",
+    ),
+    test_cache_poisoning: bool = typer.Option(
+        False,
+        "--test-cache-poisoning",
+        help="Prueba web cache poisoning: envenena una URL única (cache-buster) con una cabecera no clavada y "
+        "confirma con una petición limpia servida desde la caché (intrusivo: escribe una entrada de caché; "
+        "no se activa en el perfil quick).",
     ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
@@ -1069,6 +1081,7 @@ def scan(
                     test_race=test_race and profile != "quick",
                     test_csrf=test_csrf and profile != "quick",
                     test_proto_pollution=test_proto_pollution and profile != "quick",
+                    test_cache_poisoning=test_cache_poisoning and profile != "quick",
                     ai_payloads=payload_generator,
                 )
             )
