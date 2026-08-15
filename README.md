@@ -82,6 +82,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Exposición de objeto serializado** (Java/PHP/pickle → sink de deserialización) | pasivo | CWE-502 / A08:2021 |
 | **Deserialización insegura activa** (inyecta payloads benignos con callback OAST — pickle Python, `node-serialize` Node — y confirma la RCE-gadget **out-of-band**; no-op sin `--oast`) | detector activo | CWE-502 / A08:2021 |
 | **Envío de credenciales en claro** (form password → acción `http://`) | pasivo | CWE-319 / WSTG-ATHN-01 |
+| **OAuth2/OIDC: validación laxa de `redirect_uri`** (reenvía el authorize con un `redirect_uri` ajeno; si el servidor redirige a ese origen → robo de código/token) | detector activo | CWE-601 / A07:2021 |
 | **Token de sesión expuesto en la URL** (query con sessionid/access_token) | pasivo | CWE-598 / WSTG-SESS-04 |
 | Exposición de ficheros sensibles (`.env`, `.git`, claves, `swagger.json`, `actuator/env`, `server-status`) | detector activo | CWE-538 / WSTG-CONF-04 |
 | **Source maps expuestos** (`.js.map` alcanzable que reconstruye el código fuente del frontend) | pasivo + fetch | CWE-540 / WSTG-CONF-04 |

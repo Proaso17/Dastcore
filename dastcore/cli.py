@@ -77,6 +77,7 @@ from dastcore.detectors.jwt import (
 )
 from dastcore.detectors.mass_assignment import run_mass_assignment_checks
 from dastcore.detectors.nosqli import run_nosql_checks
+from dastcore.detectors.oauth import run_oauth_checks
 from dastcore.detectors.proto_pollution import run_proto_pollution_checks
 from dastcore.detectors.shellshock import check_shellshock
 from dastcore.detectors.takeover import run_subdomain_takeover_check
@@ -550,6 +551,7 @@ async def _run_scan(
             extra_findings.extend(await run_js_secret_scan(client, all_requests))
             extra_findings.extend(await run_subdomain_takeover_check(client, target, all_requests))
             extra_findings.extend(await run_deserialization_checks(client, all_requests, oast))
+            extra_findings.extend(await run_oauth_checks(client, all_requests))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))
