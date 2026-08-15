@@ -127,3 +127,140 @@ async def test_non_sqli_family_is_left_untouched(vuln_url: str) -> None:
         n = await prove_findings_impact(client, [finding])
     assert n == 0
     assert finding.impact is None
+
+
+# --- LFI / path traversal -------------------------------------------------------------------
+
+
+def _lfi_app():
+    from flask import Flask, Response, request
+
+    app = Flask(__name__)
+
+    @app.get("/file")
+    def read_file() -> Response:
+        name = request.args.get("name", "")
+        try:
+            with open(name, encoding="utf-8", errors="replace") as fh:  # deliberately vulnerable
+                return Response(fh.read(), mimetype="text/plain")
+        except OSError:
+            return Response("not found", status=404, mimetype="text/plain")
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def lfi_url() -> Iterator[str]:
+    url, server = _serve(_lfi_app())
+    yield url
+    server.shutdown()
+
+
+def _lfi_finding(base: str, name: str) -> Finding:
+    req = HttpRequest(method="GET", url=f"{base}/file", params={"name": name})
+    point = InjectionPoint(location="query", name="name", base_value="readme.txt", request_template=req)
+    return Finding(
+        id="path-traversal-lfi:GET:/file:query:name",
+        rule_id="path-traversal-lfi",
+        name="Path Traversal / Local File Inclusion",
+        severity="high",
+        cwe="CWE-22",
+        owasp="WSTG-ATHZ-01",
+        injection_point=point,
+        evidence=[Evidence(type="response_match", data="root:...:0:0:")],
+        request=req,
+        response=HttpResponse(status_code=200),
+        remediation="Resuelve rutas contra un directorio base.",
+        family="lfi",
+    )
+
+
+async def test_confirmed_lfi_shows_sensitive_file_snippet(lfi_url: str, tmp_path) -> None:
+    secret = tmp_path / "passwd"
+    secret.write_text("root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n")
+    finding = _lfi_finding(lfi_url, str(secret))
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 1
+    assert finding.impact is not None
+    assert "path traversal" in finding.impact
+    assert "root:x:0:0:" in finding.impact  # the actual file content proves the read
+
+
+async def test_lfi_on_innocuous_content_is_not_claimed(lfi_url: str, tmp_path) -> None:
+    plain = tmp_path / "notes.txt"
+    plain.write_text("just some harmless notes, nothing sensitive here\n")
+    finding = _lfi_finding(lfi_url, str(plain))
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 0  # no sensitive-file signature → no overclaim
+    assert finding.impact is None
+
+
+# --- SSTI / server-side template injection --------------------------------------------------
+
+
+def _ssti_app(*, evaluate: bool):
+    from flask import Flask, Response, render_template_string, request
+
+    app = Flask(__name__)
+
+    @app.get("/render")
+    def render() -> Response:
+        name = request.args.get("name", "guest")
+        if evaluate:
+            return Response(render_template_string("<p>Hello " + name + "</p>"), mimetype="text/html")
+        return Response(f"<p>Hello {name}</p>", mimetype="text/html")  # reflect only, no template eval
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def ssti_url() -> Iterator[str]:
+    url, server = _serve(_ssti_app(evaluate=True))
+    yield url
+    server.shutdown()
+
+
+@pytest.fixture(scope="module")
+def reflect_only_url() -> Iterator[str]:
+    url, server = _serve(_ssti_app(evaluate=False))
+    yield url
+    server.shutdown()
+
+
+def _ssti_finding(base: str) -> Finding:
+    req = HttpRequest(method="GET", url=f"{base}/render", params={"name": "x"})
+    point = InjectionPoint(location="query", name="name", base_value="x", request_template=req)
+    return Finding(
+        id="ssti-inband:GET:/render:query:name",
+        rule_id="ssti-inband",
+        name="Server-Side Template Injection (in-band)",
+        severity="high",
+        cwe="CWE-1336",
+        owasp="WSTG-INPV-18",
+        injection_point=point,
+        evidence=[Evidence(type="response_match", data="49")],
+        request=req,
+        response=HttpResponse(status_code=200),
+        remediation="No renderices entrada de usuario como plantilla.",
+        family="ssti",
+    )
+
+
+async def test_confirmed_ssti_proves_expression_evaluation(ssti_url: str) -> None:
+    finding = _ssti_finding(ssti_url)
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 1
+    assert finding.impact is not None
+    assert "se evaluó a" in finding.impact
+    assert "Jinja2" in finding.impact  # engine fingerprinted via 7*'7'
+
+
+async def test_ssti_reflect_only_endpoint_is_not_claimed(reflect_only_url: str) -> None:
+    finding = _ssti_finding(reflect_only_url)
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 0  # payload reflected but not evaluated → no impact
+    assert finding.impact is None

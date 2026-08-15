@@ -6,11 +6,14 @@ it just tries a **bounded, read-only** extraction and, if it succeeds, attaches 
 value to ``finding.impact``. If it fails (hardened target, unusual dialect, budget spent), the
 finding stands exactly as it was.
 
-SQL injection (v1): recover the database version banner in-band — via a UNION whose columns are
-each wrapped in a unique marker, or via a type-cast/XPath error that leaks the same. The version
-banner is high-signal (it proves arbitrary DB read) and non-sensitive, so extraction stays safe.
-The extracted value is rejected if it still contains our own SQL tokens (a reflected payload, not
-evaluated output), which keeps the proof honest.
+- **SQL injection** — recover the DB version banner in-band via a marker-wrapped UNION or a
+  cast/XPath error. High-signal (proves arbitrary DB read) and non-sensitive. The value is
+  rejected if it still carries our own SQL tokens (a reflected payload, not evaluated output).
+- **LFI / path traversal** — re-issue the confirming traversal and show a bounded snippet of the
+  file, but only when the content matches a known sensitive-file signature (passwd, private key,
+  a credentials file, …), so a normal page is never presented as an exfiltrated file.
+- **SSTI** — inject a unique arithmetic and confirm the server *evaluated* it (not just reflected
+  the literal), with a light engine fingerprint via ``7*'7'`` — proof of template-context code exec.
 """
 
 from __future__ import annotations
@@ -47,16 +50,16 @@ async def prove_findings_impact(
     client: HttpClient,
     findings: list[Finding],
     *,
-    families: frozenset[str] = frozenset({"sqli"}),
+    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti"}),
 ) -> int:
     """Enrich confirmed findings in place with proof of impact. Returns how many were enriched."""
+    provers = {"sqli": _prove_sqli, "lfi": _prove_lfi, "ssti": _prove_ssti}
     proven = 0
     for finding in findings:
         if finding.impact or finding.family not in families:
             continue
-        proof: str | None = None
-        if finding.family == "sqli":
-            proof = await _prove_sqli(client, finding)
+        prover = provers.get(finding.family)
+        proof = await prover(client, finding) if prover else None
         if proof:
             finding.impact = proof
             proven += 1
@@ -178,4 +181,85 @@ async def _prove_sqli(client: HttpClient, finding: Finding) -> str | None:
             if banner:
                 return _proof(banner, _dbms_of(banner, hint), "basada en error")
 
+    return None
+
+
+# --- LFI / path traversal ---------------------------------------------------------------------
+# Signatures of a genuinely sensitive file: only claim impact when the read content matches one,
+# so we never present a normal page as "a file we exfiltrated". (label shown to the user.)
+_LFI_SIGNATURES: list[tuple[str, str]] = [
+    (r"root:.*:0:0:", "/etc/passwd (cuentas del sistema Unix)"),
+    (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "una clave privada"),
+    (r"(?im)^\s*(DB_PASSWORD|SECRET[_A-Z]*|API[_-]?KEY|PASSWORD|TOKEN)\s*[=:]", "un fichero con credenciales"),
+    (r"\[build-system\]|\[tool\.", "pyproject.toml (configuración del proyecto)"),
+    (r"\[(fonts|extensions|mci extensions)\]|for 16-bit app support", "Windows win.ini"),
+    (r"<\?php", "código fuente PHP del servidor"),
+]
+
+
+async def _prove_lfi(client: HttpClient, finding: Finding) -> str | None:
+    """Re-issue the confirming traversal and show a bounded snippet of the file it read — but only
+    if the content matches a known sensitive-file signature, so we never overclaim on a normal page."""
+    resp = await _send(client, finding.request)
+    if resp is None or resp.status_code >= 400 or not resp.text:
+        return None
+    for pattern, label in _LFI_SIGNATURES:
+        m = re.search(pattern, resp.text)
+        if m:
+            snippet = _clean(resp.text[max(0, m.start() - 8) : m.start() + 160])
+            return (
+                f"Lectura de fichero del servidor confirmada vía path traversal. Fichero: {label}. "
+                f"Fragmento (solo lectura, acotado): «{snippet}». "
+                "Demuestra que un atacante puede leer ficheros arbitrarios del servidor."
+            )
+    return None
+
+
+# --- SSTI / server-side template injection ----------------------------------------------------
+# (open, close) for the template dialects we try; the arithmetic between them must be *evaluated*.
+_SSTI_SYNTAX: list[tuple[str, str]] = [("{{", "}}"), ("${", "}"), ("#{", "}"), ("<%=", "%>"), ("{", "}")]
+
+
+def _has_exact(text: str, left: str, right: str, expected: str) -> bool:
+    """True if some left…right pair brackets exactly ``expected`` (an evaluated result, not the echoed
+    template literal, which still contains the braces)."""
+    return any(
+        m.group(1).strip() == expected for m in re.finditer(re.escape(left) + r"(.+?)" + re.escape(right), text, re.S)
+    )
+
+
+async def _ssti_engine(client: HttpClient, finding: Finding, op: str, cl: str, left: str, right: str) -> str:
+    """Best-effort engine fingerprint via ``7*'7'`` — Jinja2 concatenates ('7777777'), Twig multiplies (49)."""
+    payload = f"{left}{op}7*'7'{cl}{right}"
+    resp = await _send(client, build_mutated_request(finding.injection_point, payload))
+    if resp is None:
+        return ""
+    if _has_exact(resp.text, left, right, "7777777"):
+        return "Jinja2 (Python)"
+    if _has_exact(resp.text, left, right, "49"):
+        return "Twig/Smarty"
+    return ""
+
+
+async def _prove_ssti(client: HttpClient, finding: Finding) -> str | None:
+    """Inject a unique arithmetic and confirm the server *evaluated* it — proof of code execution in
+    the template context (SSTI → possible RCE), with a light engine fingerprint."""
+    point = finding.injection_point
+    if point.location not in _INJECTABLE:
+        return None
+    a, b = 100 + secrets.randbelow(900), 100 + secrets.randbelow(900)
+    product = str(a * b)
+    tok = secrets.token_hex(5)
+    left, right = "sl" + tok, "sr" + tok
+    for op, cl in _SSTI_SYNTAX:
+        payload = f"{left}{op}{a}*{b}{cl}{right}"
+        resp = await _send(client, build_mutated_request(point, payload))
+        if resp is not None and _has_exact(resp.text, left, right, product):
+            engine = await _ssti_engine(client, finding, op, cl, left, right)
+            engine_clause = f" (motor: {engine})" if engine else ""
+            return (
+                f"Ejecución de expresiones en plantilla confirmada del lado servidor: la expresión "
+                f"{op}{a}*{b}{cl} se evaluó a {product}{engine_clause}. "
+                "Un atacante puede ejecutar código en el servidor (SSTI → posible RCE)."
+            )
     return None
