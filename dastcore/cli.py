@@ -60,7 +60,7 @@ from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.cache_poison import run_cache_poisoning_checks
 from dastcore.detectors.csrf import run_csrf_checks
-from dastcore.detectors.deserialization import run_deserialization_checks
+from dastcore.detectors.deserialization_active import run_deserialization_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
 from dastcore.detectors.graphql_authz import run_graphql_authz_checks, run_graphql_field_authz_checks

@@ -17,7 +17,7 @@ from werkzeug.serving import make_server
 from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import HttpRequest
-from dastcore.detectors.deserialization import run_deserialization_checks
+from dastcore.detectors.deserialization_active import run_deserialization_checks
 from dastcore.engine.oast import LocalOastServer
 
 
@@ -113,7 +113,7 @@ async def test_no_oast_is_a_noop(vuln_url: str) -> None:
 
 def test_pickle_payload_calls_back_on_load() -> None:
     # The payload is benign: on unpickle it only opens a URL. Prove the mechanism directly.
-    from dastcore.detectors.deserialization import _pickle_payload
+    from dastcore.detectors.deserialization_active import _pickle_payload
 
     blob = base64.b64decode(_pickle_payload("http://oast.test/tok"))  # build with the real urlopen first
     calls: list[str] = []
