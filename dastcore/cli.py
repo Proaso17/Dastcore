@@ -84,6 +84,7 @@ from dastcore.detectors.proto_pollution import run_proto_pollution_checks
 from dastcore.detectors.session_fixation import check_session_fixation
 from dastcore.detectors.shellshock import check_shellshock
 from dastcore.detectors.takeover import run_subdomain_takeover_check
+from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
@@ -477,6 +478,7 @@ async def _run_scan(
     test_csrf: bool = False,
     test_proto_pollution: bool = False,
     test_cache_poisoning: bool = False,
+    test_weak_creds: bool = False,
     prove_impact: bool = False,
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
@@ -561,6 +563,10 @@ async def _run_scan(
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.
                 async with _make_client(config, budget) as fresh_client:
                     extra_findings.extend(await check_session_fixation(fresh_client, config.auth.form))
+            if test_weak_creds and config.auth.form is not None:
+                progress.status("Probando credenciales por defecto…")
+                async with _make_client(config, budget) as fresh_client:
+                    extra_findings.extend(await run_weak_credentials_check(fresh_client, config.auth.form))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))
@@ -839,6 +845,13 @@ def scan(
         "el impacto real (SQLi → versión de la BD leída in-band). Solo enriquece hallazgos confirmados, nunca crea "
         "nuevos (opt-in explícito: envía payloads de extracción de solo lectura, acotados a 24 peticiones/hallazgo).",
     ),
+    test_weak_creds: bool = typer.Option(
+        False,
+        "--test-weak-creds",
+        help="Prueba credenciales por defecto/débiles contra el login (requiere --login-url). Solo reporta si un par "
+        "por defecto autentica de verdad (establece sesión / redirige, a diferencia de un intento inválido). "
+        "Intrusivo: envía intentos de login que pueden contar para el bloqueo de cuenta; no se activa en el perfil quick.",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1103,6 +1116,7 @@ def scan(
                     test_csrf=test_csrf and profile != "quick",
                     test_proto_pollution=test_proto_pollution and profile != "quick",
                     test_cache_poisoning=test_cache_poisoning and profile != "quick",
+                    test_weak_creds=test_weak_creds and profile != "quick",
                     prove_impact=prove_impact,  # opt-in explícito: enriquece confirmados, no depende del perfil
                     ai_payloads=payload_generator,
                 )
