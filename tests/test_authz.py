@@ -46,6 +46,19 @@ async def test_bola_detected_when_users_share_objects(vuln_app_url: str) -> None
     assert len(bola) == 2  # both orders are readable by both users
     assert bola[0].severity == "high"
     assert "alice" in bola[0].evidence[0].data and "bob" in bola[0].evidence[0].data
+    # proof of impact: the actual cross-account object, redacted, is attached
+    assert bola[0].impact is not None
+    assert "otra cuenta" in bola[0].impact and "owner_id" in bola[0].impact
+
+
+def test_bola_impact_redacts_pii() -> None:
+    from dastcore.core.models import HttpResponse
+    from dastcore.detectors.authz import _bola_impact, _redact
+
+    assert "jane@example.com" not in _redact('{"email":"jane@example.com","ssn":"123456789"}')
+    assert "123456789" not in _redact('{"ssn":"123456789"}')  # long digit runs masked
+    impact = _bola_impact(HttpResponse(status_code=200, text='{"owner_id":7,"email":"bob@corp.com"}'), "owner_id")
+    assert "otra cuenta" in impact and "owner_id" in impact and "bob@corp.com" not in impact
 
 
 async def test_bfla_detected_when_user_hits_admin_function(vuln_app_url: str) -> None:

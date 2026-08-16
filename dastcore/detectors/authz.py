@@ -92,6 +92,29 @@ async def _send(client: HttpClient, request: HttpRequest) -> HttpResponse | None
         return None
 
 
+_EMAIL = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+_LONG_DIGITS = re.compile(r"\d{5,}")
+
+
+def _redact(text: str) -> str:
+    """Mask emails and long digit runs so the impact snippet proves the leak without dumping PII."""
+    text = _EMAIL.sub(lambda m: m.group(0)[0] + "***@***" + m.group(0).rsplit(".", 1)[-1], text)
+    text = _LONG_DIGITS.sub(lambda m: m.group(0)[:2] + "***" + m.group(0)[-1:], text)
+    return text
+
+
+def _bola_impact(response: HttpResponse, marker: str) -> str:
+    """A bounded, redacted window of the cross-account object this session should not have read."""
+    body = " ".join(response.text.split())
+    idx = body.lower().find(marker.lower())
+    window = body[max(0, idx - 40) : idx + 160] if idx != -1 else body[:200]
+    snippet = _redact(window).strip()
+    return (
+        f"Registro de otra cuenta accedido por esta sesión: «{snippet}». "
+        "Demuestra que la sesión leyó el objeto de otra identidad (autorización a nivel de objeto ausente)."
+    )
+
+
 def _bola_finding(request: HttpRequest, response: HttpResponse, identities: list[str], marker: str) -> Finding:
     path = urlsplit(request.url).path or "/"
     return Finding(
@@ -114,6 +137,7 @@ def _bola_finding(request: HttpRequest, response: HttpResponse, identities: list
         ],
         request=request,
         response=response,
+        impact=_bola_impact(response, marker),
         remediation=(
             "Enforce object-level authorization on every request: verify the authenticated "
             "subject owns or may access the specific object id, server-side, for each call."
