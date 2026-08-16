@@ -566,6 +566,20 @@ Test end-to-end **contra el target vulnerable local** (recon por replay, escaneo
 .venv\Scripts\pytest tests/test_hunt.py -v
 ```
 
+## Cómo probar la Fase 12 (triaje y priorización bug bounty)
+
+La Fase 12 añade juicio específico de bounty **encima** del triaje determinista (`triage/scoring.py`), sin re-decidir si un hallazgo es real (eso ya lo hizo el oráculo):
+
+- `dastcore/bugbounty/triage.py`:
+  - **VRT (Bugcrowd)**: mapea cada hallazgo a categoría + prioridad **P1–P5** (por rule_id, luego familia, luego fallback por severidad), junto a su **CVSS vector + CWE**.
+  - **Dedupe cross-asset**: colapsa reincidencias del mismo `(clase + host normalizado + parámetro)` entre assets/escaneos en una sola *submission* con contador de variantes.
+  - **Gate de FP**: checklist explícita y auditable (¿explotable ahora? ¿repro determinista? ¿evidencia adjunta?) apoyada en el `confidence` del motor y los tipos de evidencia de oráculo; más una lista de **firmas de ruido** (headers/cookies informativos) que se auto-descartan.
+  - **Priorización**: ordena por banda VRT y, dentro de la banda, por impacto real = explotabilidad × payout esperado (payout configurable por clase en el `Program`).
+
+```powershell
+.venv\Scripts\pytest tests/test_bounty_triage.py -v
+```
+
 ## Pulido operativo
 
 Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:

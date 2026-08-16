@@ -7,5 +7,6 @@ limits the program imposes, and the recon seeds. It maps cleanly onto the existi
 
 from dastcore.bugbounty.loader import load_program
 from dastcore.bugbounty.program import Program, ProgramLimits, ProgramScope
+from dastcore.bugbounty.triage import BountyFinding, triage_for_bounty
 
-__all__ = ["Program", "ProgramLimits", "ProgramScope", "load_program"]
+__all__ = ["BountyFinding", "Program", "ProgramLimits", "ProgramScope", "load_program", "triage_for_bounty"]
