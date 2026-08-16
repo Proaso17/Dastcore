@@ -85,6 +85,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Envío de credenciales en claro** (form password → acción `http://`) | pasivo | CWE-319 / WSTG-ATHN-01 |
 | **OAuth2/OIDC: validación laxa de `redirect_uri`** (reenvía el authorize con un `redirect_uri` ajeno; si el servidor redirige a ese origen → robo de código/token) | detector activo | CWE-601 / A07:2021 |
 | **Token de sesión expuesto en la URL** (query con sessionid/access_token) | pasivo | CWE-598 / WSTG-SESS-04 |
+| **Session fixation** (el identificador de sesión no se renueva al autenticarse; se confirma con un login válido — diferencial creds correctas vs incorrectas — y comparando la cookie de sesión antes/después) | detector activo (form-login) | CWE-384 / A07:2021 |
 | Exposición de ficheros sensibles (`.env`, `.git`, claves, `swagger.json`, `actuator/env`, `server-status`) | detector activo | CWE-538 / WSTG-CONF-04 |
 | **Source maps expuestos** (`.js.map` alcanzable que reconstruye el código fuente del frontend) | pasivo + fetch | CWE-540 / WSTG-CONF-04 |
 | **Secretos incrustados en bundles JS** (descarga cada `.js` descubierto y busca claves de alta señal — AWS/Stripe/GitHub/Google/Slack/claves privadas — con el valor enmascarado) | detector activo | CWE-615 / WSTG-CONF-06 |
