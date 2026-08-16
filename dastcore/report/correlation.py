@@ -9,12 +9,17 @@ wants instead of a flat list of near-identical rows.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from dastcore.config import Severity
 from dastcore.core.models import Confidence, Finding
 from dastcore.severity import severity_rank
+
+_CWE_RE = re.compile(r"cwe[-_/ ]?0*(\d+)", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")  # includes short param names (q, id, u)
+_SAST_TAG = "SAST:"  # prefix on corroborated_by entries added by static-analysis correlation
 
 
 def deduplicate(findings: list[Finding]) -> list[Finding]:
@@ -113,3 +118,77 @@ def correlate(findings: list[Finding]) -> list[IssueGroup]:
         if label not in group.locations:
             group.locations.append(label)
     return sorted(groups.values(), key=lambda g: (severity_rank(g.severity), g.count), reverse=True)
+
+
+# --- SAST <-> DAST correlation ----------------------------------------------------------------
+# Ingest a sibling static analyzer's SARIF and, where a static finding lines up with a dynamic one
+# (same CWE + a shared parameter/route locator), raise the dynamic finding's confidence and mark it
+# "confirmed by SAST+DAST". Correlation only *strengthens* an already-oracle-confirmed finding; it
+# never creates one.
+
+
+@dataclass
+class SastFinding:
+    """A static-analysis result parsed from SARIF, reduced to what correlation needs."""
+
+    rule_id: str
+    cwe: str  # normalized "CWE-<n>" ("" if none)
+    file: str
+    line: int | None
+    message: str
+    locators: set[str] = field(default_factory=set)  # lowercased tokens: params/routes/identifiers
+
+
+def _norm_cwe(text: str) -> str:
+    match = _CWE_RE.search(text or "")
+    return f"CWE-{int(match.group(1))}" if match else ""
+
+
+def parse_sarif(document: dict) -> list[SastFinding]:
+    """Parse a SARIF 2.1.0 document into ``SastFinding``s (tolerant of missing fields / tools)."""
+    findings: list[SastFinding] = []
+    for run in document.get("runs", []) if isinstance(document, dict) else []:
+        rule_cwe: dict[str, str] = {}
+        for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
+            tags = " ".join(str(t) for t in rule.get("properties", {}).get("tags", []))
+            rule_cwe[rule.get("id", "")] = _norm_cwe(f"{rule.get('id', '')} {tags} {rule.get('name', '')}")
+        for result in run.get("results", []):
+            rule_id = result.get("ruleId", "")
+            message = str(result.get("message", {}).get("text", ""))
+            props_cwe = _norm_cwe(" ".join(str(v) for v in result.get("properties", {}).values()))
+            cwe = props_cwe or rule_cwe.get(rule_id, "") or _norm_cwe(rule_id)
+            uri, line = "", None
+            for loc in result.get("locations", []):
+                phys = loc.get("physicalLocation", {})
+                uri = phys.get("artifactLocation", {}).get("uri", "") or uri
+                line = phys.get("region", {}).get("startLine", line)
+            locators = {t.lower() for t in _TOKEN_RE.findall(f"{message} {uri}")}
+            locators |= {seg.lower() for seg in re.split(r"[/\\.]", uri) if seg}
+            findings.append(SastFinding(rule_id, cwe, uri, line, message, locators))
+    return findings
+
+
+def _correlates(dast: Finding, sast: SastFinding) -> bool:
+    """A dynamic and a static finding line up: same CWE, and a shared parameter or route locator."""
+    if not sast.cwe or _norm_cwe(dast.cwe) != sast.cwe:
+        return False
+    param = dast.injection_point.name.lower()
+    segments = [seg.lower() for seg in urlsplit(dast.request.url).path.split("/") if seg]
+    return (bool(param) and param in sast.locators) or any(seg in sast.locators for seg in segments)
+
+
+def correlate_sast_dast(dast_findings: list[Finding], sast_findings: list[SastFinding]) -> list[Finding]:
+    """Annotate each dynamic finding confirmed by a static one (raises its confidence in place)."""
+    for finding in dast_findings:
+        for sast in sast_findings:
+            if _correlates(finding, sast):
+                tag = f"{_SAST_TAG}{sast.rule_id or sast.cwe}"
+                if tag not in finding.corroborated_by:
+                    finding.corroborated_by = [*finding.corroborated_by, tag]  # +confidence, marks SAST+DAST
+                break
+    return dast_findings
+
+
+def is_sast_confirmed(finding: Finding) -> bool:
+    """True if this finding was corroborated by a static-analysis (SAST) result."""
+    return any(entry.startswith(_SAST_TAG) for entry in finding.corroborated_by)

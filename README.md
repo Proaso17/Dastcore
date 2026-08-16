@@ -591,6 +591,20 @@ La Fase 14 genera el **borrador de submission** (Markdown, impact-first) a parti
 .venv\Scripts\pytest tests/test_bounty_report.py -v
 ```
 
+## Cómo probar la Fase 13 (correlación SAST ↔ DAST)
+
+La Fase 13 ingiere hallazgos estáticos en **SARIF** (de tu proyecto hermano SastScore, o de cualquier SAST estándar) y los correlaciona con los dinámicos, reutilizando `report/correlation.py`:
+
+- `parse_sarif(doc)` — parsea SARIF 2.1.0 (tolerante) → `SastFinding` (rule_id, **CWE normalizado**, fichero/línea, y *locators*: parámetros/rutas/identificadores del mensaje y la ruta del artefacto).
+- `correlate_sast_dast(dast, sast)` — cuando un hallazgo dinámico casa con uno estático (**mismo CWE + parámetro o segmento de ruta compartido**), **sube su confianza** (vía `corroborated_by`) y lo marca como **confirmado por SAST+DAST** (`is_sast_confirmed`). Solo *refuerza* un hallazgo ya confirmado por oráculo; nunca crea uno.
+- CLI: `dastcore report --input findings.json --sast sastscore.sarif [...]` — los confirmados por SAST suben de confianza y, por tanto, de prioridad en el triaje.
+
+```powershell
+.venv\Scripts\pytest tests/test_sast_correlation.py -v
+```
+
+> Con esto se completan las **Fases 9–14** del bug bounty. El mapeo `ruleId → clase/CWE` es genérico (SARIF estándar); pásame un SARIF real de SastScore si quieres afinar casos concretos.
+
 ## Pulido operativo
 
 Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:

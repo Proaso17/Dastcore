@@ -1999,11 +1999,15 @@ def report_cmd(
     finding_id: str = typer.Option("", "--finding", help="ID del hallazgo (vacío = el de mayor prioridad)."),
     platform: str = typer.Option("generic", "--platform", help="hackerone | bugcrowd | generic."),
     program_path: str = typer.Option("", "--program", help="Opcional: program.yaml (payout/handle)."),
+    sast_path: str = typer.Option(
+        "", "--sast", help="Opcional: SARIF de SastScore; confirma SAST+DAST y sube confianza."
+    ),
     output_path: str = typer.Option("", "--output", "-o", help="Ruta del borrador Markdown (por defecto, stdout)."),
 ) -> None:
     """Genera un borrador de submission (Markdown, impact-first) para revisión humana; nunca lo envía."""
     from dastcore.bugbounty import load_program, triage_for_bounty
     from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
+    from dastcore.report.correlation import correlate_sast_dast, parse_sarif
 
     try:
         data = _json.loads(Path(input_path).read_text(encoding="utf-8"))
@@ -2014,6 +2018,12 @@ def report_cmd(
     if not findings:
         console.print("[red]El archivo de hallazgos está vacío.[/red]")
         raise typer.Exit(code=1)
+    if sast_path:
+        try:
+            sast = parse_sarif(_json.loads(Path(sast_path).read_text(encoding="utf-8")))
+            correlate_sast_dast(findings, sast)  # raises confidence on findings confirmed by SAST
+        except (OSError, ValueError) as exc:
+            console.print(f"[yellow]No se pudo leer el SARIF de SAST ({exc}); continúo sin correlación.[/yellow]")
     platform = platform if platform in PLATFORMS else "generic"
     program = None
     if program_path:
