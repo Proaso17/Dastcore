@@ -84,6 +84,7 @@ from dastcore.detectors.nosqli import run_nosql_checks
 from dastcore.detectors.oauth import run_oauth_checks
 from dastcore.detectors.proto_pollution import run_proto_pollution_checks
 from dastcore.detectors.redos import run_redos_checks
+from dastcore.detectors.request_smuggling import run_smuggling_checks
 from dastcore.detectors.response_splitting import run_response_splitting_checks
 from dastcore.detectors.session_fixation import check_session_fixation
 from dastcore.detectors.shellshock import check_shellshock
@@ -487,6 +488,7 @@ async def _run_scan(
     test_weak_creds: bool = False,
     test_upload: bool = False,
     test_dos: bool = False,
+    test_smuggling: bool = False,
     prove_impact: bool = False,
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
@@ -598,6 +600,9 @@ async def _run_scan(
                 extra_findings.extend(await run_xml_expansion_checks(client, all_requests))
                 progress.status("Probando ReDoS (backtracking catastrófico)…")
                 extra_findings.extend(await run_redos_checks(client, all_requests))
+            if test_smuggling:
+                progress.status("Probando HTTP request smuggling (CL.TE)…")
+                extra_findings.extend(await run_smuggling_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
             if prove_impact:
@@ -878,6 +883,13 @@ def scan(
         "ReDoS (backtracking catastrófico de regex, confirmado por escalado super-lineal + control de igual longitud "
         "+ reproducibilidad). Intrusivo: degrada el objetivo a propósito; no se activa en el perfil quick.",
     ),
+    test_smuggling: bool = typer.Option(
+        False,
+        "--test-smuggling",
+        help="Prueba HTTP request smuggling (desincronización CL.TE) por diferencial temporal sobre sockets crudos: "
+        "un chunked incompleto cuelga solo NUESTRA conexión mientras baseline y control responden rápido; "
+        "reproducible. Delicado/intrusivo; no se activa en el perfil quick.",
+    ),
     test_upload: bool = typer.Option(
         False,
         "--test-upload",
@@ -1152,6 +1164,7 @@ def scan(
                     test_weak_creds=test_weak_creds and profile != "quick",
                     test_upload=test_upload and profile != "quick",
                     test_dos=test_dos and profile != "quick",
+                    test_smuggling=test_smuggling and profile != "quick",
                     prove_impact=prove_impact,  # opt-in explícito: enriquece confirmados, no depende del perfil
                     ai_payloads=payload_generator,
                 )
