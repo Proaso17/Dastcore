@@ -1910,9 +1910,7 @@ def recon(
     for column in ("host", "url", "status", "tech", "source"):
         table.add_column(column)
     for asset in assets:
-        table.add_row(
-            asset.host, asset.url or "", str(asset.status_code or ""), ",".join(asset.tech), asset.source
-        )
+        table.add_row(asset.host, asset.url or "", str(asset.status_code or ""), ",".join(asset.tech), asset.source)
     console.print(table)
     if output_path:
         Path(output_path).write_text(
@@ -1976,15 +1974,73 @@ def hunt(
 
     console.print(
         f"[cyan]Superficie:[/cyan] {len(result.assets)} assets · {len(result.scanned)} escaneados"
-        + ("" if program.allows_active_scanning() else " · [yellow]solo recon (el programa prohíbe escaneo automático)[/yellow]")
+        + (
+            ""
+            if program.allows_active_scanning()
+            else " · [yellow]solo recon (el programa prohíbe escaneo automático)[/yellow]"
+        )
     )
     _print_findings_table(result.findings)
     _print_summary(result.findings, time.monotonic() - started)
     if output_path and result.findings:
         renderer = {"json": render_json, "sarif": render_sarif}.get(output_format)
-        body = renderer(result.findings) if renderer else render_html(result.findings, title=f"dastcore hunt — {program.handle}")
+        body = (
+            renderer(result.findings)
+            if renderer
+            else render_html(result.findings, title=f"dastcore hunt — {program.handle}")
+        )
         Path(output_path).write_text(body, encoding="utf-8")
         console.print(f"[green]Reporte escrito en {output_path}[/green]")
+
+
+@app.command("report")
+def report_cmd(
+    input_path: str = typer.Option(..., "--input", help="JSON de hallazgos (salida de `scan`/`hunt` -f json)."),
+    finding_id: str = typer.Option("", "--finding", help="ID del hallazgo (vacío = el de mayor prioridad)."),
+    platform: str = typer.Option("generic", "--platform", help="hackerone | bugcrowd | generic."),
+    program_path: str = typer.Option("", "--program", help="Opcional: program.yaml (payout/handle)."),
+    output_path: str = typer.Option("", "--output", "-o", help="Ruta del borrador Markdown (por defecto, stdout)."),
+) -> None:
+    """Genera un borrador de submission (Markdown, impact-first) para revisión humana; nunca lo envía."""
+    from dastcore.bugbounty import load_program, triage_for_bounty
+    from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
+
+    try:
+        data = _json.loads(Path(input_path).read_text(encoding="utf-8"))
+        findings = [Finding.model_validate(item) for item in data]
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]No se pudieron cargar los hallazgos: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if not findings:
+        console.print("[red]El archivo de hallazgos está vacío.[/red]")
+        raise typer.Exit(code=1)
+    platform = platform if platform in PLATFORMS else "generic"
+    program = None
+    if program_path:
+        try:
+            program = load_program(program_path)
+        except (OSError, ValueError):
+            program = None
+
+    bounties = triage_for_bounty(findings, program)
+    if not bounties:
+        console.print("[yellow]Ningún hallazgo pasó el triaje bounty (ruido/FP).[/yellow]")
+        raise typer.Exit(code=1)
+    if finding_id:
+        chosen = next((b for b in bounties if b.finding.id == finding_id), None)
+        if chosen is None:
+            available = ", ".join(b.finding.id for b in bounties[:10])
+            console.print(f"[red]No se encontró el hallazgo '{finding_id}'. Disponibles: {available}[/red]")
+            raise typer.Exit(code=1)
+    else:
+        chosen = bounties[0]  # el de mayor prioridad
+
+    draft = render_bounty_report(chosen, program, platform)
+    if output_path:
+        Path(output_path).write_text(draft, encoding="utf-8")
+        console.print(f"[green]Borrador ({platform}) escrito en {output_path}[/green]")
+    else:
+        console.print(draft)
 
 
 @app.command("serve")

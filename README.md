@@ -580,6 +580,17 @@ La Fase 12 añade juicio específico de bounty **encima** del triaje determinist
 .venv\Scripts\pytest tests/test_bounty_triage.py -v
 ```
 
+## Cómo probar la Fase 14 (reportes por plataforma)
+
+La Fase 14 genera el **borrador de submission** (Markdown, impact-first) a partir de un hallazgo triado, **human-in-the-loop** (nunca envío automático):
+
+- `dastcore/bugbounty/report.py` — `render_bounty_report(bounty_finding, program, platform)`: título, resumen, activo/scope, **severidad (CVSS vector + VRT + CWE)**, reproducción numerada, **PoC mínima y no destructiva** (la propia petición de reproducción read-only del hallazgo), impacto de negocio, remediación y referencias. Plantillas por plataforma: **HackerOne**, **Bugcrowd** (lidera con la banda VRT) y **genérica** — reordenan/reetiquetan las mismas secciones.
+- CLI: `dastcore report --input findings.json [--finding <id>] --platform hackerone|bugcrowd|generic [--program program.yaml] [-o draft.md]`. El `--input` es la salida de `scan`/`hunt -f json`.
+
+```powershell
+.venv\Scripts\pytest tests/test_bounty_report.py -v
+```
+
 ## Pulido operativo
 
 Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
