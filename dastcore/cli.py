@@ -1864,6 +1864,64 @@ def ai(
     )
 
 
+@app.command("recon")
+def recon(
+    program_path: str = typer.Option(..., "--program", help="Ruta a program.yaml con el scope autorizado."),
+    profile: str = typer.Option("standard", "--profile", help="Perfil de recon: passive | standard | deep."),
+    db_path: str = typer.Option(".dastcore/assets.db", "--db", help="Asset store SQLite (first_seen/last_seen)."),
+    output_path: str = typer.Option("", "--output", "-o", help="Exporta los assets descubiertos a JSON."),
+    i_have_authorization: bool = typer.Option(
+        False, "--i-have-authorization", help="Confirmas autorización sobre el scope del programa."
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Solo la tabla de resultados."),
+) -> None:
+    """Recon externo de la superficie de ataque de un programa autorizado (subdominios → hosts vivos)."""
+    from dastcore.bugbounty import load_program
+    from dastcore.core.scope import ScopeChecker
+    from dastcore.recon import AssetStore, ReconOptions, run_recon
+
+    if not quiet:
+        _print_banner()
+    if not i_have_authorization:
+        console.print("\n[bold red]ABORTADO[/bold red]: se requiere [bold]--i-have-authorization[/bold] para el recon.")
+        raise typer.Exit(code=1)
+    try:
+        program = load_program(program_path)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]No se pudo cargar el programa: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if not program.seeds:
+        console.print("[red]El programa no tiene 'seeds' de los que arrancar el recon.[/red]")
+        raise typer.Exit(code=1)
+    profile = profile if profile in ("passive", "standard", "deep") else "standard"
+
+    checker = ScopeChecker(program.to_scope_config())
+    store = AssetStore(db_path)
+    opts = ReconOptions(profile=profile)
+    active = "sí" if program.allows_active_scanning() else "no (solo pasivo)"
+    console.print(
+        f"[cyan]Recon[/cyan] {program.handle} · perfil [bold]{profile}[/bold] · scanning activo: {active} · "
+        f"seeds: {', '.join(program.seeds)}"
+    )
+    asyncio.run(run_recon(program.seeds, opts, store, checker, allow_active=program.allows_active_scanning()))
+
+    assets = store.all()
+    table = Table(title=f"Assets in-scope ({len(assets)})")
+    for column in ("host", "url", "status", "tech", "source"):
+        table.add_column(column)
+    for asset in assets:
+        table.add_row(
+            asset.host, asset.url or "", str(asset.status_code or ""), ",".join(asset.tech), asset.source
+        )
+    console.print(table)
+    if output_path:
+        Path(output_path).write_text(
+            _json.dumps([a.model_dump() for a in assets], indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        console.print(f"[green]Assets escritos en {output_path}[/green]")
+    store.close()
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Interfaz donde escuchar. 127.0.0.1 = solo local."),

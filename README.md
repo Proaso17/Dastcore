@@ -534,7 +534,24 @@ La Fase 9 añade la base para operar sobre **programas de bug bounty autorizados
 .venv\Scripts\pytest tests/test_bugbounty_program.py tests/test_scope.py -v
 ```
 
-> Las Fases 10–14 (recon externo, hunt, triaje VRT, correlación SAST, reportes por plataforma) se construyen sobre esta capa. `recon`/`hunt`/`report` como comandos nuevos llegan en las fases 10/11/14.
+> Las Fases 11–14 (hunt, triaje VRT, correlación SAST, reportes por plataforma) se construyen sobre esta capa.
+
+## Cómo probar la Fase 10 (recon / attack surface)
+
+La Fase 10 añade **recon externo**: de un scope con comodines a un conjunto de **assets vivos e in-scope**, orquestando herramientas del ecosistema en adaptadores. **Todo activo pasa por `ScopeChecker` antes de guardarse.**
+
+- `dastcore/recon/models.py` — `Asset` normalizado (host, ip, port, url, tech[], status, title, source).
+- `dastcore/recon/base.py` — interfaz `Adapter`: **parser puro** (`parse`, testeable con fixtures) separado de la ejecución (`_invoke`); `collect` degrada con gracia (replay grabado → herramienta instalada → nada, sin romper).
+- `dastcore/recon/adapters.py` — set MVP: **crt.sh** (subdominios vía CT log, sin binario), **subfinder** (enum pasiva), **httpx** (hosts vivos: status/título/tech). Añadir una fuente = una subclase `Adapter` + un fixture, sin tocar el orquestador.
+- `dastcore/recon/store.py` — **asset store SQLite** con dedupe y `first_seen`/`last_seen` (base de *attack surface monitoring*).
+- `dastcore/recon/runner.py` — orquestador: enum subdominios → probe de hosts vivos; **scope-gate antes de guardar**; perfiles `passive|standard|deep` y respeto al flag `no_automated_scanning` del programa (desactiva el probe activo).
+- CLI: `dastcore recon --program program.yaml --i-have-authorization [--profile ...] [--db ...] [-o assets.json]`.
+
+Tests **100% offline** (modo replay + fixtures grabados; nunca tocan la red):
+
+```powershell
+.venv\Scripts\pytest tests/test_recon.py -v
+```
 
 ## Pulido operativo
 
