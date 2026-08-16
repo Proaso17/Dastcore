@@ -61,6 +61,7 @@ from dastcore.detectors.active_checks import (
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
 from dastcore.detectors.cache_poison import run_cache_poisoning_checks
+from dastcore.detectors.code_injection import run_code_injection_checks
 from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.deserialization_active import run_deserialization_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
@@ -563,6 +564,7 @@ async def _run_scan(
             extra_findings.extend(await run_access_bypass_checks(client, all_requests))
             extra_findings.extend(await run_response_splitting_checks(client, all_requests))
             extra_findings.extend(await run_ssi_checks(client, all_requests))
+            extra_findings.extend(await run_code_injection_checks(client, all_requests))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.
                 async with _make_client(config, budget) as fresh_client:

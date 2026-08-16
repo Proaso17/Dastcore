@@ -58,6 +58,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **LDAP Injection** (error-based) | regla YAML | CWE-90 / WSTG-INPV-06 |
 | XSS reflejado (múltiples contextos) + DOM-based + **almacenado/2º orden** (`--stored`) | regla YAML + headless | CWE-79 / WSTG-INPV-01/02 |
 | SSTI (in-band `7*7` + blind OAST) | regla YAML | CWE-1336 / WSTG-INPV-18 |
+| **Code / Expression-Language injection** (sintaxis que la regla `{{…}}` no cubre: `${…}`/`#{…}` EL/interpolación y `<%= … %>` ERB/EJS; producto aritmético único evaluado entre marcadores → cero-FP; un acierto es ejecución de código) | detector activo | CWE-94/95/1327 / A03:2021 |
 | Command injection (**in-band por output** + blind OAST) | regla YAML | CWE-78 / WSTG-INPV-12 |
 | **Exposición de secretos en respuestas** (AWS/Google/Stripe/GitHub/Slack keys, private keys) | pasivo | CWE-312 / WSTG-CONF-06 |
 | **Log4Shell / JNDI** (blind, OAST, incl. headers) | regla YAML | CWE-502 |
