@@ -89,6 +89,7 @@ from dastcore.detectors.shellshock import check_shellshock
 from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
+from dastcore.detectors.xml_expansion import run_xml_expansion_checks
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
@@ -484,6 +485,7 @@ async def _run_scan(
     test_cache_poisoning: bool = False,
     test_weak_creds: bool = False,
     test_upload: bool = False,
+    test_dos: bool = False,
     prove_impact: bool = False,
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
@@ -590,6 +592,9 @@ async def _run_scan(
             if test_upload:
                 progress.status("Probando subida de ficheros…")
                 extra_findings.extend(await run_file_upload_checks(client, all_requests))
+            if test_dos:
+                progress.status("Probando XML entity expansion…")
+                extra_findings.extend(await run_xml_expansion_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
             if prove_impact:
@@ -862,6 +867,12 @@ def scan(
         help="Prueba credenciales por defecto/débiles contra el login (requiere --login-url). Solo reporta si un par "
         "por defecto autentica de verdad (establece sesión / redirige, a diferencia de un intento inválido). "
         "Intrusivo: envía intentos de login que pueden contar para el bloqueo de cuenta; no se activa en el perfil quick.",
+    ),
+    test_dos: bool = typer.Option(
+        False,
+        "--test-dos",
+        help="Prueba XML entity expansion (billion laughs) por diferencial temporal en endpoints que parsean XML. "
+        "Intrusivo: degrada el objetivo a propósito; no se activa en el perfil quick.",
     ),
     test_upload: bool = typer.Option(
         False,
@@ -1136,6 +1147,7 @@ def scan(
                     test_cache_poisoning=test_cache_poisoning and profile != "quick",
                     test_weak_creds=test_weak_creds and profile != "quick",
                     test_upload=test_upload and profile != "quick",
+                    test_dos=test_dos and profile != "quick",
                     prove_impact=prove_impact,  # opt-in explícito: enriquece confirmados, no depende del perfil
                     ai_payloads=payload_generator,
                 )
