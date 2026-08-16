@@ -83,6 +83,7 @@ from dastcore.detectors.mass_assignment import run_mass_assignment_checks
 from dastcore.detectors.nosqli import run_nosql_checks
 from dastcore.detectors.oauth import run_oauth_checks
 from dastcore.detectors.proto_pollution import run_proto_pollution_checks
+from dastcore.detectors.redos import run_redos_checks
 from dastcore.detectors.response_splitting import run_response_splitting_checks
 from dastcore.detectors.session_fixation import check_session_fixation
 from dastcore.detectors.shellshock import check_shellshock
@@ -595,6 +596,8 @@ async def _run_scan(
             if test_dos:
                 progress.status("Probando XML entity expansion…")
                 extra_findings.extend(await run_xml_expansion_checks(client, all_requests))
+                progress.status("Probando ReDoS (backtracking catastrófico)…")
+                extra_findings.extend(await run_redos_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
             if prove_impact:
@@ -871,8 +874,9 @@ def scan(
     test_dos: bool = typer.Option(
         False,
         "--test-dos",
-        help="Prueba XML entity expansion (billion laughs) por diferencial temporal en endpoints que parsean XML. "
-        "Intrusivo: degrada el objetivo a propósito; no se activa en el perfil quick.",
+        help="Pruebas de denegación de servicio por diferencial temporal: XML entity expansion (billion laughs) y "
+        "ReDoS (backtracking catastrófico de regex, confirmado por escalado super-lineal + control de igual longitud "
+        "+ reproducibilidad). Intrusivo: degrada el objetivo a propósito; no se activa en el perfil quick.",
     ),
     test_upload: bool = typer.Option(
         False,

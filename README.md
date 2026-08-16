@@ -66,6 +66,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | SSRF (blind, OAST) | regla YAML | CWE-918 / WSTG-INPV-19 |
 | XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |
 | **XML entity expansion / billion laughs** (XML con entidades anidadas acotadas; diferencial temporal reproducible frente a XML benigna → el parser expande sin límite; si el valor no se parsea como XML, sin retardo → cero-FP) — `--test-dos`, intrusivo, no en quick | detector activo | CWE-776 / A05:2021 |
+| **ReDoS / backtracking catastrófico** (entrada patológica a tamaños crecientes; se confirma solo con **escalado super-lineal** + **control de igual longitud** rápido + **reproducibilidad** — tres guardas que el jitter no puede falsear a la vez; acotado para no tumbar el objetivo) — `--test-dos`, intrusivo, no en quick | detector activo | CWE-1333/400 / A05:2021 |
 | **XML Injection** (error-based, rompe el parser XML) | regla YAML | CWE-91 / WSTG-INPV-07 |
 | CRLF / HTTP header injection (OAST) | regla YAML | CWE-93 / WSTG-INPV-16 |
 | **HTTP response splitting / header injection in-band** (inyecta `\r\n<cabecera>: <marcador>` único en cada parámetro y confirma que el servidor emite esa cabecera controlada por el atacante) | detector activo | CWE-113 / A03:2021 |
