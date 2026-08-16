@@ -51,6 +51,7 @@ from dastcore.config import (
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import Finding, HttpRequest
 from dastcore.core.session import SessionManager
+from dastcore.detectors.access_bypass import run_access_bypass_checks
 from dastcore.detectors.active_checks import (
     check_dangerous_methods,
     check_graphql_introspection,
@@ -554,6 +555,7 @@ async def _run_scan(
             extra_findings.extend(await run_subdomain_takeover_check(client, target, all_requests))
             extra_findings.extend(await run_deserialization_checks(client, all_requests, oast))
             extra_findings.extend(await run_oauth_checks(client, all_requests))
+            extra_findings.extend(await run_access_bypass_checks(client, all_requests))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await run_race_checks(client, all_requests))
