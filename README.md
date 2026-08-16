@@ -100,6 +100,8 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Métodos HTTP peligrosos habilitados** (PUT/DELETE/PATCH vía `Allow`) | detector activo | CWE-749 / WSTG-CONF-06 |
 | **Componentes con CVE conocido** (fingerprint de versión → BD de avisos offline: Apache/nginx/OpenSSL/jQuery/Bootstrap) | SCA-lite | CWE-1035 / A06:2021 |
 | Cabeceras/cookies inseguras, CSP/HSTS ausentes, directory listing, stack traces, divulgación de tecnología | pasivos | varios |
+| **Cookie `SameSite=None`** (se envía en peticiones cross-site — amplía CSRF/fugas; inválida sin `Secure`) | pasivo | CWE-1275 / A05:2021 |
+| **Reverse tabnabbing** (enlaces externos con `target="_blank"` sin `rel="noopener"` → la página abierta puede reescribir `window.opener.location`) | pasivo | CWE-1022 / A05:2021 |
 | **LLM: prompt injection (directa+indirecta), jailbreak, crescendo multi-turno, system-prompt leak, secretos/PII, excessive agency, output inseguro, denial of wallet** | `dastcore ai` | OWASP LLM01/02/05/06/07/10 |
 - **Bajo ruido**: cada hallazgo pasa un oráculo de validación (diferencial, temporal, reflejo, ejecución DOM u OAST) antes de reportarse.
 - **Motor async con concurrencia**: escaneo paralelo acotado (`--concurrency`), rate limiting (`--rps`), backoff ante HTTP 429, y presupuesto global (`--max-requests` / `--time-budget`) para escaneos seguros y acotados.

@@ -132,6 +132,80 @@ def check_insecure_cookies(request: HttpRequest, response: HttpResponse) -> list
     ]
 
 
+def check_cookie_samesite_none(request: HttpRequest, response: HttpResponse) -> list[Finding]:
+    """A cookie explicitly set to ``SameSite=None`` is sent on cross-site requests — widening CSRF and
+    cross-site leakage, and outright invalid (dropped) without ``Secure``. CWE-1275."""
+    set_cookie = response.headers.get("set-cookie")
+    if not set_cookie:
+        return []
+    directives = {part.strip().lower() for part in set_cookie.split(";")[1:]}
+    if "samesite=none" not in directives:
+        return []
+    cookie_name = set_cookie.split("=", 1)[0].strip()
+    without_secure = " sin `Secure` (el navegador la descarta)" if "secure" not in directives else ""
+    return [
+        Finding(
+            id=f"passive-cookie-samesite-none:{cookie_name}",
+            rule_id="passive-cookie-samesite-none",
+            name=f"Cookie '{cookie_name}' con SameSite=None{without_secure}",
+            severity="low",
+            cwe="CWE-1275",
+            owasp="A05:2021",
+            injection_point=_passive_point(request, cookie_name),
+            evidence=[Evidence(type="status", data=set_cookie, confidence="high")],
+            request=request,
+            response=response,
+            remediation=(
+                "Usa `SameSite=Lax` (o `Strict`) salvo que la cookie deba viajar en contextos cross-site; si "
+                "`None` es imprescindible, márcala siempre `Secure` y minimiza su alcance."
+            ),
+        )
+    ]
+
+
+_BLANK_LINK = re.compile(r"<a\b[^>]*\btarget\s*=\s*[\"']?_blank[\"']?[^>]*>", re.IGNORECASE)
+_HAS_REL_SAFE = re.compile(r"\brel\s*=\s*[\"'][^\"']*\b(noopener|noreferrer)\b", re.IGNORECASE)
+_EXTERNAL_HREF = re.compile(r"\bhref\s*=\s*[\"']https?://", re.IGNORECASE)
+
+
+def check_reverse_tabnabbing(request: HttpRequest, response: HttpResponse) -> list[Finding]:
+    """External links opened with ``target="_blank"`` but no ``rel="noopener"`` let the opened page
+    rewrite ``window.opener.location`` (reverse tabnabbing / phishing). CWE-1022."""
+    if "html" not in response.headers.get("content-type", "").lower():
+        return []
+    vulnerable = [
+        tag
+        for tag in _BLANK_LINK.findall(response.text)
+        if _EXTERNAL_HREF.search(tag) and not _HAS_REL_SAFE.search(tag)
+    ]
+    if not vulnerable:
+        return []
+    return [
+        Finding(
+            id="passive-reverse-tabnabbing",
+            rule_id="passive-reverse-tabnabbing",
+            name='Enlaces externos con target="_blank" sin rel="noopener" (reverse tabnabbing)',
+            severity="low",
+            cwe="CWE-1022",
+            owasp="A05:2021",
+            injection_point=_passive_point(request, "a[target=_blank]"),
+            evidence=[
+                Evidence(
+                    type="status",
+                    data=f"{len(vulnerable)} enlace(s) externo(s) sin noopener, p. ej. {vulnerable[0][:140]}",
+                    confidence="high",
+                )
+            ],
+            request=request,
+            response=response,
+            remediation=(
+                'Añade `rel="noopener noreferrer"` a todo `<a target="_blank">` que apunte a un origen externo '
+                "(los navegadores modernos lo aplican por defecto, pero no confíes en ello para clientes antiguos)."
+            ),
+        )
+    ]
+
+
 def check_cors_misconfiguration(request: HttpRequest, response: HttpResponse) -> list[Finding]:
     headers = {name.lower(): value for name, value in response.headers.items()}
     allow_origin = headers.get("access-control-allow-origin")
@@ -273,6 +347,8 @@ def run_passive_checks(request: HttpRequest, response: HttpResponse) -> list[Fin
     findings: list[Finding] = []
     findings.extend(check_missing_security_headers(request, response))
     findings.extend(check_insecure_cookies(request, response))
+    findings.extend(check_cookie_samesite_none(request, response))
+    findings.extend(check_reverse_tabnabbing(request, response))
     findings.extend(check_cors_misconfiguration(request, response))
     findings.extend(check_error_disclosure(request, response))
     findings.extend(check_technology_disclosure(request, response))
