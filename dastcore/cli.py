@@ -64,6 +64,7 @@ from dastcore.detectors.cache_poison import run_cache_poisoning_checks
 from dastcore.detectors.code_injection import run_code_injection_checks
 from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.deserialization_active import run_deserialization_checks
+from dastcore.detectors.file_upload import run_file_upload_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
 from dastcore.detectors.graphql_authz import run_graphql_authz_checks, run_graphql_field_authz_checks
@@ -482,6 +483,7 @@ async def _run_scan(
     test_proto_pollution: bool = False,
     test_cache_poisoning: bool = False,
     test_weak_creds: bool = False,
+    test_upload: bool = False,
     prove_impact: bool = False,
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
@@ -585,6 +587,9 @@ async def _run_scan(
             if test_cache_poisoning:
                 progress.status("Probando web cache poisoning…")
                 extra_findings.extend(await run_cache_poisoning_checks(client, all_requests))
+            if test_upload:
+                progress.status("Probando subida de ficheros…")
+                extra_findings.extend(await run_file_upload_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
             active_passive.extend(extra_findings)
             if prove_impact:
@@ -858,6 +863,13 @@ def scan(
         "por defecto autentica de verdad (establece sesión / redirige, a diferencia de un intento inválido). "
         "Intrusivo: envía intentos de login que pueden contar para el bloqueo de cuenta; no se activa en el perfil quick.",
     ),
+    test_upload: bool = typer.Option(
+        False,
+        "--test-upload",
+        help="Prueba subida de ficheros peligrosos en endpoints de upload: sube un fichero benigno pero ejecutable/"
+        "servible, lo recupera y confirma el impacto (RCE si el .php se ejecuta; XSS almacenado si el .html/.svg se "
+        "sirve). Intrusivo: escribe ficheros en el servidor; no se activa en el perfil quick.",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1123,6 +1135,7 @@ def scan(
                     test_proto_pollution=test_proto_pollution and profile != "quick",
                     test_cache_poisoning=test_cache_poisoning and profile != "quick",
                     test_weak_creds=test_weak_creds and profile != "quick",
+                    test_upload=test_upload and profile != "quick",
                     prove_impact=prove_impact,  # opt-in explícito: enriquece confirmados, no depende del perfil
                     ai_payloads=payload_generator,
                 )

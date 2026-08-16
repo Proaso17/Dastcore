@@ -169,6 +169,7 @@ class HttpClient:
         cookies: dict[str, str] | None = None,
         data: dict[str, str] | None = None,
         json: dict | list | None = None,
+        files: dict | None = None,
     ) -> HttpResponse:
         """The single choke point: scope enforcement + rate limit + transport retries.
 
@@ -200,6 +201,7 @@ class HttpClient:
                         headers=headers,
                         data=data,
                         json=json,
+                        files=files,
                     )
                     elapsed_ms = (time.monotonic() - start) * 1000
                 except _RETRYABLE_EXCEPTIONS:
@@ -240,6 +242,7 @@ class HttpClient:
         cookies: dict[str, str] | None = None,
         data: dict[str, str] | None = None,
         json: dict | list | None = None,
+        files: dict | None = None,
         _allow_relogin: bool = True,
     ) -> HttpResponse:
         send_headers = headers
@@ -249,7 +252,7 @@ class HttpClient:
             epoch = self._session.epoch
 
         response = await self._send_once(
-            method, url, params=params, headers=send_headers, cookies=cookies, data=data, json=json
+            method, url, params=params, headers=send_headers, cookies=cookies, data=data, json=json, files=files
         )
 
         if (
@@ -269,6 +272,7 @@ class HttpClient:
                     cookies=cookies,
                     data=data,
                     json=json,
+                    files=files,
                     _allow_relogin=False,
                 )
 
