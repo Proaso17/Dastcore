@@ -1922,6 +1922,71 @@ def recon(
     store.close()
 
 
+@app.command("hunt")
+def hunt(
+    program_path: str = typer.Option(..., "--program", help="Ruta a program.yaml con el scope autorizado."),
+    profile: str = typer.Option("standard", "--profile", help="Perfil de recon: passive | standard | deep."),
+    engine: str = typer.Option("http", "--engine", help="Motor de escaneo: http | headless | both."),
+    max_pages: int = typer.Option(200, "--max-pages", help="Máximo de páginas por asset."),
+    db_path: str = typer.Option(".dastcore/assets.db", "--db", help="Asset store SQLite del recon."),
+    resume_path: str = typer.Option(".dastcore/hunt.json", "--resume", help="Checkpoint por asset (resumible)."),
+    output_format: str = typer.Option("json", "--format", "-f", help="Formato del reporte: json | sarif | html."),
+    output_path: str = typer.Option("", "--output", "-o", help="Ruta del reporte (por defecto, no se escribe)."),
+    i_have_authorization: bool = typer.Option(
+        False, "--i-have-authorization", help="Confirmas autorización sobre el scope del programa."
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Solo la tabla de hallazgos."),
+) -> None:
+    """Hunt: recon → escaneo de los assets vivos in-scope de un programa autorizado (resumible)."""
+    from dastcore.bugbounty import load_program
+    from dastcore.bugbounty.campaign import run_campaign
+    from dastcore.recon import AssetStore, ReconOptions
+
+    if not quiet:
+        _print_banner()
+    if not i_have_authorization:
+        console.print("\n[bold red]ABORTADO[/bold red]: se requiere [bold]--i-have-authorization[/bold] para el hunt.")
+        raise typer.Exit(code=1)
+    try:
+        program = load_program(program_path)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]No se pudo cargar el programa: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if not program.seeds:
+        console.print("[red]El programa no tiene 'seeds' de los que arrancar el recon.[/red]")
+        raise typer.Exit(code=1)
+    profile = profile if profile in ("passive", "standard", "deep") else "standard"
+    engine = engine if engine in ("http", "headless", "both") else "http"
+
+    store = AssetStore(db_path)
+    started = time.monotonic()
+    console.print(f"[cyan]Hunt[/cyan] {program.handle} · recon {profile} → escaneo ({engine})…")
+    result = asyncio.run(
+        run_campaign(
+            program,
+            authorized=i_have_authorization,
+            asset_store=store,
+            recon_opts=ReconOptions(profile=profile),
+            engine=engine,
+            max_pages=max_pages,
+            checkpoint_path=resume_path,
+        )
+    )
+    store.close()
+
+    console.print(
+        f"[cyan]Superficie:[/cyan] {len(result.assets)} assets · {len(result.scanned)} escaneados"
+        + ("" if program.allows_active_scanning() else " · [yellow]solo recon (el programa prohíbe escaneo automático)[/yellow]")
+    )
+    _print_findings_table(result.findings)
+    _print_summary(result.findings, time.monotonic() - started)
+    if output_path and result.findings:
+        renderer = {"json": render_json, "sarif": render_sarif}.get(output_format)
+        body = renderer(result.findings) if renderer else render_html(result.findings, title=f"dastcore hunt — {program.handle}")
+        Path(output_path).write_text(body, encoding="utf-8")
+        console.print(f"[green]Reporte escrito en {output_path}[/green]")
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Interfaz donde escuchar. 127.0.0.1 = solo local."),

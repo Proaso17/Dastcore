@@ -553,6 +553,19 @@ Tests **100% offline** (modo replay + fixtures grabados; nunca tocan la red):
 .venv\Scripts\pytest tests/test_recon.py -v
 ```
 
+## Cómo probar la Fase 11 (hunt: recon → scan → validate)
+
+La Fase 11 enlaza el recon con el pipeline de escaneo existente, gobernado por el `Program`:
+
+- `dastcore/bugbounty/campaign.py` — `run_campaign`: descubre la superficie viva in-scope (`run_recon`) y escanea cada asset reutilizando el `_run_scan` de la CLI (**no reimplementa el scanner**). Dos reglas de seguridad: cada asset se **re-verifica contra el scope antes de escanearse**, y si el programa marca `no_automated_scanning` se hace **solo recon** (sin escaneo activo). **Resumible**: `CampaignCheckpoint` por asset → un corte continúa sin reescanear lo hecho.
+- CLI: `dastcore hunt --program program.yaml --i-have-authorization [--profile ...] [--engine ...] [--resume hunt.json] [-f json|sarif|html -o report]`.
+
+Test end-to-end **contra el target vulnerable local** (recon por replay, escaneo real local; sin internet), verificando que **solo** se escanean assets in-scope:
+
+```powershell
+.venv\Scripts\pytest tests/test_hunt.py -v
+```
+
 ## Pulido operativo
 
 Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:
