@@ -81,8 +81,10 @@ from dastcore.detectors.mass_assignment import run_mass_assignment_checks
 from dastcore.detectors.nosqli import run_nosql_checks
 from dastcore.detectors.oauth import run_oauth_checks
 from dastcore.detectors.proto_pollution import run_proto_pollution_checks
+from dastcore.detectors.response_splitting import run_response_splitting_checks
 from dastcore.detectors.session_fixation import check_session_fixation
 from dastcore.detectors.shellshock import check_shellshock
+from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
@@ -559,6 +561,8 @@ async def _run_scan(
             extra_findings.extend(await run_deserialization_checks(client, all_requests, oast))
             extra_findings.extend(await run_oauth_checks(client, all_requests))
             extra_findings.extend(await run_access_bypass_checks(client, all_requests))
+            extra_findings.extend(await run_response_splitting_checks(client, all_requests))
+            extra_findings.extend(await run_ssi_checks(client, all_requests))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.
                 async with _make_client(config, budget) as fresh_client:

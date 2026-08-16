@@ -66,6 +66,8 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | XXE (blind, OAST) | regla YAML | CWE-611 / WSTG-INPV-07 |
 | **XML Injection** (error-based, rompe el parser XML) | regla YAML | CWE-91 / WSTG-INPV-07 |
 | CRLF / HTTP header injection (OAST) | regla YAML | CWE-93 / WSTG-INPV-16 |
+| **HTTP response splitting / header injection in-band** (inyecta `\r\n<cabecera>: <marcador>` único en cada parámetro y confirma que el servidor emite esa cabecera controlada por el atacante) | detector activo | CWE-113 / A03:2021 |
+| **SSI injection** (Server-Side Includes: `<!--#exec cmd="echo …"-->` que evalúa una aritmética única entre marcadores — el literal reflejado nunca contiene el producto → cero-FP; un acierto es ejecución de comandos) | detector activo | CWE-97/96 / A03:2021 |
 | **CSRF: token no verificado** (reenvía la escritura sin el token y con `Origin` ajeno; si la acción se completa igual, el token no se valida) — `--test-csrf`, intrusivo, no en quick | detector activo | CWE-352 / WSTG-SESS-05 |
 | **Web cache poisoning** (envenena una URL única con una cabecera no clavada — `X-Forwarded-Host`… — y confirma que una petición limpia recibe el veneno de la caché) — `--test-cache-poisoning`, intrusivo, no en quick | detector activo | CWE-524 / WSTG-INPV-19 |
 | **CSV / Formula Injection** (fórmula reflejada sin escapar en export CSV/Excel) | regla YAML (gated por content-type) | CWE-1236 / A03:2021 |
