@@ -1,0 +1,28 @@
+# Bug-bounty program definition (Fase 9). Describe SOLO el scope autorizado del programa.
+# El escaneo/recon sigue bajo el gate --i-have-authorization y el enforcement de scope a nivel de motor.
+platform: hackerone            # hackerone | bugcrowd | intigriti | immunefi | self
+handle: acme
+policy_url: https://hackerone.com/acme
+
+scope:
+  domains:                     # hosts exactos (incluye el apex)
+    - acme.com
+  wildcards:                   # subdominios (NO incluye el apex)
+    - "*.acme.com"
+  cidrs:                       # rangos de IP en scope
+    - 203.0.113.0/24
+  out_of_scope:                # deny — siempre gana sobre in-scope
+    - blog.acme.com
+    - "*.internal.acme.com"
+
+limits:
+  requests_per_second: 3.0
+  max_concurrency: 4
+  no_automated_scanning: false # true => solo recon/pasivo, desactiva el escaneo activo
+
+seeds:                         # dominios/URLs raíz de los que arranca el recon (Fase 10)
+  - acme.com
+
+payouts:                       # opcional: payout esperado por clase (prioridad, Fase 12)
+  sqli: 2000
+  idor: 1500

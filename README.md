@@ -522,6 +522,20 @@ docker pull ghcr.io/proaso17/dastcore:latest
 
 **App de escritorio (Tauri)**: [`desktop/`](desktop/) contiene un shell nativo (Tauri v2) que envuelve el mismo `dastcore serve` — lanza el servidor local como proceso hijo y lo muestra en una ventana nativa (comparte historial con la CLI). Es un scaffold listo para compilar con Rust + Node (`cd desktop && npm install && npm run tauri icon <logo.png> && npm run tauri dev`); ver [`desktop/README.md`](desktop/README.md). El workflow `desktop.yml` (manual) genera los instaladores para Windows/macOS/Linux.
 
+## Cómo probar la Fase 9 (bug bounty — capa de programa)
+
+La Fase 9 añade la base para operar sobre **programas de bug bounty autorizados** (scope con comodines), reutilizando el enforcement de scope a nivel de motor. Sigue bajo el gate `--i-have-authorization`.
+
+- `dastcore/bugbounty/program.py` — modelo pydantic `Program`: `platform` (hackerone/bugcrowd/intigriti/immunefi/self), `handle`, `policy_url`, `scope` (dominios exactos, **wildcards `*.x`**, **CIDR**, y `out_of_scope`), `limits` (rate + `no_automated_scanning`), `seeds`, `payouts`. Métodos `to_scope_config()`, `to_scan_config(target, authorized=...)` (nunca salta el gate por su cuenta) y `allows_active_scanning()`.
+- `dastcore/bugbounty/loader.py` — carga un `Program` desde [`examples/program.yaml`](examples/program.yaml).
+- **`core/scope.py` extendido**: `ScopeChecker` ahora entiende **wildcards `*.target.com`** (solo subdominios, no el apex) y **rangos CIDR** dentro de `allow_domains`/`deny_domains`, y expone **`is_asset_in_scope(host_or_ip)`** para el recon — todo activo pasa por aquí antes de guardarse. Deny-by-default; out-of-scope siempre gana. Retrocompatible con el matching exacto/subdominio existente.
+
+```powershell
+.venv\Scripts\pytest tests/test_bugbounty_program.py tests/test_scope.py -v
+```
+
+> Las Fases 10–14 (recon externo, hunt, triaje VRT, correlación SAST, reportes por plataforma) se construyen sobre esta capa. `recon`/`hunt`/`report` como comandos nuevos llegan en las fases 10/11/14.
+
 ## Pulido operativo
 
 Más allá de las 8 fases, dastcore incluye funcionalidad para uso real:

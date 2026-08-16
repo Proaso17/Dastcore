@@ -8,14 +8,29 @@ suggestion — a request outside scope must never leave the process.
 
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import urlsplit
 
 from dastcore.config import ScopeConfig
 
 
+def _cidr_matches(host: str, pattern: str) -> bool:
+    """True if ``host`` is an IP inside the CIDR ``pattern`` (e.g. 10.0.0.0/8)."""
+    if "/" not in pattern:
+        return False
+    try:
+        return ipaddress.ip_address(host) in ipaddress.ip_network(pattern, strict=False)
+    except ValueError:
+        return False
+
+
 def _domain_matches(host: str, pattern: str, allow_subdomains: bool) -> bool:
     host = host.lower().rstrip(".")
     pattern = pattern.lower().rstrip(".")
+    if _cidr_matches(host, pattern):  # IP-in-range (bug-bounty CIDR scope)
+        return True
+    if pattern.startswith("*."):  # explicit wildcard: *.x matches subdomains of x, not the apex
+        return host.endswith(pattern[1:])
     if host == pattern:
         return True
     if allow_subdomains and host.endswith("." + pattern):
@@ -59,6 +74,21 @@ class ScopeChecker:
                 return True
 
         return False
+
+    def is_asset_in_scope(self, host_or_ip: str) -> bool:
+        """Scope check for a bare host or IP (recon assets, which have no URL/port yet).
+
+        Same deny-wins-over-allow, deny-by-default rule as ``is_in_scope`` — every discovered
+        asset must pass this before it is ever stored or probed."""
+        host = (host_or_ip or "").strip().lower().rstrip(".")
+        if not host:
+            return False
+        for pattern in self._scope.deny_domains:
+            if _domain_matches(host, pattern, self._scope.allow_subdomains):
+                return False
+        return any(
+            _domain_matches(host, pattern, self._scope.allow_subdomains) for pattern in self._scope.allow_domains
+        )
 
 
 def is_in_scope(url: str, scope: ScopeConfig) -> bool:
