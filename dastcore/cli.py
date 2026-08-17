@@ -48,7 +48,7 @@ from dastcore.config import (
     ScanFile,
     ScopeConfig,
 )
-from dastcore.core.http_client import HttpClient
+from dastcore.core.http_client import BudgetExceededError, HttpClient
 from dastcore.core.models import Finding, HttpRequest
 from dastcore.core.session import SessionManager
 from dastcore.detectors.access_bypass import run_access_bypass_checks
@@ -563,6 +563,14 @@ async def _run_scan(
     budget = budget or _Budget(None, None)
     progress = progress or _ProgressAdapter(None)
 
+    # Defined up front so a budget/time cap (BudgetExceededError) can stop the scan mid-flight and still
+    # report everything gathered so far, instead of crashing with no report.
+    discovered: dict[str, HttpRequest] = {}
+    dom_findings: list[Finding] = []
+    extra_findings: list[Finding] = []
+    active_passive: list[Finding] = []
+    budget_hit = False
+
     oast = _build_oast_provider(oast_mode, oast_server)
     if oast is not None:
         await oast.start()
@@ -571,9 +579,6 @@ async def _run_scan(
             if session is not None and session.can_relogin:
                 if not await session.ensure_logged_in(client, initial=True):
                     raise SessionLoginError("El login inicial falló: revisa credenciales / URL de login.")
-
-            discovered: dict[str, HttpRequest] = {}
-            dom_findings: list[Finding] = []
 
             # Full-surface scanning: expand the single target into every in-scope host we can find,
             # then crawl + brute-force paths on each. Both stages are opt-in and scope-enforced.
@@ -615,7 +620,6 @@ async def _run_scan(
                 for req in await fetch_and_parse_openapi(client, openapi_url, target):
                     discovered.setdefault(req.signature(), req)
 
-            extra_findings: list[Finding] = []
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")
                 for req in await discover_graphql(client, graphql_url):
@@ -695,21 +699,24 @@ async def _run_scan(
                 progress.status("Probando HTTP request smuggling (CL.TE)…")
                 extra_findings.extend(await run_smuggling_checks(client, all_requests))
             active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
-            active_passive.extend(extra_findings)
             if prove_impact:
                 progress.status("Probando impacto de los hallazgos confirmados…")
-                await prove_findings_impact(client, active_passive)
+                await prove_findings_impact(client, active_passive + extra_findings)
+    except BudgetExceededError:
+        # A --max-requests / --time-budget cap is a soft stop: keep what we found, don't crash.
+        budget_hit = True
+        progress.status("Presupuesto agotado (tiempo/peticiones): reportando lo encontrado hasta ahora…")
     finally:
         if oast is not None:
             await oast.stop()
 
     authz_findings: list[Finding] = []
-    if config.identities:
+    if config.identities and not budget_hit:  # authz opens fresh clients; skip once the budget is spent
         progress.status("Pruebas de autorización (BOLA/BFLA)…")
         authz_findings = await _run_authz(config, list(discovered.values()), budget, graphql_url=graphql_url)
 
     # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
-    return cross_correlate(active_passive + dom_findings + authz_findings)
+    return cross_correlate(active_passive + extra_findings + dom_findings + authz_findings)
 
 
 async def _run_retest(
