@@ -84,3 +84,46 @@ def test_calibration_ignores_catch_all_redirects() -> None:
     baseline = _Baseline(statuses={302}, lengths_by_status={302: [0]}, redirect_paths={"/login"})
     assert baseline.explains(_resp(302, 0, location="https://app/login"))  # everything 302s to /login
     assert not baseline.explains(_resp(302, 0, location="https://app/admin"))  # a different target -> hit
+
+
+class _FakeClient:
+    """In-memory client: known paths return their canned response, everything else a stable 404."""
+
+    def __init__(self, pages: dict[str, tuple[int, str]]) -> None:
+        self.pages = pages
+        self.requested: list[str] = []
+
+    def is_in_scope(self, url: str) -> bool:
+        return True
+
+    async def get(self, url: str) -> HttpResponse:
+        self.requested.append(url)
+        status, body = self.pages.get(urlsplit(url).path, (404, "the requested page was not found here"))
+        return HttpResponse(method="GET", status_code=status, text=body, url=url)
+
+
+async def test_extension_fuzzing_finds_files_behind_a_word() -> None:
+    client = _FakeClient({"/config.php": (200, "$db_password = 'hunter2';"), "/backup.zip": (200, "PK\x03\x04...")})
+    disc = ContentDiscoverer(client, wordlist=["config", "backup"], extensions=["php", "bak", "zip"])  # type: ignore[arg-type]
+    found = {urlsplit(e.url).path for e in await disc.discover("http://t/")}
+    assert "/config.php" in found and "/backup.zip" in found
+    assert any(u.endswith("/config.bak") for u in client.requested)  # the extension variants were tried
+
+
+async def test_recursion_descends_into_discovered_directories() -> None:
+    client = _FakeClient({
+        "/admin/": (200, "Index of /admin — folder listing"),
+        "/admin/users": (200, "alice\nbob\ncarol — the hidden user list"),
+    })
+    disc = ContentDiscoverer(client, wordlist=["admin", "users"], recursion_depth=1)  # type: ignore[arg-type]
+    found = {urlsplit(e.url).path for e in await disc.discover("http://t/")}
+    assert "/admin/" in found  # the directory itself
+    assert "/admin/users" in found  # ...and a path only reachable by recursing into it
+
+
+async def test_recursion_is_bounded_by_depth() -> None:
+    client = _FakeClient({"/a/": (200, "dir a"), "/a/b/": (200, "dir b"), "/a/b/c": (200, "deep")})
+    disc = ContentDiscoverer(client, wordlist=["a", "b", "c"], recursion_depth=1)  # type: ignore[arg-type]
+    found = {urlsplit(e.url).path for e in await disc.discover("http://t/")}
+    assert "/a/" in found and "/a/b/" in found  # depth 1 reached
+    assert "/a/b/c" not in found  # ...but not depth 2

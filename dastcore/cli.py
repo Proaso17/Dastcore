@@ -92,7 +92,12 @@ from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
-from dastcore.discovery.content import ContentDiscoverer, load_content_wordlist
+from dastcore.discovery.content import (
+    ContentDiscoverer,
+    content_extensions,
+    content_recursion_depth,
+    load_content_wordlist,
+)
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
@@ -589,9 +594,13 @@ async def _run_scan(
 
             if discover_content:
                 content_words = load_content_wordlist(discover_depth)
+                extensions = content_extensions(discover_depth)
+                recursion = content_recursion_depth(discover_depth)
                 for root in scan_roots:
-                    progress.status(f"Descubriendo rutas ocultas (dirbusting) en {root}…")
-                    endpoints = await ContentDiscoverer(client, wordlist=content_words).discover(root)
+                    progress.status(f"Descubriendo directorios y rutas (dirbusting) en {root}…")
+                    endpoints = await ContentDiscoverer(
+                        client, wordlist=content_words, extensions=extensions, recursion_depth=recursion
+                    ).discover(root)
                     for endpoint in endpoints:
                         # A shallow crawl of each hidden page extracts its own links/forms/params, so the
                         # detectors actually get something to test — not just a bare URL.

@@ -34,6 +34,26 @@ _DEPTH_LIMITS: dict[str, int | None] = {"light": 100, "balanced": 300, "aggressi
 # also returns is filtered out by calibration regardless.
 _INTERESTING = frozenset({200, 201, 202, 204, 206, 301, 302, 307, 308, 401, 403, 405, 500, 501, 503})
 
+# Per-depth file-extension fuzzing (word -> word.ext) and how deep to recurse into found directories.
+_EXTENSIONS: dict[str, list[str]] = {
+    "light": [],
+    "balanced": ["php", "json", "txt", "html", "bak", "old", "zip"],
+    "aggressive": [
+        "php", "asp", "aspx", "jsp", "json", "xml", "txt", "html", "htm", "bak", "old", "orig", "save",
+        "zip", "tar.gz", "tgz", "rar", "7z", "sql", "db", "sqlite", "log", "conf", "config", "ini",
+        "yml", "yaml", "env", "pem", "key", "swp", "~",
+    ],
+}
+_RECURSION: dict[str, int] = {"light": 0, "balanced": 1, "aggressive": 2}
+
+
+def content_extensions(depth: str) -> list[str]:
+    return list(_EXTENSIONS.get(depth, _EXTENSIONS["aggressive"]))
+
+
+def content_recursion_depth(depth: str) -> int:
+    return _RECURSION.get(depth, _RECURSION["aggressive"])
+
 
 @dataclass(frozen=True)
 class DiscoveredEndpoint:
@@ -87,20 +107,34 @@ class _Baseline:
         return min(abs(length - base) for base in lengths) <= tolerance
 
 
+def _has_extension(word: str) -> bool:
+    return "." in word.rsplit("/", 1)[-1]
+
+
 class ContentDiscoverer:
-    """Brute-force paths under a base URL, reporting only calibrated hits."""
+    """Brute-force paths under a base URL, reporting only calibrated hits.
+
+    Beyond the flat wordlist it fuzzes **file extensions** (``config`` → ``config.php``, ``config.bak``…)
+    and **recurses into discovered directories** (find ``/admin/`` → brute-force ``/admin/*``), just like
+    a full dirb/ffuf sweep. Every directory gets its own not-found calibration, and a total-probe budget
+    keeps even the aggressive, recursive sweep bounded.
+    """
 
     def __init__(
         self,
         client: HttpClient,
         *,
         wordlist: list[str],
+        extensions: list[str] | None = None,
+        recursion_depth: int = 0,
         concurrency: int = 12,
-        max_paths: int = 6000,
+        max_paths: int = 20000,
         calibration_probes: int = 5,
     ) -> None:
         self._client = client
         self._wordlist = wordlist
+        self._extensions = extensions or []
+        self._recursion_depth = max(0, recursion_depth)
         self._concurrency = max(1, concurrency)
         self._max_paths = max_paths
         self._calibration_probes = calibration_probes
@@ -116,14 +150,13 @@ class ContentDiscoverer:
             return None
 
     async def _calibrate(self, base: str) -> _Baseline | None:
-        """Learn the not-found fingerprint from random paths. None if the base is unreachable."""
+        """Learn the not-found fingerprint for THIS directory. None if it is unreachable."""
         baseline = _Baseline(statuses=set(), lengths_by_status={}, redirect_paths=set())
         seen_any = False
         shapes = ["{t}", "{t}.html", "{t}.php", "{t}.json", "{t}/"]
         for i in range(max(3, self._calibration_probes)):
             token = "dc" + secrets.token_hex(12)
-            shape = shapes[i % len(shapes)]
-            resp = await self._get(urljoin(base, shape.format(t=token)))
+            resp = await self._get(urljoin(base, shapes[i % len(shapes)].format(t=token)))
             if resp is None:
                 continue
             seen_any = True
@@ -133,26 +166,68 @@ class ContentDiscoverer:
                 baseline.redirect_paths.add(_location_path(resp))
         return baseline if seen_any else None
 
+    def _candidates(self, word: str) -> list[str]:
+        """The probes for one word: the route itself, extension variants, and (for recursion) a dir probe."""
+        out = [word]
+        if not _has_extension(word):
+            out += [f"{word}.{ext}" for ext in self._extensions]
+        if self._recursion_depth > 0:
+            out.append(word + "/")  # a hit here means a directory to recurse into
+        return out
+
     async def discover(self, base_url: str) -> list[DiscoveredEndpoint]:
         base = base_url if base_url.endswith("/") else base_url + "/"
         if not self._client.is_in_scope(base):
             return []
-        baseline = await self._calibrate(base)
-        if baseline is None:
-            return []
-
-        candidates = self._wordlist[: self._max_paths]
-        semaphore = asyncio.Semaphore(self._concurrency)
         hits: dict[str, DiscoveredEndpoint] = {}
+        budget = [self._max_paths]
+        visited: set[str] = set()
+        queue: list[tuple[str, int]] = [(base, 0)]
 
-        async def probe(word: str) -> None:
+        while queue and budget[0] > 0:
+            directory, depth = queue.pop(0)
+            if directory in visited:
+                continue
+            visited.add(directory)
+            baseline = await self._calibrate(directory)
+            if baseline is None:
+                continue
+            child_dirs = await self._sweep(directory, depth, baseline, hits, budget)
+            for child in child_dirs:
+                if child not in visited:
+                    queue.append((child, depth + 1))
+
+        return sorted(hits.values(), key=lambda e: e.url)
+
+    async def _sweep(
+        self,
+        directory: str,
+        depth: int,
+        baseline: _Baseline,
+        hits: dict[str, DiscoveredEndpoint],
+        budget: list[int],
+    ) -> list[str]:
+        """Brute-force one directory; record hits, return the child directories to recurse into."""
+        semaphore = asyncio.Semaphore(self._concurrency)
+        child_dirs: set[str] = set()
+
+        async def probe(candidate: str) -> None:
+            if budget[0] <= 0:
+                return
+            budget[0] -= 1
             async with semaphore:
-                url = urljoin(base, word)
+                url = urljoin(directory, candidate)
                 resp = await self._get(url)
             if resp is None or resp.status_code not in _INTERESTING or baseline.explains(resp):
                 return
             final = resp.url or url
             hits[final] = DiscoveredEndpoint(url=final, status_code=resp.status_code, length=len(resp.text or ""))
+            is_dir = final.rstrip().endswith("/") or (
+                resp.status_code in (301, 302, 307, 308) and _location_path(resp).endswith("/")
+            )
+            if is_dir and depth < self._recursion_depth:
+                child_dirs.add(urljoin(directory, candidate.rstrip("/") + "/"))
 
-        await asyncio.gather(*(probe(word) for word in candidates))
-        return sorted(hits.values(), key=lambda e: e.url)
+        candidates = [c for word in self._wordlist for c in self._candidates(word)]
+        await asyncio.gather(*(probe(candidate) for candidate in candidates))
+        return sorted(child_dirs)
