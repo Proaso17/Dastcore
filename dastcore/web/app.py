@@ -179,18 +179,24 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         prove_impact: str = Form(""),
         discover: str = Form(""),
         discover_depth: str = Form("aggressive"),
+        content_wordlist: str = Form(""),
+        subdomain_wordlist: str = Form(""),
         authorization: str = Form(""),
     ) -> Response:
         target = target.strip()
-        if authorization != "on":
+
+        def form_error(message: str) -> Response:
             return HTMLResponse(
-                env.get_template("dashboard.html.j2").render(
-                    scans=store.list_scans(),
-                    target=target,
-                    error="Debes confirmar que tienes autorización para escanear el objetivo.",
-                ),
+                env.get_template("dashboard.html.j2").render(scans=store.list_scans(), target=target, error=message),
                 status_code=400,
             )
+
+        if authorization != "on":
+            return form_error("Debes confirmar que tienes autorización para escanear el objetivo.")
+        # Custom wordlists are read from disk on this machine — fail clearly if the path is wrong.
+        for label, path in (("rutas", content_wordlist.strip()), ("subdominios", subdomain_wordlist.strip())):
+            if path and not Path(path).is_file():
+                return form_error(f"El diccionario de {label} no existe: {path}")
         if engine not in ("http", "headless", "both"):
             engine = "http"
         try:
@@ -221,6 +227,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                         discover_depth=(
                             discover_depth if discover_depth in ("light", "balanced", "aggressive") else "aggressive"
                         ),
+                        content_wordlist=content_wordlist.strip(),
+                        subdomain_wordlist=subdomain_wordlist.strip(),
                     )
                 )
         except Exception as exc:  # noqa: BLE001 — bad target/config -> re-render the form with the reason

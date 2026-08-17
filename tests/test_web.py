@@ -325,6 +325,21 @@ async def test_bad_target_rerenders_form_with_error(client: httpx.AsyncClient) -
     assert "no se pudo iniciar" in resp.text.lower()
 
 
+async def test_scan_rejects_a_missing_custom_wordlist(client: httpx.AsyncClient) -> None:
+    async with client:
+        resp = await client.post(
+            "/scans",
+            data={
+                "target": "http://127.0.0.1:1/",
+                "authorization": "on",
+                "discover": "on",
+                "content_wordlist": "/no/such/seclist.txt",
+            },
+        )
+    assert resp.status_code == 400
+    assert "no existe" in resp.text  # caught before any scan is launched
+
+
 def test_severity_counts_covers_all_levels() -> None:
     assert severity_counts([]) == {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
 

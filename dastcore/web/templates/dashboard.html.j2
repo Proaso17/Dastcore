@@ -159,6 +159,18 @@
               <option value="light">Ligera (rápida)</option>
             </select>
           </div>
+          <details class="guide" style="margin-top:12px">
+            <summary>Diccionarios propios (avanzado)</summary>
+            <div class="gbody">
+              <p class="hint" style="margin:0 0 10px">dastcore ya trae diccionarios grandes. Si quieres máxima
+                cobertura, indica la ruta de un diccionario propio (p. ej. de
+                <strong>SecLists</strong>) en <strong>esta misma máquina</strong>. Déjalo vacío para usar el integrado.</p>
+              <label for="content_wordlist">Diccionario de rutas / directorios</label>
+              <input id="content_wordlist" name="content_wordlist" placeholder="C:\ruta\SecLists\...\directory-list.txt">
+              <label for="subdomain_wordlist" style="margin-top:8px">Diccionario de subdominios</label>
+              <input id="subdomain_wordlist" name="subdomain_wordlist" placeholder="C:\ruta\SecLists\...\subdomains.txt">
+            </div>
+          </details>
         </div>
         <div data-mode="ai" hidden>
           <h3>Descubrimiento automático</h3>
