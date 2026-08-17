@@ -20,6 +20,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 
 from dastcore.analysis import correlate_chains
+from dastcore.bugbounty.program import Program, ProgramLimits, ProgramScope
 from dastcore.core.models import Finding
 from dastcore.httpsec import add_security_headers
 from dastcore.report import render_html, render_json, render_sarif
@@ -36,6 +37,42 @@ from dastcore.web.store import ScanRow, Store, severity_counts
 _INTERVALS = [(60, "cada hora"), (360, "cada 6 h"), (720, "cada 12 h"), (1440, "diario"), (10080, "semanal")]
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+def _classify_scope(text: str) -> tuple[list[str], list[str], list[str]]:
+    """Split free-text scope lines into (domains, wildcards, CIDRs) so a novice only types hosts."""
+    domains: list[str] = []
+    wildcards: list[str] = []
+    cidrs: list[str] = []
+    for raw in text.splitlines():
+        item = raw.strip().lower()
+        if not item:
+            continue
+        if item.startswith("*."):
+            wildcards.append(item)
+        elif (
+            "/" in item
+            and item.split("/")[0].replace(".", "").replace(":", "").isalnum()
+            and any(c.isdigit() for c in item.split("/")[0])
+        ):
+            cidrs.append(item)
+        else:
+            domains.append(item)
+    return domains, wildcards, cidrs
+
+
+def _program_from_form(handle: str, platform: str, in_scope: str, out_of_scope: str, allow_active: bool) -> Program:
+    """Build a Program from the friendly dashboard form (seeds derived from the in-scope hosts)."""
+    domains, wildcards, cidrs = _classify_scope(in_scope)
+    out_lines = [line.strip().lower() for line in out_of_scope.splitlines() if line.strip()]
+    seeds = domains + [w[2:] for w in wildcards]  # start recon from the apex of each in-scope host
+    return Program(
+        handle=handle.strip() or "objetivo",
+        platform=platform if platform in ("hackerone", "bugcrowd", "intigriti", "immunefi", "self") else "self",
+        scope=ProgramScope(domains=domains, wildcards=wildcards, cidrs=cidrs, out_of_scope=out_lines),
+        limits=ProgramLimits(no_automated_scanning=not allow_active),
+        seeds=seeds,
+    )
 
 
 def _build_env() -> Environment:
@@ -418,5 +455,49 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         if scan is None:
             return PlainTextResponse("Escaneo no encontrado.", status_code=404)
         return Response(render_sarif(store.get_findings(scan_id)), media_type="application/json")
+
+    # --- Bug bounty: programas + caza ---------------------------------------------------------
+
+    @app.get("/programs", response_class=HTMLResponse)
+    def programs_page(error: str = "") -> HTMLResponse:
+        return render("programs.html.j2", programs=store.list_programs(), error=error)
+
+    @app.post("/programs")
+    def create_program(
+        handle: str = Form(...),
+        platform: str = Form("self"),
+        in_scope: str = Form(""),
+        out_of_scope: str = Form(""),
+        allow_active: str = Form(""),
+    ) -> Response:
+        program = _program_from_form(handle, platform, in_scope, out_of_scope, allow_active == "on")
+        if not program.scope.allow_patterns():
+            return render(
+                "programs.html.j2",
+                programs=store.list_programs(),
+                error="Indica al menos un dominio en alcance (uno por línea).",
+                handle=handle,
+            )
+        store.add_program(program)
+        return RedirectResponse("/programs", status_code=303)
+
+    @app.post("/programs/{program_id}/delete")
+    def delete_program(program_id: str) -> Response:
+        store.delete_program(program_id)
+        return RedirectResponse("/programs", status_code=303)
+
+    @app.post("/programs/{program_id}/hunt")
+    async def start_hunt(program_id: str, authorization: str = Form("")) -> Response:
+        row = store.get_program(program_id)
+        if row is None:
+            return HTMLResponse("<h1>404</h1><p>Objetivo no encontrado.</p>", status_code=404)
+        if authorization != "on":
+            return render(
+                "programs.html.j2",
+                programs=store.list_programs(),
+                error="Debes confirmar que tienes autorización para analizar este objetivo.",
+            )
+        scan_id = manager.start_hunt(row.program, "standard", db_path)
+        return RedirectResponse(url=f"/scans/{scan_id}", status_code=303)
 
     return app

@@ -10,6 +10,7 @@ checkpoint means an interrupted hunt continues without rescanning what's already
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -68,11 +69,17 @@ async def run_campaign(
     max_pages: int = 200,
     checkpoint_path: str | Path | None = None,
     adapters: list | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> CampaignResult:
     """Discover the program's live in-scope surface and scan it. Recon-only if scanning is forbidden."""
     checker = ScopeChecker(program.to_scope_config())
     opts = recon_opts or ReconOptions()
 
+    def status(text: str) -> None:
+        if on_status is not None:
+            on_status(text)
+
+    status("Descubriendo la superficie (subdominios y hosts vivos)…")
     await run_recon(
         program.seeds,
         opts,
@@ -85,17 +92,21 @@ async def run_campaign(
 
     # A program that forbids automated scanning gets recon + manual validation only.
     if not program.allows_active_scanning():
+        status(f"{len(assets)} activos descubiertos (solo recon; el programa prohíbe escaneo automático).")
         return CampaignResult(assets=assets, findings=[], scanned=[])
 
+    live = asset_store.live()
+    status(f"{len(assets)} activos descubiertos · {len(live)} vivos. Analizando…")
     checkpoint = CampaignCheckpoint(checkpoint_path)
     budget = _Budget(None, None)
     scanned: list[str] = []
-    for asset in asset_store.live():
+    for index, asset in enumerate(live, start=1):
         url = asset.url
         if not url or not checker.is_in_scope(url):  # scope re-checked before we ever scan
             continue
         if checkpoint.is_done(url):
             continue  # resume: already scanned in a previous run
+        status(f"Analizando {index}/{len(live)}: {urlsplit(url).hostname}")
         found = await _run_scan(program.to_scan_config(url, authorized=authorized), max_pages, engine, budget=budget)
         checkpoint.mark_done(url, found)
         checkpoint.save()

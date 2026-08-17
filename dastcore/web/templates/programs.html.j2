@@ -1,0 +1,101 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · bug bounty{% endblock %}
+{% block body %}
+  <div class="panel legal">
+    Analiza <strong>solo</strong> objetivos para los que tienes autorización (tu propia web o un programa de bug
+    bounty donde participas). El análisis no arranca sin marcar la casilla de autorización.
+  </div>
+
+  <div class="panel">
+    <h2>Nuevo objetivo</h2>
+    {% if error %}<div class="panel err" style="margin:0 0 14px">{{ error }}</div>{% endif %}
+
+    <details class="guide">
+      <summary>Guía rápida · ¿qué es esto?</summary>
+      <div class="gbody">
+        <p style="margin:0">Un <strong>objetivo</strong> describe qué tienes permiso para analizar. dastcore
+          <strong>descubre solito</strong> la superficie (subdominios, sitios vivos) y la analiza en busca de fallos —
+          tú solo dices qué dominios están permitidos.</p>
+        <p style="margin:10px 0 0"><strong>En «Dominios en alcance»</strong>, uno por línea:</p>
+        <ol style="list-style:disc">
+          <li><code>ejemplo.com</code> — un dominio exacto.</li>
+          <li><code>*.ejemplo.com</code> — todos sus subdominios (app.ejemplo.com, api.ejemplo.com…).</li>
+          <li><code>10.0.0.0/24</code> — un rango de direcciones IP.</li>
+        </ol>
+        <p style="margin:10px 0 0">Lo que pongas en <strong>«Fuera de alcance»</strong> nunca se tocará (gana
+          siempre sobre lo permitido).</p>
+      </div>
+    </details>
+
+    <form method="post" action="/programs">
+      <label for="handle">Nombre del objetivo</label>
+      <input id="handle" name="handle" placeholder="Mi web / Programa Acme" value="{{ handle or '' }}" required>
+
+      <label for="in_scope">Dominios en alcance (uno por línea)</label>
+      <textarea id="in_scope" name="in_scope" rows="4" placeholder="ejemplo.com&#10;*.ejemplo.com" required></textarea>
+      <p class="hint" style="margin:5px 0 0">Admite dominios, <code>*.dominio</code> (subdominios) y rangos <code>x.x.x.x/24</code>.</p>
+
+      <label for="out_of_scope" style="margin-top:12px">Fuera de alcance (opcional, uno por línea)</label>
+      <textarea id="out_of_scope" name="out_of_scope" rows="2" placeholder="blog.ejemplo.com"></textarea>
+
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label for="platform">Plataforma (opcional)</label>
+          <select id="platform" name="platform">
+            <option value="self">Uso propio</option>
+            <option value="hackerone">HackerOne</option>
+            <option value="bugcrowd">Bugcrowd</option>
+            <option value="intigriti">Intigriti</option>
+            <option value="immunefi">Immunefi</option>
+          </select>
+        </div>
+        <div class="check" style="align-items:flex-start; margin-top:26px">
+          <input id="allow_active" name="allow_active" type="checkbox" value="on" checked>
+          <label for="allow_active" style="margin:0">Permitir análisis automático <span class="muted">(recomendado; si lo desmarcas, solo se descubre la superficie sin analizarla)</span></label>
+        </div>
+      </div>
+
+      <button type="submit" style="margin-top:6px">Guardar objetivo</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>Tus objetivos</h2>
+    {% if programs %}
+    <div class="overflow">
+      <table>
+        <thead><tr><th>Objetivo</th><th>Plataforma</th><th>Alcance</th><th>Analizar</th><th></th></tr></thead>
+        <tbody>
+          {% for row in programs %}
+          <tr>
+            <td><strong>{{ row.handle }}</strong></td>
+            <td class="muted">{{ row.platform }}</td>
+            <td class="muted">
+              {{ (row.program.scope.allow_patterns()[:3]) | join(', ') }}{% if row.program.scope.allow_patterns() | length > 3 %} …{% endif %}
+              {% if not row.program.allows_active_scanning() %}<br><span class="muted">solo recon</span>{% endif %}
+            </td>
+            <td>
+              <form method="post" action="/programs/{{ row.id }}/hunt" style="margin:0">
+                <div class="check" style="margin:0 0 6px">
+                  <input id="auth-{{ row.id }}" name="authorization" type="checkbox" value="on">
+                  <label for="auth-{{ row.id }}" style="margin:0; font-size:12px">Tengo autorización</label>
+                </div>
+                <button type="submit" style="padding:6px 12px; font-size:13px">Analizar ahora</button>
+              </form>
+            </td>
+            <td>
+              <form method="post" action="/programs/{{ row.id }}/delete" style="margin:0"
+                    onsubmit="return confirm('¿Borrar este objetivo?')">
+                <button type="submit" class="danger" style="padding:6px 10px; font-size:12px">Borrar</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty">Aún no tienes objetivos. Crea el primero arriba.</div>
+    {% endif %}
+  </div>
+{% endblock %}

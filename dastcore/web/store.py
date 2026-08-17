@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import secrets
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dastcore.bugbounty.program import Program
 from dastcore.core.models import Finding
 from dastcore.suppressions import Suppression
 
@@ -63,6 +66,14 @@ CREATE TABLE IF NOT EXISTS schedules (
     created_at       REAL NOT NULL,
     last_run_at      REAL,
     next_run_at      REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS programs (
+    id           TEXT PRIMARY KEY,
+    handle       TEXT NOT NULL,
+    platform     TEXT NOT NULL DEFAULT 'self',
+    program_json TEXT NOT NULL,
+    created_at   REAL NOT NULL
 );
 """
 
@@ -124,6 +135,17 @@ class SuppressionRow:
     reason: str
     expires: str | None
     created_at: float
+
+
+@dataclass
+class ProgramRow:
+    """A persisted bug-bounty program (DB row + the parsed ``Program``)."""
+
+    id: str
+    handle: str
+    platform: str
+    created_at: float
+    program: Program
 
 
 def severity_counts(findings: list[Finding]) -> dict[str, int]:
@@ -406,3 +428,41 @@ class Store:
             except ValueError:
                 continue  # bad date or no selector at all — ignore rather than crash the view
         return result
+
+    # --- bug-bounty programs -----------------------------------------------------------------
+
+    def add_program(self, program: Program) -> str:
+        """Persist a program and return its new id."""
+        program_id = secrets.token_hex(6)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO programs (id, handle, platform, program_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (program_id, program.handle, program.platform, program.model_dump_json(), time.time()),
+            )
+            self._conn.commit()
+        return program_id
+
+    def list_programs(self) -> list[ProgramRow]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM programs ORDER BY created_at DESC").fetchall()
+        return [self._row_to_program(row) for row in rows]
+
+    def get_program(self, program_id: str) -> ProgramRow | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM programs WHERE id = ?", (program_id,)).fetchone()
+        return self._row_to_program(row) if row else None
+
+    def delete_program(self, program_id: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM programs WHERE id = ?", (program_id,))
+            self._conn.commit()
+
+    @staticmethod
+    def _row_to_program(row: sqlite3.Row) -> ProgramRow:
+        return ProgramRow(
+            id=row["id"],
+            handle=row["handle"],
+            platform=row["platform"],
+            created_at=row["created_at"],
+            program=Program.model_validate_json(row["program_json"]),
+        )

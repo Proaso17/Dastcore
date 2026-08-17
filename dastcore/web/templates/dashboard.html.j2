@@ -256,7 +256,7 @@
               {% if s.kind == 'retest' %}<span class="muted" title="reverificación">↻</span> {% endif %}
               <a href="/scans/{{ s.id }}">{{ s.target }}</a>
             </td>
-            <td class="muted">{% if s.kind == 'retest' %}retest{% elif s.kind == 'ai' %}chatbot IA{% else %}{{ s.engine }}{% if s.profile %} · {{ s.profile }}{% endif %}{% endif %}</td>
+            <td class="muted">{% if s.kind == 'retest' %}retest{% elif s.kind == 'ai' %}chatbot IA{% elif s.kind == 'hunt' %}bug bounty{% else %}{{ s.engine }}{% if s.profile %} · {{ s.profile }}{% endif %}{% endif %}</td>
             <td><span class="status st-{{ s.status }}">{{ s.status }}</span></td>
             <td>
               {% if s.status == 'done' %}

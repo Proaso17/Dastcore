@@ -142,6 +142,47 @@ class ScanManager:
         task.add_done_callback(self._tasks.discard)
         return scan_id
 
+    # --- bug-bounty hunt (recon -> scan) -----------------------------------------------
+
+    def start_hunt(self, program, profile: str, db_path) -> str:
+        """Launch a full hunt (recon + scan of the in-scope live surface) as a background job."""
+        from pathlib import Path
+
+        scan_id = uuid.uuid4().hex[:12]
+        target = program.handle or (program.seeds[0] if program.seeds else "hunt")
+        job = LiveJob(id=scan_id, target=target, phase="Preparando la caza…")
+        self._live[scan_id] = job
+        self._store.insert_running(scan_id, target, "hunt", profile or None, time.time(), kind="hunt")
+        assets_db = str(Path(db_path).with_name("hunt-assets.db"))
+        task = asyncio.create_task(self._run_hunt(job, program, profile, assets_db))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return scan_id
+
+    async def _run_hunt(self, job: LiveJob, program, profile: str, assets_db: str) -> None:
+        from dastcore.bugbounty.campaign import run_campaign
+        from dastcore.recon import AssetStore, ReconOptions
+
+        started = time.monotonic()
+        store = AssetStore(assets_db)
+        try:
+            result = await run_campaign(
+                program,
+                authorized=True,  # a saved program is an explicit authorization artifact
+                asset_store=store,
+                recon_opts=ReconOptions(profile=profile if profile in ("passive", "standard", "deep") else "standard"),
+                engine="http",
+                on_status=lambda text: setattr(job, "phase", text),
+            )
+            duration = time.monotonic() - started
+            self._store.mark_done(job.id, time.time(), duration, result.findings)
+            job.status = "done"
+            job.phase = f"Completado · {len(result.assets)} activos, {len(result.findings)} hallazgos"
+        except Exception as exc:  # noqa: BLE001 — surface any error to the UI, don't crash the server
+            self._fail(job, started, f"{type(exc).__name__}: {exc}")
+        finally:
+            store.close()
+
     async def _run(
         self, job: LiveJob, config: ScanConfig, engine: str, max_pages: int, prove_impact: bool = False
     ) -> None:
