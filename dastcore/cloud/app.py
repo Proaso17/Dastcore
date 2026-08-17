@@ -169,8 +169,44 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         return runner
 
     def ui_project(request: Request) -> str | None:
+        # An email/password session cookie takes precedence; the raw-API-key cookie is the fallback
+        # (backward compatible with API-key login and the `--project-key` flow).
+        session = store.project_for_session(request.cookies.get("dast_session", ""))
+        if session is not None:
+            return session
         key = request.cookies.get("dast_key", "")
         return store.project_for_key(key) if key else None
+
+    _signup_hits: dict[str, list[float]] = {}
+
+    def _signup_rate_limited(request: Request) -> bool:
+        """Basic per-IP throttle so open signup can't be spammed (5 / 10 min)."""
+        ip = request.client.host if request.client else "?"
+        now = time.time()
+        hits = [t for t in _signup_hits.get(ip, []) if now - t < 600]
+        hits.append(now)
+        _signup_hits[ip] = hits
+        return len(hits) > 5
+
+    def _set_session(response: Response, request: Request, project_id: str) -> None:
+        token = store.create_session(project_id)
+        response.set_cookie("dast_session", token, httponly=True, samesite="strict", secure=is_https(request))
+
+    def _render_dashboard(
+        request: Request, project_id: str, *, new_runner_token: str = "", new_api_key: str = ""
+    ) -> Response:
+        return render(
+            "dashboard.html.j2",
+            project=store.get_project(project_id),
+            jobs=[_job_summary(j) for j in store.list_jobs(project_id)],
+            runners=[_runner_summary(r) for r in store.list_runners(project_id)],
+            schedules=[_schedule_summary(s) for s in store.list_schedules(project_id)],
+            trends=_build_trends(store.trend_points(project_id)),
+            intervals=_INTERVALS,
+            notification=store.get_notification(project_id),
+            new_runner_token=new_runner_token,
+            new_api_key=new_api_key,
+        )
 
     # --- API: health & admin ----------------------------------------------------------
 
@@ -359,30 +395,69 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         resp.set_cookie("dast_key", api_key.strip(), httponly=True, samesite="strict", secure=is_https(request))
         return resp
 
+    @app.get("/signup", response_class=HTMLResponse)
+    def signup_page(request: Request) -> Response:
+        if ui_project(request) is not None:
+            return RedirectResponse("/ui", status_code=303)
+        return render("signup.html.j2", error="")
+
+    @app.post("/signup")
+    def signup(
+        request: Request,
+        email: str = Form(...),
+        password: str = Form(...),
+        project_name: str = Form(""),
+    ) -> Response:
+        def fail(message: str, code: int = 400) -> Response:
+            return HTMLResponse(env.get_template("signup.html.j2").render(error=message), status_code=code)
+
+        if _signup_rate_limited(request):
+            return fail("Demasiados intentos. Espera unos minutos e inténtalo de nuevo.", code=429)
+        clean = email.strip().lower()
+        if "@" not in clean or "." not in clean.split("@")[-1]:
+            return fail("Introduce un email válido.")
+        if len(password) < 8:
+            return fail("La contraseña debe tener al menos 8 caracteres.")
+        if store.email_exists(clean):
+            return fail("Ese email ya tiene una cuenta. Inicia sesión.")
+        _, api_key = store.create_account(clean, password, project_name)
+        resp = render("welcome.html.j2", api_key=api_key, email=clean)
+        _set_session(resp, request, store.project_for_key(api_key))  # type: ignore[arg-type]
+        return resp
+
+    @app.post("/login")
+    def account_login(request: Request, email: str = Form(...), password: str = Form(...)) -> Response:
+        project_id = store.account_project(email, password)
+        if project_id is None:
+            return HTMLResponse(
+                env.get_template("login.html.j2").render(error="Email o contraseña incorrectos."), status_code=400
+            )
+        resp = RedirectResponse("/ui", status_code=303)
+        _set_session(resp, request, project_id)
+        return resp
+
     @app.post("/ui/logout")
-    def ui_logout() -> Response:
+    def ui_logout(request: Request) -> Response:
+        store.delete_session(request.cookies.get("dast_session", ""))
         resp = RedirectResponse("/", status_code=303)
+        resp.delete_cookie("dast_session")
         resp.delete_cookie("dast_key")
         return resp
+
+    @app.post("/ui/regenerate-key")
+    def ui_regenerate_key(request: Request) -> Response:
+        project_id = ui_project(request)
+        if project_id is None:
+            return RedirectResponse("/", status_code=303)
+        api_key = store.regenerate_api_key(project_id)
+        return _render_dashboard(request, project_id, new_api_key=api_key)
 
     @app.get("/ui", response_class=HTMLResponse)
     def ui_dashboard(request: Request, new_runner_token: str = "") -> Response:
         project_id = ui_project(request)
         if project_id is None:
             return RedirectResponse("/", status_code=303)
-        project = store.get_project(project_id)
-        notification = store.get_notification(project_id)
-        return render(
-            "dashboard.html.j2",
-            project=project,
-            jobs=[_job_summary(j) for j in store.list_jobs(project_id)],
-            runners=[_runner_summary(r) for r in store.list_runners(project_id)],
-            schedules=[_schedule_summary(s) for s in store.list_schedules(project_id)],
-            trends=_build_trends(store.trend_points(project_id)),
-            intervals=_INTERVALS,
-            notification=notification,
-            new_runner_token=new_runner_token,
-        )
+        return _render_dashboard(request, project_id, new_runner_token=new_runner_token)
 
     @app.post("/ui/jobs")
     def ui_enqueue(

@@ -2,17 +2,23 @@
 {% block title %}dastcore cloud · acceso{% endblock %}
 {% block body %}
   <div class="panel" style="max-width:520px; margin:40px auto">
-    <h2>Acceder a un proyecto</h2>
-    <p class="muted">Introduce la API key del proyecto para ver sus escaneos, encolar trabajos y gestionar runners y programados.</p>
+    <h2>Iniciar sesión</h2>
     {% if error %}<div class="panel err" style="margin:12px 0">{{ error }}</div>{% endif %}
-    <form method="post" action="/ui/login">
-      <label for="api_key">API key del proyecto</label>
-      <input id="api_key" name="api_key" placeholder="dast_…" required autofocus>
+    <form method="post" action="/login">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="tu@email.com" required autofocus>
+      <label for="password">Contraseña</label>
+      <input id="password" name="password" type="password" required>
       <button type="submit">Entrar</button>
     </form>
-    <p class="muted" style="font-size:13px; margin-top:16px">
-      ¿Sin proyecto? Créalo con el admin token:
-      <code>POST /api/projects</code> (Authorization: Bearer &lt;ADMIN&gt;).
-    </p>
+    <p class="muted" style="font-size:13px; margin-top:16px">¿No tienes cuenta? <a href="/signup">Crear cuenta</a>.</p>
+    <details style="margin-top:16px">
+      <summary class="muted" style="cursor:pointer; font-size:13px">Entrar con API key del proyecto (avanzado)</summary>
+      <form method="post" action="/ui/login" style="margin-top:10px">
+        <label for="api_key">API key del proyecto</label>
+        <input id="api_key" name="api_key" placeholder="dast_…">
+        <button type="submit">Entrar con API key</button>
+      </form>
+    </details>
   </div>
 {% endblock %}

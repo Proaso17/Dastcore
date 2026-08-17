@@ -1,0 +1,27 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore cloud · bienvenida{% endblock %}
+{% block body %}
+  <div class="panel" style="max-width:640px; margin:40px auto">
+    <h2>¡Cuenta creada!</h2>
+    <p class="muted">Tu proyecto está listo, <strong>{{ email }}</strong>. Guarda tu <strong>API key</strong>: se
+      muestra <strong>solo una vez</strong> y la necesitas para tu runner. Si la pierdes, podrás regenerarla desde el panel.</p>
+    <div class="panel flash">
+      <div><code id="apikey">{{ api_key }}</code></div>
+      <button type="button" class="small" id="copyKey" style="margin-top:8px">Copiar</button>
+    </div>
+    <p class="muted" style="font-size:13px; margin-top:12px">Levanta un runner en la red del objetivo (escanea allí,
+      nunca en la nube):</p>
+    <pre style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px 14px;
+      overflow-x:auto; white-space:pre-wrap; word-break:break-word; font-size:12.5px;">docker run -d --restart unless-stopped ghcr.io/proaso17/dastcore \
+  runner &lt;URL-de-este-servidor&gt; --project-key {{ api_key }} --i-have-authorization</pre>
+    <a href="/ui"><button type="button" style="margin-top:8px">Ir a mi panel</button></a>
+    <script>
+      document.getElementById('copyKey').addEventListener('click', function () {
+        navigator.clipboard.writeText(document.getElementById('apikey').textContent).then(function () {
+          var b = document.getElementById('copyKey'); b.textContent = '¡Copiado!';
+          setTimeout(function () { b.textContent = 'Copiar'; }, 1500);
+        });
+      });
+    </script>
+  </div>
+{% endblock %}

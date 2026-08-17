@@ -36,24 +36,23 @@ y crea el CNAME que te indique. El HTTPS se emite solo.
 
 ---
 
-## 2. Crear el primer proyecto y dar acceso a un usuario
+## 2. Que los usuarios se registren (self-service)
 
-Un **proyecto** aísla los escaneos y resultados de un usuario/cliente. Se crea con el admin token:
+Cualquiera puede **crear su cuenta** en `https://…onrender.com/signup`: email + contraseña → obtiene su
+**propio proyecto** y su **API key** (que se muestra una vez, para su runner). No hace falta que tú
+intervengas. El registro está limitado por IP para evitar spam, y la sesión de la UI es email+contraseña
+(la API key solo se necesita para el runner; se puede **regenerar** desde el panel si se pierde).
+
+**Alta manual (opcional, para onboarding controlado):** también puedes crear proyectos tú con el admin
+token:
 
 ```bash
 ADMIN=<tu-DASTCORE_ADMIN_TOKEN>
 BASE=https://dastcore-control-plane.onrender.com
-
 curl -sX POST "$BASE/api/projects" \
-  -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
-  -d '{"name":"acme"}'
-# -> {"id":"...","name":"acme","api_key":"dcpk_..."}
+  -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" -d '{"name":"acme"}'
+# -> {"id":"...","name":"acme","api_key":"dast_..."}   # entrega la api_key al usuario
 ```
-
-Entrega esa **`api_key`** al usuario. Con ella:
-
-- entra en la **UI** en `$BASE/` (login con su api_key) para encolar escaneos y ver resultados, o
-- usa la **API** directamente (`Authorization: Bearer <api_key>`).
 
 ---
 

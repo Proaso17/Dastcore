@@ -3,10 +3,18 @@
 {% block nav %}
   <span style="margin-left:auto" class="muted">
     proyecto <strong>{{ project.name }}</strong>
+    · <form method="post" action="/ui/regenerate-key" style="display:inline"
+        onsubmit="return confirm('¿Generar una nueva API key? La actual dejará de funcionar en tus runners.')"><button class="small" type="submit">Regenerar API key</button></form>
     · <form method="post" action="/ui/logout" style="display:inline"><button class="small" type="submit">Salir</button></form>
   </span>
 {% endblock %}
 {% block body %}
+  {% if new_api_key %}
+  <div class="panel flash">
+    <strong>Nueva API key.</strong> La anterior ya no funciona. Guárdala (se muestra solo una vez):
+    <div style="margin-top:8px"><code>{{ new_api_key }}</code></div>
+  </div>
+  {% endif %}
   {% if new_runner_token %}
   <div class="panel flash">
     <strong>Runner creado.</strong> Guarda su token (se muestra solo una vez):

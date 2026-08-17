@@ -248,7 +248,7 @@ async def test_ui_login_and_dashboard(client: httpx.AsyncClient) -> None:
         key = await _new_project(client)
 
         landing = await client.get("/")
-        assert "Acceder a un proyecto" in landing.text
+        assert "Iniciar sesión" in landing.text and "Entrar con API key" in landing.text
 
         bad = await client.post("/ui/login", data={"api_key": "nope"})
         assert bad.status_code == 400

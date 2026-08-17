@@ -1,0 +1,20 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore cloud · crear cuenta{% endblock %}
+{% block body %}
+  <div class="panel" style="max-width:520px; margin:40px auto">
+    <h2>Crear cuenta</h2>
+    <p class="muted">Regístrate para tener tu propio proyecto: encola análisis, ve resultados y gestiona tus runners.
+      Sin comandos ni tokens de administrador.</p>
+    {% if error %}<div class="panel err" style="margin:12px 0">{{ error }}</div>{% endif %}
+    <form method="post" action="/signup">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="tu@email.com" required autofocus>
+      <label for="password">Contraseña (mínimo 8 caracteres)</label>
+      <input id="password" name="password" type="password" minlength="8" required>
+      <label for="project_name">Nombre del proyecto (opcional)</label>
+      <input id="project_name" name="project_name" placeholder="Mi web">
+      <button type="submit" style="margin-top:6px">Crear cuenta</button>
+    </form>
+    <p class="muted" style="font-size:13px; margin-top:16px">¿Ya tienes cuenta? <a href="/">Inicia sesión</a>.</p>
+  </div>
+{% endblock %}

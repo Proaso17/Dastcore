@@ -40,6 +40,19 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    email         TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    project_id    TEXT NOT NULL,
+    created_at    REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id              TEXT PRIMARY KEY,
     project_id      TEXT NOT NULL,
@@ -229,6 +242,24 @@ def _hash_key(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+def _hash_password(password: str) -> str:
+    """Salted scrypt (stdlib) — slow by design, so a leaked DB can't be brute-forced cheaply."""
+    salt = secrets.token_bytes(16)
+    derived = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    return f"scrypt${salt.hex()}${derived.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, salt_hex, hash_hex = stored.split("$", 2)
+    except ValueError:
+        return False
+    if algo != "scrypt":
+        return False
+    derived = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=32)
+    return secrets.compare_digest(derived.hex(), hash_hex)
+
+
 def _severity_counts(findings: list[Finding]) -> dict[str, int]:
     counts = dict.fromkeys(_SEVERITIES, 0)
     for finding in findings:
@@ -287,6 +318,70 @@ class Store:
     def get_project(self, project_id: str) -> ProjectRow | None:
         row = self._db.query_one("SELECT * FROM projects WHERE id=?", (project_id,))
         return ProjectRow(id=row["id"], name=row["name"], created_at=row["created_at"]) if row else None
+
+    def regenerate_api_key(self, project_id: str) -> str:
+        """Issue a fresh API key for a project and invalidate the old one(s). Returned once."""
+        api_key = "dast_" + secrets.token_urlsafe(24)
+        with self._db.transaction() as tx:
+            tx.execute("DELETE FROM api_keys WHERE project_id=?", (project_id,))
+            tx.execute(
+                "INSERT INTO api_keys (key_hash, project_id, created_at) VALUES (?, ?, ?)",
+                (_hash_key(api_key), project_id, time.time()),
+            )
+        return api_key
+
+    # --- self-service accounts (email + password) --------------------------------------
+
+    def email_exists(self, email: str) -> bool:
+        return self._db.query_one("SELECT 1 FROM users WHERE email=?", (email.strip().lower(),)) is not None
+
+    def create_account(self, email: str, password: str, project_name: str = "") -> tuple[str, str]:
+        """Register a user and their own project atomically. Returns (project_id, api_key)."""
+        email = email.strip().lower()
+        project_id = uuid.uuid4().hex[:12]
+        api_key = "dast_" + secrets.token_urlsafe(24)
+        now = time.time()
+        with self._db.transaction() as tx:  # a duplicate email violates the users PK -> rolls back the project
+            tx.execute(
+                "INSERT INTO users (email, password_hash, project_id, created_at) VALUES (?, ?, ?, ?)",
+                (email, _hash_password(password), project_id, now),
+            )
+            tx.execute(
+                "INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)",
+                (project_id, project_name.strip() or email, now),
+            )
+            tx.execute(
+                "INSERT INTO api_keys (key_hash, project_id, created_at) VALUES (?, ?, ?)",
+                (_hash_key(api_key), project_id, now),
+            )
+        return project_id, api_key
+
+    def account_project(self, email: str, password: str) -> str | None:
+        """Return the project id for valid email+password credentials, else None."""
+        row = self._db.query_one("SELECT password_hash, project_id FROM users WHERE email=?", (email.strip().lower(),))
+        if row is None:
+            return None
+        return row["project_id"] if _verify_password(password, row["password_hash"]) else None
+
+    # --- UI sessions (decoupled from the raw API key) ----------------------------------
+
+    def create_session(self, project_id: str) -> str:
+        token = secrets.token_urlsafe(24)
+        self._db.execute(
+            "INSERT INTO sessions (token_hash, project_id, created_at) VALUES (?, ?, ?)",
+            (_hash_key(token), project_id, time.time()),
+        )
+        return token
+
+    def project_for_session(self, token: str) -> str | None:
+        if not token:
+            return None
+        row = self._db.query_one("SELECT project_id FROM sessions WHERE token_hash=?", (_hash_key(token),))
+        return row["project_id"] if row else None
+
+    def delete_session(self, token: str) -> None:
+        if token:
+            self._db.execute("DELETE FROM sessions WHERE token_hash=?", (_hash_key(token),))
 
     # --- jobs --------------------------------------------------------------------------
 
