@@ -177,6 +177,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         victim_bearer: str = Form(""),
         victim_ref: str = Form(""),
         prove_impact: str = Form(""),
+        discover: str = Form(""),
+        discover_depth: str = Form("aggressive"),
         authorization: str = Form(""),
     ) -> Response:
         target = target.strip()
@@ -214,6 +216,11 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                         auth_bearer=auth_bearer.strip(),
                         auth_cookie=auth_cookie.strip(),
                         prove_impact=prove_impact == "on",
+                        discover_subdomains=discover == "on",
+                        discover_content=discover == "on",
+                        discover_depth=(
+                            discover_depth if discover_depth in ("light", "balanced", "aggressive") else "aggressive"
+                        ),
                     )
                 )
         except Exception as exc:  # noqa: BLE001 — bad target/config -> re-render the form with the reason

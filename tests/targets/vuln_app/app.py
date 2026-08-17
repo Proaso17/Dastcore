@@ -138,6 +138,22 @@ def create_app() -> Flask:
         items = "".join(f"<li>{name} - ${price}</li>" for _id, name, price in rows)
         return Response(f"<h1>Results for {query}</h1><ul>{items}</ul>", mimetype="text/html")
 
+    @app.get("/backup")
+    def backup() -> Response:
+        """Error-based SQLi exactly like /search, but UNLINKED from the rest of the site — only a
+        content-discovery sweep (the path 'backup' is a common wordlist entry) can reach it. The form
+        hands the crawler the 'q' parameter to test on this otherwise-hidden page."""
+        query = request.args.get("q", "")
+        if query:
+            sql = f"SELECT id, name FROM products WHERE name LIKE '%{query}%'"  # noqa: S608 — deliberate
+            try:
+                db.execute(sql).fetchall()
+            except sqlite3.OperationalError as exc:
+                return Response(
+                    f"<h1>Database error</h1><pre>SQLite3::error near: {exc}</pre>", status=500, mimetype="text/html"
+                )
+        return Response("<html><body><form action='/backup'><input name='q'></form></body></html>", mimetype="text/html")
+
     @app.get("/api/item")
     def item_lookup() -> Response:
         """Boolean-based blind SQLi: the page differs on whether an injected condition

@@ -92,10 +92,12 @@ from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
+from dastcore.discovery.content import ContentDiscoverer, load_content_wordlist
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
 from dastcore.discovery.openapi import fetch_and_parse_openapi
+from dastcore.discovery.subdomains import SubdomainDiscoverer, load_subdomain_wordlist
 from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import load_rules
@@ -468,6 +470,58 @@ async def _run_authz(
         return findings
 
 
+def _looks_like_ip(host: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+# Second-level public suffixes where the registrable domain is the last THREE labels.
+_TWO_LEVEL_TLDS = frozenset(
+    {"co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "org.au", "co.nz", "co.jp",
+     "com.br", "com.mx", "co.in", "com.tr", "com.sg", "com.hk", "co.za", "com.ar"}
+)
+
+
+def _base_domain(host: str) -> str:
+    """Best-effort registrable domain, so we enumerate siblings (api., admin.) not sub-sub-domains.
+
+    A heuristic (no public-suffix list dependency); the scope gate is the real safety net, so an
+    over-broad guess only produces candidates that are then filtered by scope anyway.
+    """
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    if ".".join(labels[-2:]) in _TWO_LEVEL_TLDS and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+async def _discover_scan_roots(
+    client: HttpClient, target: str, depth: str, progress: _ProgressAdapter
+) -> list[str]:
+    """Expand a target URL into itself + every live, in-scope subdomain we can discover."""
+    from urllib.parse import urlsplit
+
+    host = urlsplit(target).hostname or ""
+    roots = [target]
+    if not host or _looks_like_ip(host):
+        return roots  # a bare IP (or no host) has no domain to expand
+    progress.status("Descubriendo subdominios…")
+    found = await SubdomainDiscoverer(client, wordlist=load_subdomain_wordlist(depth)).discover(_base_domain(host))
+    seen = {host}
+    for discovered_host in found:
+        if discovered_host.host not in seen:
+            seen.add(discovered_host.host)
+            roots.append(discovered_host.url)
+    progress.status(f"Superficie a escanear: {len(roots)} host(s).")
+    return roots
+
+
 async def _run_scan(
     config: ScanConfig,
     max_pages: int,
@@ -490,6 +544,9 @@ async def _run_scan(
     test_dos: bool = False,
     test_smuggling: bool = False,
     prove_impact: bool = False,
+    discover_subdomains: bool = False,
+    discover_content: bool = False,
+    discover_depth: str = "aggressive",
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
     rules = load_rules()
@@ -510,16 +567,36 @@ async def _run_scan(
             discovered: dict[str, HttpRequest] = {}
             dom_findings: list[Finding] = []
 
+            # Full-surface scanning: expand the single target into every in-scope host we can find,
+            # then crawl + brute-force paths on each. Both stages are opt-in and scope-enforced.
+            scan_roots = [target]
+            if discover_subdomains:
+                scan_roots = await _discover_scan_roots(client, target, discover_depth, progress)
+
             if engine in ("http", "both"):
-                progress.status("Crawleando (HTTP estático)…")
-                for req in await HttpCrawler(client, max_pages=max_pages).crawl(target):
-                    discovered.setdefault(req.signature(), req)
+                for root in scan_roots:
+                    progress.status(f"Crawleando (HTTP estático) {root}…")
+                    for req in await HttpCrawler(client, max_pages=max_pages).crawl(root):
+                        discovered.setdefault(req.signature(), req)
 
             if engine in ("headless", "both"):
-                progress.status("Crawleando (headless / SPA)…")
-                headless_reqs, dom_findings = await _run_headless(config, client, target, max_pages)
-                for req in headless_reqs:
-                    discovered.setdefault(req.signature(), req)
+                for root in scan_roots:
+                    progress.status(f"Crawleando (headless / SPA) {root}…")
+                    headless_reqs, root_dom = await _run_headless(config, client, root, max_pages)
+                    dom_findings.extend(root_dom)
+                    for req in headless_reqs:
+                        discovered.setdefault(req.signature(), req)
+
+            if discover_content:
+                content_words = load_content_wordlist(discover_depth)
+                for root in scan_roots:
+                    progress.status(f"Descubriendo rutas ocultas (dirbusting) en {root}…")
+                    endpoints = await ContentDiscoverer(client, wordlist=content_words).discover(root)
+                    for endpoint in endpoints:
+                        # A shallow crawl of each hidden page extracts its own links/forms/params, so the
+                        # detectors actually get something to test — not just a bare URL.
+                        for req in await HttpCrawler(client, max_pages=8, use_robots=False).crawl(endpoint.url):
+                            discovered.setdefault(req.signature(), req)
 
             if openapi_url:
                 progress.status("Ingiriendo OpenAPI…")
@@ -536,12 +613,14 @@ async def _run_scan(
                 extra_findings.extend(await check_graphql_arg_injection(client, graphql_url))
 
             progress.status("Probando ficheros sensibles…")
-            extra_findings.extend(await probe_sensitive_files(client, target))
+            for root in scan_roots:
+                extra_findings.extend(await probe_sensitive_files(client, root))
 
             progress.status("Fingerprint de tecnología + WAF…")
-            extra_findings.extend(await fingerprint_and_waf(client, target))
-            extra_findings.extend(await check_trace_method(client, target))
-            extra_findings.extend(await check_dangerous_methods(client, target))
+            for root in scan_roots:
+                extra_findings.extend(await fingerprint_and_waf(client, root))
+                extra_findings.extend(await check_trace_method(client, root))
+                extra_findings.extend(await check_dangerous_methods(client, root))
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
                 jwt_token = config.auth.bearer_token
                 extra_findings.extend(await check_jwt_none_acceptance(client, target, jwt_token))
@@ -897,6 +976,22 @@ def scan(
         "servible, lo recupera y confirma el impacto (RCE si el .php se ejecuta; XSS almacenado si el .html/.svg se "
         "sirve). Intrusivo: escribe ficheros en el servidor; no se activa en el perfil quick.",
     ),
+    discover: bool = typer.Option(
+        False,
+        "--discover",
+        help="Descubrimiento de superficie completa: enumera subdominios en scope (crt.sh + fuerza bruta DNS) Y rutas "
+        "ocultas por host (dirbusting estilo ffuf, con calibración anti-soft-404 para cero falsos positivos), y luego "
+        "escanea cada host y ruta descubiertos. Solo toca hosts dentro del scope autorizado. Intrusivo; no en 'quick'.",
+    ),
+    discover_subdomains: bool = typer.Option(
+        False, "--discover-subdomains", help="Solo enumeración de subdominios (subconjunto de --discover)."
+    ),
+    discover_content: bool = typer.Option(
+        False, "--discover-content", help="Solo descubrimiento de rutas / dirbusting (subconjunto de --discover)."
+    ),
+    discover_depth: str = typer.Option(
+        "aggressive", "--discover-depth", help="Profundidad del descubrimiento: light | balanced | aggressive."
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1166,6 +1261,9 @@ def scan(
                     test_dos=test_dos and profile != "quick",
                     test_smuggling=test_smuggling and profile != "quick",
                     prove_impact=prove_impact,  # opt-in explícito: enriquece confirmados, no depende del perfil
+                    discover_subdomains=(discover or discover_subdomains) and profile != "quick",
+                    discover_content=(discover or discover_content) and profile != "quick",
+                    discover_depth=discover_depth,
                     ai_payloads=payload_generator,
                 )
             )

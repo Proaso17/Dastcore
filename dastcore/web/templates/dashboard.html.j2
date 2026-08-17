@@ -143,6 +143,22 @@
           <p class="hint" style="margin:2px 0 0">Sobre lo ya confirmado, intenta una extracción de solo lectura y
             acotada que lo demuestre (p. ej. SQLi → lee la versión de la base de datos). No genera falsos positivos:
             solo enriquece hallazgos ya confirmados.</p>
+          <div class="check" style="margin-top:16px">
+            <input id="discover" name="discover" type="checkbox" value="on">
+            <label for="discover" style="margin:0">Descubrir <strong>subdominios y rutas ocultas</strong> antes de
+              escanear (análisis de superficie completa)</label>
+          </div>
+          <p class="hint" style="margin:2px 0 10px">Busca otros hosts del dominio (p. ej. <code>api.</code>,
+            <code>admin.</code>) y páginas no enlazadas (estilo ffuf/dirbuster), y prueba las vulnerabilidades en cada
+            uno. Solo toca hosts dentro de tu autorización. No se activa en el perfil «Rápido».</p>
+          <div style="max-width:280px">
+            <label for="discover_depth">Profundidad del descubrimiento</label>
+            <select id="discover_depth" name="discover_depth">
+              <option value="aggressive">Agresiva (máxima cobertura)</option>
+              <option value="balanced">Equilibrada</option>
+              <option value="light">Ligera (rápida)</option>
+            </select>
+          </div>
         </div>
         <div data-mode="ai" hidden>
           <h3>Descubrimiento automático</h3>

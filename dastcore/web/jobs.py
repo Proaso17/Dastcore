@@ -43,6 +43,10 @@ class ScanRequest:
     auth_bearer: str = ""
     auth_cookie: str = ""  # "name=value"
     prove_impact: bool = False  # enrich confirmed findings with bounded, read-only proof of impact
+    # Full-surface discovery: enumerate in-scope subdomains and/or brute-force hidden paths, then scan each.
+    discover_subdomains: bool = False
+    discover_content: bool = False
+    discover_depth: str = "aggressive"
     allow_domains: list[str] = field(default_factory=list)
     # Embedded-chatbot ("ai --discover") scans: a second identity for the cross-tenant checks.
     victim_bearer: str = ""
@@ -137,7 +141,15 @@ class ScanManager:
         self._live[scan_id] = job
         self._store.insert_running(scan_id, str(config.target), engine, req.profile or None, time.time())
 
-        task = asyncio.create_task(self._run(job, config, engine, max_pages, req.prove_impact))
+        not_quick = req.profile != "quick"  # discovery is intrusive; never in the quick profile
+        task = asyncio.create_task(
+            self._run(
+                job, config, engine, max_pages, req.prove_impact,
+                discover_subdomains=req.discover_subdomains and not_quick,
+                discover_content=req.discover_content and not_quick,
+                discover_depth=req.discover_depth,
+            )
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return scan_id
@@ -184,7 +196,16 @@ class ScanManager:
             store.close()
 
     async def _run(
-        self, job: LiveJob, config: ScanConfig, engine: str, max_pages: int, prove_impact: bool = False
+        self,
+        job: LiveJob,
+        config: ScanConfig,
+        engine: str,
+        max_pages: int,
+        prove_impact: bool = False,
+        *,
+        discover_subdomains: bool = False,
+        discover_content: bool = False,
+        discover_depth: str = "aggressive",
     ) -> None:
         started = time.monotonic()
         try:
@@ -195,6 +216,9 @@ class ScanManager:
                 budget=_Budget(None, None),
                 progress=_JobProgress(job),
                 prove_impact=prove_impact,
+                discover_subdomains=discover_subdomains,
+                discover_content=discover_content,
+                discover_depth=discover_depth,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

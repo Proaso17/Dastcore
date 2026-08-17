@@ -9,8 +9,33 @@ from dastcore.config import RateLimitConfig, ScopeConfig
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import HttpResponse
 from dastcore.discovery.content import ContentDiscoverer, _Baseline, load_content_wordlist
+from dastcore.discovery.crawler_http import HttpCrawler
+from dastcore.engine.rule_engine import load_rules
+from dastcore.engine.scanner import Scanner
 
 _FAST = RateLimitConfig(requests_per_second=100, max_concurrency=20)
+
+
+async def test_content_discovery_surfaces_an_unlinked_vulnerable_endpoint(vuln_app_url: str) -> None:
+    """The end-to-end value: an endpoint no link points to (/backup) is only reachable by brute force,
+    and once discovered its SQLi is found — exactly what the user asked for."""
+    scope = ScopeConfig(allow_domains=["127.0.0.1"])
+    async with HttpClient(scope, rate_limit=_FAST) as client:
+        # a normal crawl from the site root never reaches /backup (nothing links to it)
+        crawled = await HttpCrawler(client, use_robots=False).crawl(vuln_app_url + "/")
+        assert not any("/backup" in req.url for req in crawled)
+
+        # content discovery finds it; a shallow crawl of the hidden page extracts its form's 'q' param
+        endpoints = await ContentDiscoverer(client, wordlist=load_content_wordlist("light")).discover(vuln_app_url + "/")
+        backup = [e for e in endpoints if e.url.rstrip("/").endswith("/backup")]
+        assert backup, "content discovery should have found the unlinked /backup"
+
+        requests = await HttpCrawler(client, max_pages=8, use_robots=False).crawl(backup[0].url)
+        findings = await Scanner(client, load_rules()).scan(requests)
+
+    assert any(
+        f.rule_id == "sqli-injection" and "/backup" in (f.request.url if f.request else "") for f in findings
+    ), "the SQLi on the discovered /backup should be reported"
 
 
 async def test_content_discovery_finds_unlinked_paths_without_false_positives(vuln_app_url: str) -> None:
