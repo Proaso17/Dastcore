@@ -87,7 +87,7 @@ version = { attr = "dastcore.__version__" }
 include = ["dastcore*"]
 
 [tool.setuptools.package-data]
-dastcore = ["rules/*.yaml", "ai_rules/*.yaml", "ai_rules/wordlists/*.txt", "vulndb/*.yaml", "report/templates/*.j2", "web/templates/*.j2", "cloud/templates/*.j2"]
+dastcore = ["rules/*.yaml", "ai_rules/*.yaml", "ai_rules/wordlists/*.txt", "discovery/wordlists/*.txt", "vulndb/*.yaml", "report/templates/*.j2", "web/templates/*.j2", "cloud/templates/*.j2"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
