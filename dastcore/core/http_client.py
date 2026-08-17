@@ -124,6 +124,10 @@ class HttpClient:
     def is_in_scope(self, url: str) -> bool:
         return self._scope_checker.is_in_scope(url)
 
+    def is_asset_in_scope(self, host_or_ip: str) -> bool:
+        """Scope check for a bare host/IP (a discovered subdomain before it has a URL)."""
+        return self._scope_checker.is_asset_in_scope(host_or_ip)
+
     @property
     def request_count(self) -> int:
         return self._request_count
