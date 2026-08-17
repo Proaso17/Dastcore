@@ -754,6 +754,8 @@ docker run --rm ghcr.io/proaso17/dastcore:latest runner https://cloud.example.co
 
 `cloud-serve` lee `DASTCORE_ADMIN_TOKEN` y `DASTCORE_DB` del entorno (para contenedores). En producción, pon el control-plane detrás de un proxy con TLS y restringe el acceso.
 
+**Deploy sin servidor (PaaS con HTTPS gestionado):** [`render.yaml`](render.yaml) es un Blueprint de **Render** que despliega el control-plane (desde `Dockerfile.cloud`) + Postgres gestionado + HTTPS con casi un clic. Guía paso a paso (crear proyecto → dar API key al usuario → el usuario levanta su runner): **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
 ```powershell
 .venv\Scripts\pytest tests/test_cloud.py -v
 ```

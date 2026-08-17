@@ -1,0 +1,36 @@
+# Render Blueprint — deploy the dastcore control-plane (SaaS API + UI) with a managed Postgres.
+#
+# The control-plane ONLY queues jobs and stores results — it NEVER scans. Scanning happens on
+# self-hosted runners that each user runs inside their own network (see docs/DEPLOY.md). That is
+# what makes this safe to expose publicly: no intrusive traffic ever leaves this server.
+#
+# Deploy: push this repo to GitHub, then in Render -> New -> Blueprint -> pick this repo -> Apply.
+# Render builds Dockerfile.cloud, provisions the Postgres below, wires the env vars, and gives you
+# an https://<name>.onrender.com URL with TLS handled for you.
+
+databases:
+  - name: dastcore-db
+    plan: free # free Postgres expires ~90 days after creation; use basic-256mb+ for production
+    region: oregon
+    databaseName: dastcore
+    user: dastcore
+
+services:
+  - type: web
+    name: dastcore-control-plane
+    runtime: docker
+    region: oregon
+    plan: free # free web services sleep after ~15 min idle (cold starts); use 'starter' to stay always-on
+    dockerfilePath: ./Dockerfile.cloud
+    dockerContext: .
+    healthCheckPath: /api/health
+    # Bind to the port Render assigns. Keep this at ONE instance: the control-plane's store is
+    # single-instance (Postgres handles the durable state, but the app is not designed to scale out).
+    dockerCommand: sh -c "dastcore cloud-serve --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DASTCORE_ADMIN_TOKEN
+        generateValue: true # Render generates a strong secret; read it in the service's Environment tab
+      - key: DASTCORE_DB
+        fromDatabase:
+          name: dastcore-db
+          property: connectionString
