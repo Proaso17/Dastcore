@@ -589,13 +589,19 @@ async def _run_scan(
             if engine in ("http", "both"):
                 for root in scan_roots:
                     progress.status(f"Crawleando (HTTP estático) {root}…")
-                    for req in await HttpCrawler(client, max_pages=max_pages).crawl(root):
-                        discovered.setdefault(req.signature(), req)
+                    try:
+                        for req in await HttpCrawler(client, max_pages=max_pages).crawl(root):
+                            discovered.setdefault(req.signature(), req)
+                    except httpx.HTTPError:
+                        progress.status(f"{root} no accesible (error de red), lo salto…")
 
             if engine in ("headless", "both"):
                 for root in scan_roots:
                     progress.status(f"Crawleando (headless / SPA) {root}…")
-                    headless_reqs, root_dom = await _run_headless(config, client, root, max_pages)
+                    try:
+                        headless_reqs, root_dom = await _run_headless(config, client, root, max_pages)
+                    except httpx.HTTPError:
+                        continue  # a flaky host must not abort the whole multi-host scan
                     dom_findings.extend(root_dom)
                     for req in headless_reqs:
                         discovered.setdefault(req.signature(), req)
@@ -630,13 +636,19 @@ async def _run_scan(
 
             progress.status("Probando ficheros sensibles…")
             for root in scan_roots:
-                extra_findings.extend(await probe_sensitive_files(client, root))
+                try:
+                    extra_findings.extend(await probe_sensitive_files(client, root))
+                except httpx.HTTPError:
+                    pass  # skip this host's passive checks on a network error, keep going
 
             progress.status("Fingerprint de tecnología + WAF…")
             for root in scan_roots:
-                extra_findings.extend(await fingerprint_and_waf(client, root))
-                extra_findings.extend(await check_trace_method(client, root))
-                extra_findings.extend(await check_dangerous_methods(client, root))
+                try:
+                    extra_findings.extend(await fingerprint_and_waf(client, root))
+                    extra_findings.extend(await check_trace_method(client, root))
+                    extra_findings.extend(await check_dangerous_methods(client, root))
+                except httpx.HTTPError:
+                    pass
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
                 jwt_token = config.auth.bearer_token
                 extra_findings.extend(await check_jwt_none_acceptance(client, target, jwt_token))

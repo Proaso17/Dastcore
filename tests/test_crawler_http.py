@@ -83,3 +83,25 @@ async def test_crawler_respects_max_pages(vuln_app_url: str) -> None:
     assert not any(url.endswith("/greet") for url in urls)
     assert not any(url.endswith("/go") for url in urls)
     assert not any(url.endswith("/file") for url in urls)
+
+
+async def test_crawler_skips_pages_that_error_and_keeps_going() -> None:
+    """A transient network error on one page must not abort the crawl (multi-host resilience)."""
+    import httpx as _httpx
+
+    from dastcore.core.models import HttpResponse
+
+    class _FlakyClient:
+        def is_in_scope(self, url: str) -> bool:
+            return True
+
+        async def get(self, url: str) -> HttpResponse:
+            if url.endswith("/bad"):
+                raise _httpx.ConnectError("boom")
+            body = '<a href="/bad">x</a><a href="/good">y</a>'
+            return HttpResponse(method="GET", status_code=200, headers={"content-type": "text/html"}, text=body, url=url)
+
+    discovered = await HttpCrawler(_FlakyClient(), use_robots=False).crawl("http://t.test/")  # type: ignore[arg-type]
+    urls = {req.url for req in discovered}
+    assert any(u.endswith("/good") for u in urls)  # reachable pages still crawled
+    assert not any(u.endswith("/bad") for u in urls)  # the erroring page is skipped, no crash

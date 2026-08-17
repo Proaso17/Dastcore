@@ -14,6 +14,7 @@ import re
 from collections import deque
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
+import httpx
 from selectolax.parser import HTMLParser, Node
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
@@ -56,6 +57,8 @@ class HttpCrawler:
                 continue
             except BudgetExceededError:
                 break  # budget spent: stop crawling, keep what we have
+            except httpx.HTTPError:
+                continue  # transient network error on this page — skip it, keep crawling the rest
 
             self._record(self._page_request(url), discovered, seen_signatures)
 
