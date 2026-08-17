@@ -24,7 +24,7 @@ from dastcore.bugbounty import triage_for_bounty
 from dastcore.bugbounty.program import Program, ProgramLimits, ProgramScope
 from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
 from dastcore.core.models import Finding
-from dastcore.httpsec import add_security_headers
+from dastcore.httpsec import add_csrf_protection, add_error_pages, add_security_headers
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate
 from dastcore.report.remediation import guide_for
@@ -107,6 +107,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
 
     app = FastAPI(title="dastcore", docs_url=None, redoc_url=None, lifespan=lifespan)
     add_security_headers(app)
+    add_csrf_protection(app)
+    add_error_pages(app)
     app.state.store = store
     app.state.manager = manager
     app.state.scheduler = scheduler

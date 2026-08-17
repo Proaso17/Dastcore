@@ -34,7 +34,7 @@ from dastcore.cloud.notify import filter_by_severity, send_alert
 from dastcore.cloud.scheduler import Scheduler
 from dastcore.cloud.store import JobRow, RunnerRow, ScheduleRow, Store
 from dastcore.core.models import Finding
-from dastcore.httpsec import add_security_headers, is_https
+from dastcore.httpsec import add_csrf_protection, add_error_pages, add_security_headers, is_https
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Recurring-job interval presets for the UI (minutes).
@@ -142,6 +142,8 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
 
     app = FastAPI(title="dastcore control-plane", docs_url=None, redoc_url=None, lifespan=lifespan)
     add_security_headers(app)
+    add_csrf_protection(app)
+    add_error_pages(app)
     app.state.store = store
     app.state.scheduler = scheduler
     app.state.admin_token = admin_token
@@ -177,16 +179,17 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         key = request.cookies.get("dast_key", "")
         return store.project_for_key(key) if key else None
 
-    _signup_hits: dict[str, list[float]] = {}
+    _rate_hits: dict[tuple[str, str], list[float]] = {}
 
-    def _signup_rate_limited(request: Request) -> bool:
-        """Basic per-IP throttle so open signup can't be spammed (5 / 10 min)."""
+    def _rate_limited(bucket: str, request: Request, *, limit: int, window: float = 600.0) -> bool:
+        """Per-IP, per-bucket throttle: open signup can't be spammed and login can't be brute-forced."""
         ip = request.client.host if request.client else "?"
+        key = (bucket, ip)
         now = time.time()
-        hits = [t for t in _signup_hits.get(ip, []) if now - t < 600]
+        hits = [t for t in _rate_hits.get(key, []) if now - t < window]
         hits.append(now)
-        _signup_hits[ip] = hits
-        return len(hits) > 5
+        _rate_hits[key] = hits
+        return len(hits) > limit
 
     def _set_session(response: Response, request: Request, project_id: str) -> None:
         token = store.create_session(project_id)
@@ -387,6 +390,11 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
 
     @app.post("/ui/login")
     def ui_login(request: Request, api_key: str = Form(...)) -> Response:
+        if _rate_limited("login", request, limit=10):
+            return HTMLResponse(
+                env.get_template("login.html.j2").render(error="Demasiados intentos. Espera unos minutos."),
+                status_code=429,
+            )
         if store.project_for_key(api_key.strip()) is None:
             return HTMLResponse(env.get_template("login.html.j2").render(error="API key inválida."), status_code=400)
         resp = RedirectResponse("/ui", status_code=303)
@@ -411,7 +419,7 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         def fail(message: str, code: int = 400) -> Response:
             return HTMLResponse(env.get_template("signup.html.j2").render(error=message), status_code=code)
 
-        if _signup_rate_limited(request):
+        if _rate_limited("signup", request, limit=5):
             return fail("Demasiados intentos. Espera unos minutos e inténtalo de nuevo.", code=429)
         clean = email.strip().lower()
         if "@" not in clean or "." not in clean.split("@")[-1]:
@@ -427,6 +435,11 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
 
     @app.post("/login")
     def account_login(request: Request, email: str = Form(...), password: str = Form(...)) -> Response:
+        if _rate_limited("login", request, limit=10):
+            return HTMLResponse(
+                env.get_template("login.html.j2").render(error="Demasiados intentos. Espera unos minutos."),
+                status_code=429,
+            )
         project_id = store.account_project(email, password)
         if project_id is None:
             return HTMLResponse(
