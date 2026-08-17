@@ -22,6 +22,7 @@ from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Reque
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from dastcore.cloud.mail import Mailer, mailer_from_env
 from dastcore.cloud.models import (
     JobResult,
     JobSpec,
@@ -35,6 +36,11 @@ from dastcore.cloud.scheduler import Scheduler
 from dastcore.cloud.store import JobRow, RunnerRow, ScheduleRow, Store
 from dastcore.core.models import Finding
 from dastcore.httpsec import add_csrf_protection, add_error_pages, add_security_headers, is_https
+from dastcore.obslog import add_request_logging
+
+# One-time link lifetimes.
+_RESET_TTL = 3600.0  # 1 hour
+_VERIFY_TTL = 7 * 24 * 3600.0  # 1 week
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Recurring-job interval presets for the UI (minutes).
@@ -126,10 +132,15 @@ def _build_env() -> Environment:
     return env
 
 
-def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -> FastAPI:
-    """Build the control-plane app. ``admin_token`` guards project creation."""
+def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str, mailer: Mailer | None = None) -> FastAPI:
+    """Build the control-plane app. ``admin_token`` guards project creation.
+
+    ``mailer`` sends password-reset and verification emails; it defaults to SMTP when configured
+    (``DASTCORE_SMTP_HOST``) and otherwise logs the messages, so the app runs with no email setup.
+    """
     store = Store(db_path)
     scheduler = Scheduler(store)
+    mailer = mailer or mailer_from_env()
     env = _build_env()
 
     @asynccontextmanager
@@ -144,9 +155,11 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
     add_security_headers(app)
     add_csrf_protection(app)
     add_error_pages(app)
+    add_request_logging(app)
     app.state.store = store
     app.state.scheduler = scheduler
     app.state.admin_token = admin_token
+    app.state.mailer = mailer
 
     def render(name: str, **ctx: object) -> HTMLResponse:
         return HTMLResponse(env.get_template(name).render(**ctx))
@@ -195,9 +208,29 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         token = store.create_session(project_id)
         response.set_cookie("dast_session", token, httponly=True, samesite="strict", secure=is_https(request))
 
+    def _external_base(request: Request) -> str:
+        """The app's public origin, honouring the TLS-terminating proxy — for links inside emails."""
+        scheme = "https" if is_https(request) else "http"
+        return f"{scheme}://{request.headers.get('host', '')}"
+
+    def _send_verification(request: Request, email: str) -> None:
+        """Best-effort: email a verification link. A mail failure must not break signup/login."""
+        token = store.create_auth_token(email, "verify", _VERIFY_TTL)
+        link = f"{_external_base(request)}/verify?token={token}"
+        try:
+            mailer.send(
+                email,
+                "Verifica tu email en dastcore",
+                f"Confirma tu dirección de correo para activar tu cuenta de dastcore:\n\n{link}\n\n"
+                "Si no te has registrado, ignora este mensaje.",
+            )
+        except Exception:  # noqa: BLE001 — delivery is best-effort; the account still works unverified
+            pass
+
     def _render_dashboard(
         request: Request, project_id: str, *, new_runner_token: str = "", new_api_key: str = ""
     ) -> Response:
+        account = store.account_for_project(project_id)
         return render(
             "dashboard.html.j2",
             project=store.get_project(project_id),
@@ -209,6 +242,7 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
             notification=store.get_notification(project_id),
             new_runner_token=new_runner_token,
             new_api_key=new_api_key,
+            unverified_email=account[0] if account and not account[1] else "",
         )
 
     # --- API: health & admin ----------------------------------------------------------
@@ -429,6 +463,7 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
         if store.email_exists(clean):
             return fail("Ese email ya tiene una cuenta. Inicia sesión.")
         _, api_key = store.create_account(clean, password, project_name)
+        _send_verification(request, clean)  # best-effort; the account works unverified meanwhile
         resp = render("welcome.html.j2", api_key=api_key, email=clean)
         _set_session(resp, request, store.project_for_key(api_key))  # type: ignore[arg-type]
         return resp
@@ -464,6 +499,82 @@ def create_app(db_path: str | Path = "dastcore-cloud.db", *, admin_token: str) -
             return RedirectResponse("/", status_code=303)
         api_key = store.regenerate_api_key(project_id)
         return _render_dashboard(request, project_id, new_api_key=api_key)
+
+    # --- password recovery ------------------------------------------------------------
+
+    @app.get("/forgot", response_class=HTMLResponse)
+    def forgot_page() -> Response:
+        return render("forgot.html.j2", error="", sent=False)
+
+    @app.post("/forgot")
+    def forgot(request: Request, email: str = Form(...)) -> Response:
+        # Always show the same confirmation so the form can't be used to probe which emails exist.
+        if not _rate_limited("forgot", request, limit=5):
+            clean = email.strip().lower()
+            if store.email_exists(clean):
+                token = store.create_auth_token(clean, "reset", _RESET_TTL)
+                link = f"{_external_base(request)}/reset?token={token}"
+                try:
+                    mailer.send(
+                        clean,
+                        "Restablece tu contraseña de dastcore",
+                        f"Pediste restablecer tu contraseña. Abre este enlace (válido 1 hora):\n\n{link}\n\n"
+                        "Si no lo pediste, ignora este mensaje: tu contraseña no cambiará.",
+                    )
+                except Exception:  # noqa: BLE001 — never reveal delivery state to the caller
+                    pass
+        return render("forgot.html.j2", error="", sent=True)
+
+    @app.get("/reset", response_class=HTMLResponse)
+    def reset_page(token: str = "") -> Response:
+        if store.peek_auth_token(token, "reset") is None:
+            return render("reset.html.j2", token="", error="El enlace no es válido o ha caducado. Pide otro.")
+        return render("reset.html.j2", token=token, error="")
+
+    @app.post("/reset")
+    def reset(request: Request, token: str = Form(...), password: str = Form(...)) -> Response:
+        if _rate_limited("reset", request, limit=10):
+            return HTMLResponse(
+                env.get_template("reset.html.j2").render(token=token, error="Demasiados intentos. Espera un poco."),
+                status_code=429,
+            )
+        if len(password) < 8:
+            return HTMLResponse(
+                env.get_template("reset.html.j2").render(
+                    token=token, error="La contraseña debe tener al menos 8 caracteres."
+                ),
+                status_code=400,
+            )
+        email = store.consume_auth_token(token, "reset")
+        if email is None:
+            return HTMLResponse(
+                env.get_template("reset.html.j2").render(
+                    token="", error="El enlace no es válido o ha caducado. Pide otro."
+                ),
+                status_code=400,
+            )
+        store.set_password(email, password)  # also drops existing sessions
+        return render("login.html.j2", error="", notice="Contraseña actualizada. Ya puedes iniciar sesión.")
+
+    # --- email verification (non-blocking: the account works meanwhile) ---------------
+
+    @app.get("/verify", response_class=HTMLResponse)
+    def verify(token: str = "") -> Response:
+        email = store.consume_auth_token(token, "verify")
+        if email is None:
+            return render("login.html.j2", error="El enlace de verificación no es válido o ha caducado.", notice="")
+        store.mark_verified(email)
+        return render("login.html.j2", error="", notice="Email verificado. Gracias.")
+
+    @app.post("/ui/resend-verification")
+    def resend_verification(request: Request) -> Response:
+        project_id = ui_project(request)
+        if project_id is None:
+            return RedirectResponse("/", status_code=303)
+        account = store.account_for_project(project_id)
+        if account and not account[1] and not _rate_limited("verify", request, limit=5):
+            _send_verification(request, account[0])
+        return _render_dashboard(request, project_id)
 
     @app.get("/ui", response_class=HTMLResponse)
     def ui_dashboard(request: Request, new_runner_token: str = "") -> Response:

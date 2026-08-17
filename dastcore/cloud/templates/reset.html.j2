@@ -1,0 +1,18 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore cloud · nueva contraseña{% endblock %}
+{% block body %}
+  <div class="panel" style="max-width:520px; margin:40px auto">
+    <h2>Elige una contraseña nueva</h2>
+    {% if error %}<div class="panel err" style="margin:12px 0">{{ error }}</div>{% endif %}
+    {% if token %}
+      <form method="post" action="/reset">
+        <input type="hidden" name="token" value="{{ token }}">
+        <label for="password">Nueva contraseña (mínimo 8 caracteres)</label>
+        <input id="password" name="password" type="password" minlength="8" required autofocus>
+        <button type="submit">Guardar contraseña</button>
+      </form>
+    {% else %}
+      <p class="muted" style="margin-top:12px"><a href="/forgot">Pedir un enlace nuevo</a></p>
+    {% endif %}
+  </div>
+{% endblock %}

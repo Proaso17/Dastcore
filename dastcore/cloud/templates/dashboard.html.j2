@@ -9,6 +9,16 @@
   </span>
 {% endblock %}
 {% block body %}
+  {% if unverified_email %}
+  <div class="panel" style="border-left:3px solid var(--med)">
+    <strong>Verifica tu email.</strong>
+    <span class="muted">Te enviamos un enlace de confirmación a <code>{{ unverified_email }}</code> al registrarte.
+      Puedes seguir usando el panel mientras tanto.</span>
+    <form method="post" action="/ui/resend-verification" style="display:inline; margin-left:6px">
+      <button class="small" type="submit">Reenviar email</button>
+    </form>
+  </div>
+  {% endif %}
   {% if new_api_key %}
   <div class="panel flash">
     <strong>Nueva API key.</strong> La anterior ya no funciona. Guárdala (se muestra solo una vez):

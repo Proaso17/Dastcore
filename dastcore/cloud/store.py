@@ -44,13 +44,21 @@ CREATE TABLE IF NOT EXISTS users (
     email         TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
     project_id    TEXT NOT NULL,
-    created_at    REAL NOT NULL
+    created_at    REAL NOT NULL,
+    verified      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    email      TEXT NOT NULL,
+    purpose    TEXT NOT NULL,
+    expires_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -125,6 +133,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 _JOB_MIGRATIONS = {"attempts": "INTEGER NOT NULL DEFAULT 0", "max_attempts": "INTEGER NOT NULL DEFAULT 3"}
 # Notification trigger mode, added after notifications shipped.
 _NOTIFICATION_MIGRATIONS = {"on_event": "TEXT NOT NULL DEFAULT 'regression'"}
+# Email verification flag, added with self-service password recovery + verification.
+_USER_MIGRATIONS = {"verified": "INTEGER NOT NULL DEFAULT 0"}
 # Embedded-chatbot ("ai" mode) columns, added to both jobs and schedules.
 _AI_MIGRATIONS = {
     "mode": "TEXT NOT NULL DEFAULT 'scan'",
@@ -279,6 +289,7 @@ class Store:
             "jobs": {**_JOB_MIGRATIONS, **_AI_MIGRATIONS},
             "schedules": dict(_AI_MIGRATIONS),
             "notifications": dict(_NOTIFICATION_MIGRATIONS),
+            "users": dict(_USER_MIGRATIONS),
         }
         for table, migrations in columns.items():
             if self._db.dialect == "postgres":
@@ -362,6 +373,69 @@ class Store:
         if row is None:
             return None
         return row["project_id"] if _verify_password(password, row["password_hash"]) else None
+
+    def account_for_project(self, project_id: str) -> tuple[str, bool] | None:
+        """The (email, verified) of the account that owns a project, if it was created via signup."""
+        row = self._db.query_one("SELECT email, verified FROM users WHERE project_id=?", (project_id,))
+        return (row["email"], bool(row["verified"])) if row else None
+
+    # --- one-time tokens: password reset + email verification --------------------------
+
+    def create_auth_token(self, email: str, purpose: str, ttl_seconds: float) -> str:
+        """Mint a single-use token for ``purpose`` ('reset' | 'verify'); returns the plaintext once.
+
+        Any earlier token for the same (email, purpose) is dropped, so only the newest link works.
+        """
+        email = email.strip().lower()
+        token = secrets.token_urlsafe(24)
+        with self._db.transaction() as tx:
+            tx.execute("DELETE FROM auth_tokens WHERE email=? AND purpose=?", (email, purpose))
+            tx.execute(
+                "INSERT INTO auth_tokens (token_hash, email, purpose, expires_at) VALUES (?, ?, ?, ?)",
+                (_hash_key(token), email, purpose, time.time() + ttl_seconds),
+            )
+        return token
+
+    def peek_auth_token(self, token: str, purpose: str) -> str | None:
+        """Return the email a valid, unexpired token is for — without consuming it (to render a form)."""
+        if not token:
+            return None
+        row = self._db.query_one(
+            "SELECT email, expires_at FROM auth_tokens WHERE token_hash=? AND purpose=?", (_hash_key(token), purpose)
+        )
+        if row is None or row["expires_at"] < time.time():
+            return None
+        return row["email"]
+
+    def consume_auth_token(self, token: str, purpose: str) -> str | None:
+        """Validate and delete a token, returning the email it was for (None if invalid/expired)."""
+        if not token:
+            return None
+        with self._db.transaction() as tx:
+            row = tx.query_one(
+                "SELECT email, expires_at FROM auth_tokens WHERE token_hash=? AND purpose=?",
+                (_hash_key(token), purpose),
+            )
+            if row is None:
+                return None
+            tx.execute("DELETE FROM auth_tokens WHERE token_hash=?", (_hash_key(token),))
+            return row["email"] if row["expires_at"] >= time.time() else None
+
+    def set_password(self, email: str, new_password: str) -> bool:
+        """Set a new password and sign the account out everywhere (its sessions are dropped)."""
+        email = email.strip().lower()
+        with self._db.transaction() as tx:
+            changed = tx.execute(
+                "UPDATE users SET password_hash=? WHERE email=?", (_hash_password(new_password), email)
+            )
+            if changed:
+                row = tx.query_one("SELECT project_id FROM users WHERE email=?", (email,))
+                if row:
+                    tx.execute("DELETE FROM sessions WHERE project_id=?", (row["project_id"],))
+        return changed > 0
+
+    def mark_verified(self, email: str) -> None:
+        self._db.execute("UPDATE users SET verified=1 WHERE email=?", (email.strip().lower(),))
 
     # --- UI sessions (decoupled from the raw API key) ----------------------------------
 

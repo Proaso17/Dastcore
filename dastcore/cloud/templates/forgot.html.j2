@@ -1,0 +1,23 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore cloud · recuperar contraseña{% endblock %}
+{% block body %}
+  <div class="panel" style="max-width:520px; margin:40px auto">
+    <h2>¿Olvidaste tu contraseña?</h2>
+    {% if sent %}
+      <div class="panel flash" style="margin:12px 0">
+        Si ese email está registrado, te hemos enviado un enlace para restablecer la contraseña.
+        Revisa tu bandeja de entrada (y la carpeta de spam). El enlace caduca en 1 hora.
+      </div>
+      <p class="muted" style="font-size:13px"><a href="/">← Volver a iniciar sesión</a></p>
+    {% else %}
+      <p class="muted">Introduce tu email y te enviaremos un enlace para elegir una contraseña nueva.</p>
+      {% if error %}<div class="panel err" style="margin:12px 0">{{ error }}</div>{% endif %}
+      <form method="post" action="/forgot">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" placeholder="tu@email.com" required autofocus>
+        <button type="submit">Enviar enlace</button>
+      </form>
+      <p class="muted" style="font-size:13px; margin-top:16px"><a href="/">← Volver a iniciar sesión</a></p>
+    {% endif %}
+  </div>
+{% endblock %}

@@ -2072,6 +2072,9 @@ def serve(
         )
         raise typer.Exit(code=1) from exc
 
+    from dastcore.obslog import configure_logging
+
+    configure_logging()
     _print_banner()
     resolved_db = db_path or str(default_db_path())
     if host not in ("127.0.0.1", "localhost", "::1"):
@@ -2112,6 +2115,9 @@ def cloud_serve(
     import secrets as _secrets
     from pathlib import Path as _Path
 
+    from dastcore.obslog import configure_logging
+
+    configure_logging()
     _print_banner()
     resolved_db = db_path or _os.environ.get("DASTCORE_DB", "") or str(_Path.home() / ".dastcore" / "cloud.db")
     # Precedence: --admin-token flag > DASTCORE_ADMIN_TOKEN env (for container deploys) > generated.

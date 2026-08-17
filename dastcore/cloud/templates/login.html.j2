@@ -3,6 +3,7 @@
 {% block body %}
   <div class="panel" style="max-width:520px; margin:40px auto">
     <h2>Iniciar sesión</h2>
+    {% if notice %}<div class="panel flash" style="margin:12px 0">{{ notice }}</div>{% endif %}
     {% if error %}<div class="panel err" style="margin:12px 0">{{ error }}</div>{% endif %}
     <form method="post" action="/login">
       <label for="email">Email</label>
@@ -11,7 +12,9 @@
       <input id="password" name="password" type="password" required>
       <button type="submit">Entrar</button>
     </form>
-    <p class="muted" style="font-size:13px; margin-top:16px">¿No tienes cuenta? <a href="/signup">Crear cuenta</a>.</p>
+    <p class="muted" style="font-size:13px; margin-top:16px">
+      ¿No tienes cuenta? <a href="/signup">Crear cuenta</a>. · <a href="/forgot">¿Olvidaste tu contraseña?</a>
+    </p>
     <details style="margin-top:16px">
       <summary class="muted" style="cursor:pointer; font-size:13px">Entrar con API key del proyecto (avanzado)</summary>
       <form method="post" action="/ui/login" style="margin-top:10px">

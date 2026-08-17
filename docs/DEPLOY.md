@@ -54,6 +54,29 @@ curl -sX POST "$BASE/api/projects" \
 # -> {"id":"...","name":"acme","api_key":"dast_..."}   # entrega la api_key al usuario
 ```
 
+### Email (opcional, recomendado en producción)
+
+El registro, la **recuperación de contraseña** (`/forgot`) y la **verificación de email** funcionan sin
+configurar nada: si no hay SMTP, los enlaces se **escriben en los logs** del servidor (útil en local, no
+para usuarios reales). Para enviar correos de verdad, define estas variables de entorno en el servicio:
+
+```
+DASTCORE_SMTP_HOST=smtp.tuproveedor.com
+DASTCORE_SMTP_PORT=587
+DASTCORE_SMTP_USER=apikey-o-usuario
+DASTCORE_SMTP_PASSWORD=********
+DASTCORE_MAIL_FROM=dastcore <no-reply@tudominio.com>
+```
+
+Sin `DASTCORE_SMTP_HOST` no se envía nada (modo log). La verificación **no bloquea**: el usuario puede
+usar el panel mientras tanto y ve un recordatorio para verificar.
+
+### Logs / observabilidad
+
+El control-plane registra una línea por petición (método, ruta, estado, duración) y cualquier error no
+controlado con su traza. Ajustable por entorno: `DASTCORE_LOG_LEVEL` (`INFO` por defecto) y
+`DASTCORE_LOG_JSON=1` para emitir JSON por línea (ideal para agregadores de logs).
+
 ---
 
 ## 3. El usuario ejecuta su runner (escanea en SU red)
