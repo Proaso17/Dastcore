@@ -507,7 +507,7 @@ def _base_domain(host: str) -> str:
 
 
 async def _discover_scan_roots(
-    client: HttpClient, target: str, depth: str, progress: _ProgressAdapter
+    client: HttpClient, target: str, depth: str, progress: _ProgressAdapter, wordlist_path: str = ""
 ) -> list[str]:
     """Expand a target URL into itself + every live, in-scope subdomain we can discover."""
     from urllib.parse import urlsplit
@@ -517,7 +517,8 @@ async def _discover_scan_roots(
     if not host or _looks_like_ip(host):
         return roots  # a bare IP (or no host) has no domain to expand
     progress.status("Descubriendo subdominios…")
-    found = await SubdomainDiscoverer(client, wordlist=load_subdomain_wordlist(depth)).discover(_base_domain(host))
+    words = load_subdomain_wordlist(depth, wordlist_path or None)
+    found = await SubdomainDiscoverer(client, wordlist=words).discover(_base_domain(host))
     seen = {host}
     for discovered_host in found:
         if discovered_host.host not in seen:
@@ -552,6 +553,8 @@ async def _run_scan(
     discover_subdomains: bool = False,
     discover_content: bool = False,
     discover_depth: str = "aggressive",
+    content_wordlist: str = "",
+    subdomain_wordlist: str = "",
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
     rules = load_rules()
@@ -576,7 +579,7 @@ async def _run_scan(
             # then crawl + brute-force paths on each. Both stages are opt-in and scope-enforced.
             scan_roots = [target]
             if discover_subdomains:
-                scan_roots = await _discover_scan_roots(client, target, discover_depth, progress)
+                scan_roots = await _discover_scan_roots(client, target, discover_depth, progress, subdomain_wordlist)
 
             if engine in ("http", "both"):
                 for root in scan_roots:
@@ -593,7 +596,7 @@ async def _run_scan(
                         discovered.setdefault(req.signature(), req)
 
             if discover_content:
-                content_words = load_content_wordlist(discover_depth)
+                content_words = load_content_wordlist(discover_depth, content_wordlist or None)
                 extensions = content_extensions(discover_depth)
                 recursion = content_recursion_depth(discover_depth)
                 for root in scan_roots:
@@ -1001,6 +1004,12 @@ def scan(
     discover_depth: str = typer.Option(
         "aggressive", "--discover-depth", help="Profundidad del descubrimiento: light | balanced | aggressive."
     ),
+    content_wordlist: str = typer.Option(
+        "", "--content-wordlist", help="Diccionario propio de rutas/directorios (p. ej. de SecLists) en vez del integrado."
+    ),
+    subdomain_wordlist: str = typer.Option(
+        "", "--subdomain-wordlist", help="Diccionario propio de subdominios (p. ej. de SecLists) en vez del integrado."
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1273,6 +1282,8 @@ def scan(
                     discover_subdomains=(discover or discover_subdomains) and profile != "quick",
                     discover_content=(discover or discover_content) and profile != "quick",
                     discover_depth=discover_depth,
+                    content_wordlist=content_wordlist,
+                    subdomain_wordlist=subdomain_wordlist,
                     ai_payloads=payload_generator,
                 )
             )

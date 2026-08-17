@@ -30,7 +30,7 @@ from dastcore.core.http_client import HttpClient, OutOfScopeError
 from dastcore.core.models import HttpResponse
 
 _WORDLISTS = Path(__file__).parent / "wordlists"
-_DEPTH_LIMITS: dict[str, int | None] = {"light": 50, "balanced": 150, "aggressive": None}
+_DEPTH_LIMITS: dict[str, int | None] = {"light": 50, "balanced": 250, "aggressive": None}
 
 Resolver = Callable[[str], Awaitable[list[str]]]
 # A prober returns (url, response) for a live host, or None if nothing answered.

@@ -28,7 +28,7 @@ from dastcore.core.models import HttpResponse
 
 _WORDLISTS = Path(__file__).parent / "wordlists"
 # Depth takes a prefix of the (priority-ordered) wordlist. None = the whole list.
-_DEPTH_LIMITS: dict[str, int | None] = {"light": 100, "balanced": 300, "aggressive": None}
+_DEPTH_LIMITS: dict[str, int | None] = {"light": 100, "balanced": 450, "aggressive": None}
 
 # Statuses that can indicate a real resource. 404/410/400 are "not found"; everything a garbage path
 # also returns is filtered out by calibration regardless.

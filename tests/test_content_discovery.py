@@ -121,6 +121,13 @@ async def test_recursion_descends_into_discovered_directories() -> None:
     assert "/admin/users" in found  # ...and a path only reachable by recursing into it
 
 
+def test_custom_wordlist_file_is_honored(tmp_path) -> None:
+    path = tmp_path / "mylist.txt"
+    path.write_text("# a comment\n/admin\nsecret-path\n\nsecret-path\n", encoding="utf-8")
+    words = load_content_wordlist("aggressive", path)
+    assert words == ["admin", "secret-path"]  # leading slash stripped, blanks/comments dropped, deduped
+
+
 async def test_recursion_is_bounded_by_depth() -> None:
     client = _FakeClient({"/a/": (200, "dir a"), "/a/b/": (200, "dir b"), "/a/b/c": (200, "deep")})
     disc = ContentDiscoverer(client, wordlist=["a", "b", "c"], recursion_depth=1)  # type: ignore[arg-type]
