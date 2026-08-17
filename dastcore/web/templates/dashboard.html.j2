@@ -1,12 +1,44 @@
 {% extends "base.html.j2" %}
 {% block title %}dastcore · escaneos{% endblock %}
 {% block body %}
+  <div class="panel onboarding" id="onboarding"{% if scans %} hidden{% endif %}>
+    <div class="ob-top">
+      <h2>Bienvenido/a a dastcore</h2>
+      <button type="button" class="ob-dismiss" onclick="dcDismissOnboarding()">Ocultar</button>
+    </div>
+    <p>Analiza tu web —o un objetivo de bug bounty autorizado— en busca de fallos de seguridad, sin ser experto.
+      Funciona en 3 pasos:</p>
+    <ol class="ob-steps">
+      <li><span class="n">1</span><div><strong>Elige qué analizar</strong>
+        <p>Tu propia web por su URL, o un objetivo de bug bounty por sus dominios.</p></div></li>
+      <li><span class="n">2</span><div><strong>Lánzalo</strong>
+        <p>dastcore descubre y prueba por ti; tú solo confirmas que tienes permiso.</p></div></li>
+      <li><span class="n">3</span><div><strong>Revisa y reporta</strong>
+        <p>Verás los fallos explicados y cómo solucionarlos, y podrás generar el informe para reportarlos.</p></div></li>
+    </ol>
+    <div class="ob-cta">
+      <a class="btn-primary" href="#nuevo-escaneo">Analizar mi web</a>
+      <a class="btn-ghost" href="/programs">Objetivo de bug bounty</a>
+      <span class="muted" style="font-size:12.5px">¿No sabes cuál? Elige «Analizar mi web» si tienes una URL concreta.</span>
+    </div>
+    <script>
+      function dcDismissOnboarding() {
+        var el = document.getElementById('onboarding');
+        if (el) el.hidden = true;
+        try { localStorage.setItem('dc-onboarded', '1'); } catch (e) {}
+      }
+      (function () {
+        try { if (localStorage.getItem('dc-onboarded')) { var el = document.getElementById('onboarding'); if (el) el.hidden = true; } } catch (e) {}
+      })();
+    </script>
+  </div>
+
   <div class="panel legal">
     Herramienta de pentesting <strong>activa e intrusiva</strong>. Úsala solo contra sistemas para los que
     tienes autorización explícita y por escrito. El escaneo no arranca sin marcar la casilla de autorización.
   </div>
 
-  <div class="panel">
+  <div class="panel" id="nuevo-escaneo">
     <h2>Nuevo escaneo</h2>
     {% if error %}<div class="panel err" style="margin:0 0 14px">{{ error }}</div>{% endif %}
 
