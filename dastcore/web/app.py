@@ -20,7 +20,9 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 
 from dastcore.analysis import correlate_chains
+from dastcore.bugbounty import triage_for_bounty
 from dastcore.bugbounty.program import Program, ProgramLimits, ProgramScope
+from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
 from dastcore.core.models import Finding
 from dastcore.httpsec import add_security_headers
 from dastcore.report import render_html, render_json, render_sarif
@@ -455,6 +457,23 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         if scan is None:
             return PlainTextResponse("Escaneo no encontrado.", status_code=404)
         return Response(render_sarif(store.get_findings(scan_id)), media_type="application/json")
+
+    @app.get("/scans/{scan_id}/bounty", response_class=HTMLResponse)
+    def bounty_report(scan_id: str, finding: str = "", platform: str = "generic") -> Response:
+        """A ready-to-paste bug-bounty submission draft for a chosen finding (human-in-the-loop)."""
+        scan = store.get_scan(scan_id)
+        if scan is None:
+            return HTMLResponse("<h1>404</h1><p>Análisis no encontrado.</p>", status_code=404)
+        findings = store.get_findings(scan_id)
+        apply_suppressions(findings, store.build_suppressions())
+        bounties = triage_for_bounty([f for f in findings if not f.suppressed])
+        platform = platform if platform in PLATFORMS else "generic"
+        selected = next((b for b in bounties if b.finding.id == finding), bounties[0] if bounties else None)
+        draft = render_bounty_report(selected, None, platform) if selected is not None else ""
+        return render(
+            "bounty.html.j2",
+            scan=scan, bounties=bounties, selected=selected, draft=draft, platform=platform, platforms=PLATFORMS,
+        )
 
     # --- Bug bounty: programas + caza ---------------------------------------------------------
 

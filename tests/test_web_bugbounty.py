@@ -4,12 +4,14 @@ job. The hunt here uses a seedless program so recon does nothing (fully offline)
 from __future__ import annotations
 
 import asyncio
+import time
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
 from dastcore.bugbounty.program import Program, ProgramScope
+from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.web.app import create_app
 
 
@@ -95,3 +97,27 @@ async def test_hunt_requires_authorization_and_runs(app_client) -> None:
 
     scan = app.state.store.get_scan(scan_id)
     assert scan.kind == "hunt" and scan.status == "done"
+
+
+def _sqli_finding() -> Finding:
+    req = HttpRequest(method="GET", url="http://api.acme.com/search", params={"q": "1"})
+    point = InjectionPoint(location="query", name="q", base_value="1", request_template=req)
+    return Finding(
+        id="sqli-injection:api.acme.com:q", rule_id="sqli-injection", name="SQL Injection", severity="critical",
+        cwe="CWE-89", owasp="x", cvss="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", family="sqli",
+        injection_point=point, evidence=[Evidence(type="differential", data="TRUE/FALSE differed", confidence="high")],
+        request=req, response=HttpResponse(status_code=500), remediation="Usa consultas parametrizadas.",
+    )
+
+
+async def test_bounty_report_page_renders_a_draft(app_client) -> None:
+    app, client = app_client
+    store = app.state.store
+    store.insert_running("scan1", "http://api.acme.com", "hunt", None, time.time(), kind="hunt")
+    store.mark_done("scan1", time.time(), 1.0, [_sqli_finding()])
+    async with client:
+        page = await client.get("/scans/scan1/bounty?platform=hackerone")
+    assert page.status_code == 200
+    assert "Crear informe para reportar" in page.text
+    assert "SQL Injection" in page.text and "P1" in page.text
+    assert "Steps To Reproduce" in page.text  # the HackerOne draft layout is rendered

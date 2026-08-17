@@ -1,0 +1,61 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · informe{% endblock %}
+{% block body %}
+  <div class="panel">
+    <h2>Crear informe para reportar</h2>
+    <p class="muted">Elige un hallazgo y una plataforma: abajo tienes el <strong>texto listo para pegar</strong> en el
+      programa de bug bounty (título, pasos de reproducción, prueba y remediación). Nada se envía automáticamente —
+      tú lo revisas y lo publicas.</p>
+    <div class="actions"><a href="/scans/{{ scan.id }}">← Volver a los resultados</a></div>
+  </div>
+
+  {% if not bounties %}
+    <div class="panel"><div class="empty">No hay hallazgos reportables en este análisis (los informativos y los
+      triados se descartan automáticamente).</div></div>
+  {% else %}
+  {% set PRI = {'P1': 'critical', 'P2': 'high', 'P3': 'medium', 'P4': 'low', 'P5': 'info'} %}
+  <div class="bounty-grid">
+    <div class="panel">
+      <h2>Hallazgos ({{ bounties | length }})</h2>
+      <p class="hint" style="margin:0 0 10px">Ordenados por prioridad (P1 = más grave).</p>
+      <div class="bounty-list">
+        {% for b in bounties %}
+        <a class="bounty-item{{ ' active' if selected and b.finding.id == selected.finding.id else '' }}"
+           href="/scans/{{ scan.id }}/bounty?finding={{ b.finding.id | urlencode }}&platform={{ platform }}">
+          <span class="badge sev-{{ PRI.get(b.vrt_priority, 'info') }}" title="{{ b.vrt_category }}">{{ b.vrt_priority }}</span>
+          <span class="bi-name">{{ b.finding.name }}</span>
+          <span class="bi-host muted">{{ b.finding.request.url }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="bounty-head">
+        <h2 style="margin:0">Borrador</h2>
+        <div class="platforms">
+          {% for pl in platforms %}
+          <a class="pltab{{ ' active' if pl == platform else '' }}"
+             href="/scans/{{ scan.id }}/bounty?finding={{ selected.finding.id | urlencode }}&platform={{ pl }}">{{ pl }}</a>
+          {% endfor %}
+        </div>
+      </div>
+      <button type="button" id="copyBtn" style="margin:12px 0">Copiar al portapapeles</button>
+      <pre id="draft" class="draft">{{ draft }}</pre>
+      <script>
+        (function () {
+          var btn = document.getElementById('copyBtn');
+          btn.addEventListener('click', function () {
+            var text = document.getElementById('draft').textContent;
+            navigator.clipboard.writeText(text).then(function () {
+              var original = btn.textContent;
+              btn.textContent = '¡Copiado!';
+              setTimeout(function () { btn.textContent = original; }, 1500);
+            });
+          });
+        })();
+      </script>
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}
