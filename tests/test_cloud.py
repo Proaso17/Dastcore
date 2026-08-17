@@ -263,6 +263,24 @@ async def test_ui_login_and_dashboard(client: httpx.AsyncClient) -> None:
         assert "Chatbot embebido" in dash.text  # the AI scan mode is offered in the enqueue form
 
 
+async def test_dashboard_shows_loading_state_while_a_job_is_active(client: httpx.AsyncClient) -> None:
+    async with client:
+        key = await _new_project(client)
+        proj_h = {"Authorization": f"Bearer {key}"}
+        await client.post("/ui/login", data={"api_key": key}, follow_redirects=False)
+
+        # no jobs yet: a friendly empty state, and no auto-refresh
+        empty = (await client.get("/ui")).text
+        assert "Aún no has lanzado ningún escaneo" in empty
+        assert "location.reload" not in empty
+
+        # a queued job (no runner to claim it) puts the dashboard into its loading state
+        await client.post("/api/jobs", json={"target": "http://t.test/"}, headers=proj_h)
+        dash = (await client.get("/ui")).text
+        assert "Hay trabajos en curso" in dash
+        assert "location.reload" in dash  # the page refreshes itself to show progress
+
+
 async def test_ui_enqueues_an_ai_chatbot_job(client: httpx.AsyncClient) -> None:
     async with client:
         key = await _new_project(client)

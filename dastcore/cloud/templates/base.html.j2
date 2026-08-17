@@ -16,6 +16,8 @@
         --crit:#ff6b5e; --high:#ff7a70; --medium:#f5a623; --low:#4bb3e6; --info:#98a2b3; }
     }
     * { box-sizing:border-box; }
+    /* the [hidden] attribute must win over display rules like .row3{display:grid} (mode toggle) */
+    [hidden] { display:none !important; }
     body { margin:0; background:var(--bg); color:var(--ink);
       font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
     a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
@@ -48,6 +50,25 @@
     .st-running{color:var(--accent);font-weight:700} .st-queued{color:var(--muted);font-weight:700}
     .flash { border-left:3px solid var(--ok); }
     .err { border-left:3px solid var(--bad); color:var(--bad); }
+    /* loading state: a small spinner shown while jobs are in flight */
+    .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--border);
+      border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    /* accessibility: visible keyboard focus + respect reduced-motion */
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
+    @media (prefers-reduced-motion: reduce) {
+      *, .spin { animation-duration:.001ms !important; transition-duration:.001ms !important; }
+    }
+    /* responsive: never let the header overflow; stack the form grid on phones */
+    header.top { flex-wrap:wrap; }
+    header.top .nav { margin-left:auto; }
+    @media (max-width:640px) {
+      main { padding:16px; }
+      .row3 { grid-template-columns:1fr; }
+      header.top { gap:4px 12px; padding:12px 16px; }
+      header.top .nav { margin-left:0; width:100%; }
+    }
   </style>
 </head>
 <body>

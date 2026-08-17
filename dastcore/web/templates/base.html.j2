@@ -20,6 +20,8 @@
       }
     }
     * { box-sizing: border-box; }
+    /* the [hidden] attribute must win over display rules like .row3{display:grid} */
+    [hidden] { display: none !important; }
     body { margin: 0; background: var(--bg); color: var(--ink);
       font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
     a { color: var(--accent); text-decoration: none; }
@@ -238,13 +240,22 @@
     @media (prefers-reduced-motion: reduce) {
       * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
     }
+    /* --- responsive: never let the header overflow; stack form grids on phones --- */
+    header.top { flex-wrap: wrap; }
+    header.top .nav { margin-left: auto; }
+    @media (max-width: 640px) {
+      main { padding: 16px; }
+      .row, .row3 { grid-template-columns: 1fr; }
+      header.top { gap: 4px 12px; padding: 12px 16px; }
+      header.top .nav { margin-left: 0; width: 100%; }
+    }
   </style>
 </head>
 <body>
   <header class="top">
     <span class="brand">dastcore</span>
     <span class="tag">panel local · DAST</span>
-    <span style="margin-left:auto"><a href="/">Escaneos</a> · <a href="/programs">Bug bounty</a> · <a href="/schedules">Programados</a> · <a href="/suppressions">Triaje</a></span>
+    <span class="nav"><a href="/">Escaneos</a> · <a href="/programs">Bug bounty</a> · <a href="/schedules">Programados</a> · <a href="/suppressions">Triaje</a></span>
   </header>
   <main>{% block body %}{% endblock %}</main>
 </body>

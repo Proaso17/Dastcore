@@ -1,7 +1,7 @@
 {% extends "base.html.j2" %}
 {% block title %}dastcore cloud · {{ project.name }}{% endblock %}
 {% block nav %}
-  <span style="margin-left:auto" class="muted">
+  <span class="nav muted">
     proyecto <strong>{{ project.name }}</strong>
     · <form method="post" action="/ui/regenerate-key" style="display:inline"
         onsubmit="return confirm('¿Generar una nueva API key? La actual dejará de funcionar en tus runners.')"><button class="small" type="submit">Regenerar API key</button></form>
@@ -63,6 +63,14 @@
 
   <div class="panel">
     <h2>Trabajos ({{ jobs | length }})</h2>
+    {% set ns = namespace(active=false) %}
+    {% for j in jobs %}{% if j.status in ['queued', 'running'] %}{% set ns.active = true %}{% endif %}{% endfor %}
+    {% if ns.active %}
+    <p class="muted" style="margin:0 0 12px; font-size:13px">
+      <span class="spin"></span> Hay trabajos en curso. Esta página se actualiza sola cada pocos segundos.
+    </p>
+    <script>setTimeout(function () { location.reload(); }, 6000);</script>
+    {% endif %}
     {% if jobs %}
     <div class="overflow"><table>
       <thead><tr><th>Objetivo</th><th>Motor</th><th>Estado</th><th>Runner</th><th>Hallazgos</th><th>Creado</th></tr></thead>
@@ -81,7 +89,7 @@
         {% endfor %}
       </tbody>
     </table></div>
-    {% else %}<div class="empty">Sin trabajos. Encola uno arriba.</div>{% endif %}
+    {% else %}<div class="empty">Aún no has lanzado ningún escaneo. Rellena el formulario de arriba y pulsa «Encolar» para empezar.</div>{% endif %}
   </div>
 
   {% if trends %}
@@ -118,7 +126,7 @@
       <thead><tr><th>Nombre</th><th>Creado</th><th>Última vez</th></tr></thead>
       <tbody>{% for r in runners %}<tr><td>{{ r.name }}</td><td class="muted">{{ r.created_at | datetime }}</td><td class="muted">{{ r.last_seen_at | datetime }}</td></tr>{% endfor %}</tbody>
     </table></div>
-    {% else %}<div class="empty">Sin runners. Crea uno para ejecutar los trabajos.</div>{% endif %}
+    {% else %}<div class="empty">Todavía no hay runners. Un runner es el programa que ejecutas en tu red y que realiza los escaneos; crea uno abajo para poder procesar los trabajos.</div>{% endif %}
     <form method="post" action="/ui/runners" style="display:flex; gap:10px; align-items:flex-end; margin-top:12px">
       <div style="flex:1"><label for="rname">Nuevo runner (nombre)</label><input id="rname" name="name" placeholder="runner-staging"></div>
       <button type="submit">Crear token</button>
@@ -145,7 +153,7 @@
         {% endfor %}
       </tbody>
     </table></div>
-    {% else %}<div class="empty">Sin programados.</div>{% endif %}
+    {% else %}<div class="empty">No hay escaneos programados. Programa uno abajo para que se repita solo (por ejemplo, cada noche) sin que tengas que lanzarlo a mano.</div>{% endif %}
     <form method="post" action="/ui/schedules" style="margin-top:12px">
       <div class="row3">
         <div><label for="starget">Objetivo</label><input id="starget" name="target" placeholder="https://staging.example.com" required></div>
