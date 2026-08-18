@@ -20,6 +20,27 @@ async def test_run_scan_survives_budget_exhaustion(vuln_app_url: str) -> None:
     assert isinstance(findings, list)
 
 
+async def test_run_scan_survives_a_network_error_mid_scan(vuln_app_url: str, monkeypatch) -> None:
+    import httpx
+
+    import dastcore.cli as cli
+
+    async def _boom(*_args, **_kwargs):
+        raise httpx.ConnectError("network blip")
+
+    # a flaky check partway through must not discard everything crawled/scanned before it
+    monkeypatch.setattr(cli, "run_nosql_checks", _boom)
+    config = ScanConfig(
+        target=vuln_app_url,  # type: ignore[arg-type]
+        scope=ScopeConfig(allow_domains=["127.0.0.1"]),
+        rate_limit=RateLimitConfig(requests_per_second=100, max_concurrency=10),
+        output=OutputConfig(format="json"),
+        i_have_authorization=True,
+    )
+    findings = await _run_scan(config, max_pages=30, engine="http")
+    assert isinstance(findings, list)  # partial report, not a crash
+
+
 async def test_run_scan_survives_budget_exhaustion_during_discovery(vuln_app_url: str) -> None:
     config = ScanConfig(
         target=vuln_app_url,  # type: ignore[arg-type]

@@ -718,6 +718,13 @@ async def _run_scan(
         # A --max-requests / --time-budget cap is a soft stop: keep what we found, don't crash.
         budget_hit = True
         progress.status("Presupuesto agotado (tiempo/peticiones): reportando lo encontrado hasta ahora…")
+    except (httpx.HTTPError, OSError):
+        # A network blip mid-scan must not discard everything already gathered. But if NOTHING was
+        # collected, the target was unreachable from the start — re-raise so the CLI says so clearly.
+        if not discovered and not extra_findings and not active_passive:
+            raise
+        budget_hit = True
+        progress.status("Error de red durante el escaneo: reportando lo encontrado hasta ahora…")
     finally:
         if oast is not None:
             await oast.stop()
