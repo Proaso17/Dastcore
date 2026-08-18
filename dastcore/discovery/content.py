@@ -114,6 +114,18 @@ def _has_extension(word: str) -> bool:
     return "." in word.rsplit("/", 1)[-1]
 
 
+def adaptive_concurrency(base: int, latency_ms: float) -> int:
+    """More in-flight probes for a high-latency host, so throughput stays near the rps ceiling.
+
+    A slow-but-healthy server (each response takes a while, but it handles many at once) is
+    concurrency-limited, not rate-limited: with only ``base`` probes in flight the pipe sits idle
+    waiting. Scaling concurrency up with latency fills it. It's always bounded by the client's token
+    bucket (rps), so this never sends faster than the user asked — it just stops wasting the budget."""
+    if latency_ms <= 250:
+        return base
+    return max(base, min(64, int(base * latency_ms / 250)))
+
+
 class ContentDiscoverer:
     """Brute-force paths under a base URL, reporting only calibrated hits.
 
@@ -135,14 +147,20 @@ class ContentDiscoverer:
         calibration_probes: int = 5,
         timeout_giveup: int = 30,
         max_seconds: float = 600.0,
+        probe_timeout: float = 6.0,
     ) -> None:
         self._client = client
         self._wordlist = wordlist
         self._extensions = extensions or []
         self._recursion_depth = max(0, recursion_depth)
-        self._concurrency = max(1, concurrency)
+        self._base_concurrency = max(1, concurrency)
+        self._concurrency = self._base_concurrency
         self._max_paths = max_paths
         self._calibration_probes = calibration_probes
+        # A discovery probe uses a short timeout and no retries: a real path answers fast, and a
+        # slow/dead one shouldn't cost 10s x 2 retries (that's what stalled the getnyma scan).
+        self._probe_timeout = probe_timeout
+        self._calibrated_latency_ms = 0.0
         # Circuit breaker: a host that keeps timing out (accepts connections but never answers) is
         # abandoned after this many timeouts, so one dead host can't stall the whole scan for hours.
         # A healthy host answers 404s instantly and never trips it. A generous wall-clock cap backstops it.
@@ -154,7 +172,7 @@ class ContentDiscoverer:
 
     async def _get(self, url: str) -> HttpResponse | None:
         try:
-            return await self._client.get(url)
+            return await self._client.get(url, timeout=self._probe_timeout, retries=0)
         except OutOfScopeError:
             return None
         except BudgetExceededError:
@@ -172,6 +190,7 @@ class ContentDiscoverer:
         """Learn the not-found fingerprint for THIS directory. None if it is unreachable."""
         baseline = _Baseline(statuses=set(), lengths_by_status={}, redirect_paths=set())
         seen_any = False
+        latencies: list[float] = []
         shapes = ["{t}", "{t}.html", "{t}.php", "{t}.json", "{t}/"]
         for i in range(max(3, self._calibration_probes)):
             token = "dc" + secrets.token_hex(12)
@@ -179,10 +198,13 @@ class ContentDiscoverer:
             if resp is None:
                 continue
             seen_any = True
+            latencies.append(float(getattr(resp, "elapsed_ms", 0.0) or 0.0))
             baseline.statuses.add(resp.status_code)
             baseline.lengths_by_status.setdefault(resp.status_code, []).append(len(resp.text or ""))
             if resp.status_code in (301, 302, 307, 308):
                 baseline.redirect_paths.add(_location_path(resp))
+        if latencies:
+            self._calibrated_latency_ms = sorted(latencies)[len(latencies) // 2]  # median
         return baseline if seen_any else None
 
     def _candidates(self, word: str) -> list[str]:
@@ -214,6 +236,8 @@ class ContentDiscoverer:
             baseline = await self._calibrate(directory)
             if baseline is None:
                 continue
+            if depth == 0:  # adapt concurrency to the host's measured latency (fill the rps pipe)
+                self._concurrency = adaptive_concurrency(self._base_concurrency, self._calibrated_latency_ms)
             child_dirs = await self._sweep(directory, depth, baseline, hits, budget)
             for child in child_dirs:
                 if child not in visited:

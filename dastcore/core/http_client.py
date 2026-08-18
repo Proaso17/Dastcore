@@ -174,8 +174,13 @@ class HttpClient:
         data: dict[str, str] | None = None,
         json: dict | list | None = None,
         files: dict | None = None,
+        timeout: float | None = None,
+        retries: int | None = None,
     ) -> HttpResponse:
         """The single choke point: scope enforcement + rate limit + transport retries.
+
+        ``timeout`` / ``retries`` override the client defaults for this one request — discovery uses a
+        short timeout and no retries so a slow/dead host resolves in seconds, not tens of seconds.
 
         No session injection or re-login happens here, so login requests made by the
         session manager can reuse it without recursion.
@@ -192,6 +197,8 @@ class HttpClient:
         if cookies:
             self._client.cookies.update(cookies)
 
+        max_retries = self._max_retries if retries is None else max(0, retries)
+        extra = {"timeout": timeout} if timeout is not None else {}  # else use the client default
         await self._bucket.acquire()
         async with self._semaphore:
             attempt = 0
@@ -206,17 +213,18 @@ class HttpClient:
                         data=data,
                         json=json,
                         files=files,
+                        **extra,
                     )
                     elapsed_ms = (time.monotonic() - start) * 1000
                 except _RETRYABLE_EXCEPTIONS:
                     attempt += 1
-                    if attempt > self._max_retries:
+                    if attempt > max_retries:
                         raise
                     await asyncio.sleep(0.2 * attempt)
                     continue
 
                 # Honor server-side rate limiting: back off on 429 and retry.
-                if response.status_code == 429 and attempt < self._max_retries:
+                if response.status_code == 429 and attempt < max_retries:
                     attempt += 1
                     retry_after = _parse_retry_after(response.headers.get("retry-after"))
                     await asyncio.sleep(retry_after if retry_after is not None else 0.5 * attempt)
@@ -247,6 +255,8 @@ class HttpClient:
         data: dict[str, str] | None = None,
         json: dict | list | None = None,
         files: dict | None = None,
+        timeout: float | None = None,
+        retries: int | None = None,
         _allow_relogin: bool = True,
     ) -> HttpResponse:
         send_headers = headers
@@ -256,7 +266,8 @@ class HttpClient:
             epoch = self._session.epoch
 
         response = await self._send_once(
-            method, url, params=params, headers=send_headers, cookies=cookies, data=data, json=json, files=files
+            method, url, params=params, headers=send_headers, cookies=cookies, data=data, json=json, files=files,
+            timeout=timeout, retries=retries,
         )
 
         if (
@@ -277,6 +288,8 @@ class HttpClient:
                     data=data,
                     json=json,
                     files=files,
+                    timeout=timeout,
+                    retries=retries,
                     _allow_relogin=False,
                 )
 

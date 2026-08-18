@@ -86,6 +86,7 @@ class SubdomainDiscoverer:
         concurrency: int = 40,
         use_passive: bool = True,
         use_external: bool = True,
+        probe_timeout: float = 6.0,
     ) -> None:
         self._client = client
         self._wordlist = wordlist
@@ -94,6 +95,7 @@ class SubdomainDiscoverer:
         self._concurrency = max(1, concurrency)
         self._use_passive = use_passive
         self._use_external = use_external
+        self._probe_timeout = probe_timeout  # short per-probe timeout so a slow host doesn't drag
 
     async def _probe(self, host: str) -> tuple[str, HttpResponse] | None:
         for scheme in ("https", "http"):
@@ -101,7 +103,7 @@ class SubdomainDiscoverer:
             if not self._client.is_in_scope(url):
                 continue
             try:
-                resp = await self._client.get(url)
+                resp = await self._client.get(url, timeout=self._probe_timeout, retries=0)
             except OutOfScopeError:
                 continue
             except Exception:  # noqa: BLE001 — an unreachable host is simply not discovered

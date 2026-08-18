@@ -8,7 +8,12 @@ from urllib.parse import urlsplit
 from dastcore.config import RateLimitConfig, ScopeConfig
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import HttpResponse
-from dastcore.discovery.content import ContentDiscoverer, _Baseline, load_content_wordlist
+from dastcore.discovery.content import (
+    ContentDiscoverer,
+    _Baseline,
+    adaptive_concurrency,
+    load_content_wordlist,
+)
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
@@ -96,7 +101,7 @@ class _FakeClient:
     def is_in_scope(self, url: str) -> bool:
         return True
 
-    async def get(self, url: str) -> HttpResponse:
+    async def get(self, url: str, **_kwargs: object) -> HttpResponse:
         self.requested.append(url)
         status, body = self.pages.get(urlsplit(url).path, (404, "the requested page was not found here"))
         return HttpResponse(method="GET", status_code=status, text=body, url=url)
@@ -133,7 +138,7 @@ async def test_content_discovery_gives_up_on_a_hanging_host() -> None:
         def is_in_scope(self, url: str) -> bool:
             return True
 
-        async def get(self, url: str) -> HttpResponse:
+        async def get(self, url: str, **_kwargs: object) -> HttpResponse:
             self.calls += 1
             if "/dc" in urlsplit(url).path:  # calibration probes answer instantly...
                 return HttpResponse(method="GET", status_code=404, text="not found", url=url)
@@ -148,6 +153,15 @@ async def test_content_discovery_gives_up_on_a_hanging_host() -> None:
     found = await disc.discover("http://t/")
     assert found == []
     assert client.calls < 100  # abandoned after a handful of timeouts, not all 500 words
+
+
+def test_adaptive_concurrency_scales_with_latency() -> None:
+    base = 12
+    assert adaptive_concurrency(base, 100) == base  # fast host: leave concurrency alone
+    assert adaptive_concurrency(base, 250) == base  # at the threshold, still base
+    assert adaptive_concurrency(base, 1000) == 48  # slow host: more in-flight (12 * 1000/250)
+    assert adaptive_concurrency(base, 5000) == 64  # capped so we never fan out unbounded
+    assert adaptive_concurrency(base, 1000) > base
 
 
 def test_custom_wordlist_file_is_honored(tmp_path) -> None:
