@@ -14,7 +14,7 @@ import json as _json
 import logging
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
@@ -50,7 +50,7 @@ from dastcore.config import (
     ScopeConfig,
 )
 from dastcore.core.http_client import BudgetExceededError, HttpClient
-from dastcore.core.models import Finding, HttpRequest
+from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.core.session import SessionManager
 from dastcore.detectors.access_bypass import run_access_bypass_checks
 from dastcore.detectors.active_checks import (
@@ -488,6 +488,34 @@ async def _run_authz(
         return findings
 
 
+async def _prove_impact_isolated(client: HttpClient, findings: list[Finding]) -> list[Finding]:
+    """Adapt prove_findings_impact (mutates findings in place) to the isolated ``phase`` runner."""
+    await prove_findings_impact(client, findings)
+    return []
+
+
+def _coverage_finding(target: str, failed: list[str]) -> Finding:
+    """An info advisory that some checks were skipped, so the report reflects partial coverage."""
+    names = ", ".join(sorted(set(failed)))
+    request = HttpRequest(method="GET", url=target)
+    return Finding(
+        id="scan-partial-coverage",
+        rule_id="scan-coverage",
+        name=f"Cobertura parcial: {len(set(failed))} comprobación(es) se omitieron por un error",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="response_match", data=f"omitidas: {names}"[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target),
+        remediation=(
+            "Algunas comprobaciones se saltaron por un error interno o del objetivo, así que este escaneo "
+            "es de cobertura parcial. Revisa los registros (nivel WARNING) para ver cuál falló y por qué."
+        ),
+    )
+
+
 def _looks_like_ip(host: str) -> bool:
     import ipaddress
 
@@ -586,6 +614,23 @@ async def _run_scan(
     active_passive: list[Finding] = []
     budget_hit = False
     sink = FindingSink(findings_log).open() if findings_log else None  # persist findings as they're found
+    failed_phases: list[str] = []
+
+    async def phase(name: str, coro: Awaitable[list[Any]]) -> list[Any]:
+        """Run one check in isolation: a bug or an odd response in it must never abort the whole scan.
+
+        A budget cap still stops the scan (it's the intended soft stop, handled upstream); anything else
+        is logged with a traceback, recorded, and skipped so every other check still runs."""
+        try:
+            return await coro
+        except BudgetExceededError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — isolate: log it loudly, skip this one, keep going
+            _scan_log.warning(
+                "Comprobación '%s' omitida por un error: %s: %s", name, type(exc).__name__, exc, exc_info=True
+            )
+            failed_phases.append(name)
+            return []
 
     oast = _build_oast_provider(oast_mode, oast_server)
     if oast is not None:
@@ -652,54 +697,48 @@ async def _run_scan(
                 except httpx.HTTPError:
                     found_openapi, found_graphql = [], []
                 for schema_url in found_openapi:
-                    for req in await fetch_and_parse_openapi(client, schema_url, target):
+                    for req in await phase("openapi-ingest", fetch_and_parse_openapi(client, schema_url, target)):
                         discovered.setdefault(req.signature(), req)
                 for gql_url in found_graphql:
-                    for req in await discover_graphql(client, gql_url):
+                    for req in await phase("graphql-ingest", discover_graphql(client, gql_url)):
                         discovered.setdefault(req.signature(), req)
-                    extra_findings.extend(await check_graphql_introspection(client, gql_url))
-                    extra_findings.extend(await run_graphql_checks(client, gql_url))
-                    extra_findings.extend(await check_graphql_arg_injection(client, gql_url))
+                    extra_findings.extend(await phase("graphql-introspection", check_graphql_introspection(client, gql_url)))
+                    extra_findings.extend(await phase("graphql-checks", run_graphql_checks(client, gql_url)))
+                    extra_findings.extend(await phase("graphql-arg-injection", check_graphql_arg_injection(client, gql_url)))
                 if surface is not None and (found_openapi or found_graphql):
                     surface["api"] = {"openapi": found_openapi, "graphql": found_graphql}
 
             if openapi_url:
                 progress.status("Ingiriendo OpenAPI…")
-                for req in await fetch_and_parse_openapi(client, openapi_url, target):
+                for req in await phase("openapi-ingest", fetch_and_parse_openapi(client, openapi_url, target)):
                     discovered.setdefault(req.signature(), req)
 
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")
-                for req in await discover_graphql(client, graphql_url):
+                for req in await phase("graphql-ingest", discover_graphql(client, graphql_url)):
                     discovered.setdefault(req.signature(), req)
-                extra_findings.extend(await check_graphql_introspection(client, graphql_url))
-                extra_findings.extend(await run_graphql_checks(client, graphql_url))
-                extra_findings.extend(await check_graphql_arg_injection(client, graphql_url))
+                extra_findings.extend(await phase("graphql-introspection", check_graphql_introspection(client, graphql_url)))
+                extra_findings.extend(await phase("graphql-checks", run_graphql_checks(client, graphql_url)))
+                extra_findings.extend(await phase("graphql-arg-injection", check_graphql_arg_injection(client, graphql_url)))
 
             progress.status("Probando ficheros sensibles…")
             for root in scan_roots:
-                try:
-                    extra_findings.extend(await probe_sensitive_files(client, root))
-                except httpx.HTTPError:
-                    pass  # skip this host's passive checks on a network error, keep going
+                extra_findings.extend(await phase("sensitive-files", probe_sensitive_files(client, root)))
 
             progress.status("Fingerprint de tecnología + WAF…")
             for root in scan_roots:
-                try:
-                    extra_findings.extend(await fingerprint_and_waf(client, root))
-                    extra_findings.extend(await check_trace_method(client, root))
-                    extra_findings.extend(await check_dangerous_methods(client, root))
-                    extra_findings.extend(await run_spa_check(client, root, engine))
-                except httpx.HTTPError:
-                    pass
+                extra_findings.extend(await phase("fingerprint-waf", fingerprint_and_waf(client, root)))
+                extra_findings.extend(await phase("trace-method", check_trace_method(client, root)))
+                extra_findings.extend(await phase("dangerous-methods", check_dangerous_methods(client, root)))
+                extra_findings.extend(await phase("spa-awareness", run_spa_check(client, root, engine)))
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
-                jwt_token = config.auth.bearer_token
-                extra_findings.extend(await check_jwt_none_acceptance(client, target, jwt_token))
-                extra_findings.extend(await check_jwt_weak_secret(client, target, jwt_token))
-                extra_findings.extend(await check_jwt_signature_not_verified(client, target, jwt_token))
-                extra_findings.extend(await check_jwt_kid_injection(client, target, jwt_token))
-                extra_findings.extend(await check_jwt_algorithm_confusion(client, target, jwt_token))
-                extra_findings.extend(await check_jwt_key_url_ssrf(client, target, jwt_token, oast))
+                jwt = config.auth.bearer_token
+                extra_findings.extend(await phase("jwt-none", check_jwt_none_acceptance(client, target, jwt)))
+                extra_findings.extend(await phase("jwt-weak-secret", check_jwt_weak_secret(client, target, jwt)))
+                extra_findings.extend(await phase("jwt-no-verify", check_jwt_signature_not_verified(client, target, jwt)))
+                extra_findings.extend(await phase("jwt-kid", check_jwt_kid_injection(client, target, jwt)))
+                extra_findings.extend(await phase("jwt-alg-confusion", check_jwt_algorithm_confusion(client, target, jwt)))
+                extra_findings.extend(await phase("jwt-key-ssrf", check_jwt_key_url_ssrf(client, target, jwt, oast)))
 
             scanner = Scanner(
                 client,
@@ -711,54 +750,56 @@ async def _run_scan(
                 ai_payloads=ai_payloads,
             )
             all_requests = list(discovered.values())
-            extra_findings.extend(await check_shellshock(client, all_requests))
-            extra_findings.extend(await run_nosql_checks(client, all_requests))
-            extra_findings.extend(await run_mass_assignment_checks(client, all_requests))
-            extra_findings.extend(await run_js_secret_scan(client, all_requests))
-            extra_findings.extend(await run_subdomain_takeover_check(client, target, all_requests))
-            extra_findings.extend(await run_deserialization_checks(client, all_requests, oast))
-            extra_findings.extend(await run_oauth_checks(client, all_requests))
-            extra_findings.extend(await run_access_bypass_checks(client, all_requests))
-            extra_findings.extend(await run_response_splitting_checks(client, all_requests))
-            extra_findings.extend(await run_ssi_checks(client, all_requests))
-            extra_findings.extend(await run_code_injection_checks(client, all_requests))
+            extra_findings.extend(await phase("shellshock", check_shellshock(client, all_requests)))
+            extra_findings.extend(await phase("nosql", run_nosql_checks(client, all_requests)))
+            extra_findings.extend(await phase("mass-assignment", run_mass_assignment_checks(client, all_requests)))
+            extra_findings.extend(await phase("js-secrets", run_js_secret_scan(client, all_requests)))
+            extra_findings.extend(await phase("subdomain-takeover", run_subdomain_takeover_check(client, target, all_requests)))
+            extra_findings.extend(await phase("deserialization", run_deserialization_checks(client, all_requests, oast)))
+            extra_findings.extend(await phase("oauth", run_oauth_checks(client, all_requests)))
+            extra_findings.extend(await phase("access-bypass", run_access_bypass_checks(client, all_requests)))
+            extra_findings.extend(await phase("response-splitting", run_response_splitting_checks(client, all_requests)))
+            extra_findings.extend(await phase("ssi", run_ssi_checks(client, all_requests)))
+            extra_findings.extend(await phase("code-injection", run_code_injection_checks(client, all_requests)))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.
                 async with _make_client(config, budget) as fresh_client:
-                    extra_findings.extend(await check_session_fixation(fresh_client, config.auth.form))
+                    extra_findings.extend(await phase("session-fixation", check_session_fixation(fresh_client, config.auth.form)))
             if test_weak_creds and config.auth.form is not None:
                 progress.status("Probando credenciales por defecto…")
                 async with _make_client(config, budget) as fresh_client:
-                    extra_findings.extend(await run_weak_credentials_check(fresh_client, config.auth.form))
+                    extra_findings.extend(await phase("weak-credentials", run_weak_credentials_check(fresh_client, config.auth.form)))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
-                extra_findings.extend(await run_race_checks(client, all_requests))
+                extra_findings.extend(await phase("race", run_race_checks(client, all_requests)))
             if test_csrf:
                 progress.status("Probando CSRF (enforcement de token)…")
-                extra_findings.extend(await run_csrf_checks(client, all_requests))
+                extra_findings.extend(await phase("csrf", run_csrf_checks(client, all_requests)))
             if test_proto_pollution:
                 progress.status("Probando prototype pollution (json spaces)…")
-                extra_findings.extend(await run_proto_pollution_checks(client, all_requests))
+                extra_findings.extend(await phase("proto-pollution", run_proto_pollution_checks(client, all_requests)))
             if test_cache_poisoning:
                 progress.status("Probando web cache poisoning…")
-                extra_findings.extend(await run_cache_poisoning_checks(client, all_requests))
+                extra_findings.extend(await phase("cache-poisoning", run_cache_poisoning_checks(client, all_requests)))
             if test_upload:
                 progress.status("Probando subida de ficheros…")
-                extra_findings.extend(await run_file_upload_checks(client, all_requests))
+                extra_findings.extend(await phase("file-upload", run_file_upload_checks(client, all_requests)))
             if test_dos:
                 progress.status("Probando XML entity expansion…")
-                extra_findings.extend(await run_xml_expansion_checks(client, all_requests))
+                extra_findings.extend(await phase("xml-expansion", run_xml_expansion_checks(client, all_requests)))
                 progress.status("Probando ReDoS (backtracking catastrófico)…")
-                extra_findings.extend(await run_redos_checks(client, all_requests))
+                extra_findings.extend(await phase("redos", run_redos_checks(client, all_requests)))
             if test_smuggling:
                 progress.status("Probando HTTP request smuggling (CL.TE)…")
-                extra_findings.extend(await run_smuggling_checks(client, all_requests))
+                extra_findings.extend(await phase("smuggling", run_smuggling_checks(client, all_requests)))
             if sink is not None:
                 sink.write(extra_findings)  # everything gathered before the (long) active scan
-            active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink)
+            active_passive = await phase(
+                "active-scan", _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink)
+            )
             if prove_impact:
                 progress.status("Probando impacto de los hallazgos confirmados…")
-                await prove_findings_impact(client, active_passive + extra_findings)
+                await phase("prove-impact", _prove_impact_isolated(client, active_passive + extra_findings))
     except BudgetExceededError:
         # A --max-requests / --time-budget cap is a soft stop: keep what we found, don't crash.
         budget_hit = True
@@ -779,7 +820,16 @@ async def _run_scan(
     authz_findings: list[Finding] = []
     if config.identities and not budget_hit:  # authz opens fresh clients; skip once the budget is spent
         progress.status("Pruebas de autorización (BOLA/BFLA)…")
-        authz_findings = await _run_authz(config, list(discovered.values()), budget, graphql_url=graphql_url)
+        try:
+            authz_findings = await _run_authz(config, list(discovered.values()), budget, graphql_url=graphql_url)
+        except BudgetExceededError:
+            budget_hit = True
+        except Exception as exc:  # noqa: BLE001 — authz failing must not sink a completed scan
+            _scan_log.warning("Fase 'authz' omitida por un error: %s: %s", type(exc).__name__, exc, exc_info=True)
+            failed_phases.append("authz")
+
+    if failed_phases:  # tell the report the coverage was partial (and which checks were skipped)
+        extra_findings.append(_coverage_finding(target, failed_phases))
 
     # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
     return cross_correlate(active_passive + extra_findings + dom_findings + authz_findings)
