@@ -17,6 +17,7 @@ import time
 from collections.abc import Sequence
 from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import Any
 
 import httpx
 import typer
@@ -109,6 +110,7 @@ from dastcore.engine.rule_engine import load_rules
 from dastcore.engine.scanner import Scanner
 from dastcore.report import render_defectdojo, render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate, cross_correlate, deduplicate
+from dastcore.report.incremental import FindingSink
 from dastcore.report.markdown import render_markdown_diff
 from dastcore.retest import (
     RetestOutcome,
@@ -222,14 +224,23 @@ class _Budget:
         self.time_budget_s = time_budget_s
 
 
+_scan_log = logging.getLogger("dastcore.scan")
+
+
 class _ProgressAdapter:
-    """Drives a rich progress bar during a scan. A None progress makes every call a no-op."""
+    """Drives a rich progress bar during a scan. A None progress makes every call a no-op.
+
+    Every status line is also emitted to the ``dastcore.scan`` logger, so a scan run in the background
+    or in CI (no interactive terminal for the rich bar) still shows its phase-by-phase progress once
+    logging is configured — which the ``scan`` command does automatically when stdout isn't a TTY.
+    """
 
     def __init__(self, progress: Progress | None) -> None:
         self._progress = progress
         self._task = None
 
     def status(self, text: str) -> None:
+        _scan_log.info(text)
         if self._progress is None:
             return
         if self._task is None:
@@ -555,6 +566,8 @@ async def _run_scan(
     discover_depth: str = "aggressive",
     content_wordlist: str = "",
     subdomain_wordlist: str = "",
+    findings_log: str = "",
+    surface: dict[str, Any] | None = None,
     ai_payloads: AiPayloadGenerator | None = None,
 ) -> list[Finding]:
     rules = load_rules()
@@ -570,6 +583,7 @@ async def _run_scan(
     extra_findings: list[Finding] = []
     active_passive: list[Finding] = []
     budget_hit = False
+    sink = FindingSink(findings_log).open() if findings_log else None  # persist findings as they're found
 
     oast = _build_oast_provider(oast_mode, oast_server)
     if oast is not None:
@@ -585,6 +599,9 @@ async def _run_scan(
             scan_roots = [target]
             if discover_subdomains:
                 scan_roots = await _discover_scan_roots(client, target, discover_depth, progress, subdomain_wordlist)
+            if surface is not None:
+                surface["roots"] = list(scan_roots)
+                surface.setdefault("content", {})
 
             if engine in ("http", "both"):
                 for root in scan_roots:
@@ -603,6 +620,8 @@ async def _run_scan(
                     except httpx.HTTPError:
                         continue  # a flaky host must not abort the whole multi-host scan
                     dom_findings.extend(root_dom)
+                    if sink is not None:
+                        sink.write(root_dom)
                     for req in headless_reqs:
                         discovered.setdefault(req.signature(), req)
 
@@ -615,6 +634,8 @@ async def _run_scan(
                     endpoints = await ContentDiscoverer(
                         client, wordlist=content_words, extensions=extensions, recursion_depth=recursion
                     ).discover(root)
+                    if surface is not None:
+                        surface["content"][root] = [e.url for e in endpoints]
                     for endpoint in endpoints:
                         # A shallow crawl of each hidden page extracts its own links/forms/params, so the
                         # detectors actually get something to test — not just a bare URL.
@@ -710,7 +731,9 @@ async def _run_scan(
             if test_smuggling:
                 progress.status("Probando HTTP request smuggling (CL.TE)…")
                 extra_findings.extend(await run_smuggling_checks(client, all_requests))
-            active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress)
+            if sink is not None:
+                sink.write(extra_findings)  # everything gathered before the (long) active scan
+            active_passive = await _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink)
             if prove_impact:
                 progress.status("Probando impacto de los hallazgos confirmados…")
                 await prove_findings_impact(client, active_passive + extra_findings)
@@ -728,6 +751,8 @@ async def _run_scan(
     finally:
         if oast is not None:
             await oast.stop()
+        if sink is not None:
+            sink.close()
 
     authz_findings: list[Finding] = []
     if config.identities and not budget_hit:  # authz opens fresh clients; skip once the budget is spent
@@ -770,9 +795,11 @@ async def _scan_with_optional_resume(
     requests: list[HttpRequest],
     state: _ResumeState | None,
     progress: _ProgressAdapter,
+    sink: FindingSink | None = None,
 ) -> list[Finding]:
     """Concurrent in-band + passive scan, then OOB. With a resume state, skip requests
-    already completed in a prior run and persist progress after each one."""
+    already completed in a prior run and persist progress after each one. Each request's findings
+    are streamed to ``sink`` (if given) so a hard interruption during this long phase loses nothing."""
     prior = list(state.findings) if state is not None else []
     to_scan = [req for req in requests if state is None or req.signature() not in state.completed]
     progress.start_scanning(len(to_scan))
@@ -780,12 +807,16 @@ async def _scan_with_optional_resume(
     def _on_done(request: HttpRequest, request_findings: list[Finding]) -> None:
         if state is not None:
             state.record(request.signature(), request_findings)
+        if sink is not None:
+            sink.write(request_findings)
         progress.tick()
 
     in_band = await scanner.scan_inband(to_scan, on_request_done=_on_done)
     # OOB and stored are idempotent and self-gated; run them over the full set every time.
     oob = await scanner.run_oob(requests)
     stored = await scanner.run_stored(requests)
+    if sink is not None:
+        sink.write(oob + stored)
     return prior + in_band + oob + stored
 
 
@@ -1269,6 +1300,21 @@ def scan(
     if state is not None and state.completed:
         info(f"Reanudando: [bold]{len(state.completed)}[/bold] requests ya completados")
 
+    if not console.is_terminal:
+        # Background / piped run: the rich bar is disabled, so surface phase progress via the logger.
+        from dastcore.obslog import configure_logging
+
+        configure_logging()
+
+    # Incremental persistence (survives a hard interruption) + a surface map, alongside the main report.
+    surface: dict[str, Any] = {}
+    findings_log = ""
+    surface_path = ""
+    if output_path:
+        _stem = str(Path(output_path).with_suffix(""))
+        findings_log = f"{_stem}.partial.jsonl"
+        surface_path = f"{_stem}.surface.json"
+
     info()
     started_at = time.monotonic()
     progress = Progress(
@@ -1310,6 +1356,8 @@ def scan(
                     discover_depth=discover_depth,
                     content_wordlist=content_wordlist,
                     subdomain_wordlist=subdomain_wordlist,
+                    findings_log=findings_log,
+                    surface=surface,
                     ai_payloads=payload_generator,
                 )
             )
@@ -1323,6 +1371,7 @@ def scan(
         console.print(f"\n[bold red]Error de red al escanear el objetivo:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
+    _emit_surface(surface, surface_path, quiet=quiet)
     _emit_report_and_gate(
         findings,
         output_format=output_format,
@@ -1336,6 +1385,36 @@ def scan(
         ai_triage_key=ai_triage_key or None,
         audience=audience,
     )
+
+
+def _emit_surface(surface: dict[str, Any], path: str, *, quiet: bool) -> None:
+    """Write the discovered attack surface (hosts + hidden paths) to a file and print a short summary.
+
+    This is the map the JSON findings alone can't show: every live host scanned and every hidden path
+    found, even the ones with no vulnerability — so you can see exactly what dastcore covered."""
+    from urllib.parse import urlsplit
+
+    roots = surface.get("roots") or []
+    content = surface.get("content") or {}
+    if not roots and not content:
+        return  # discovery wasn't enabled for this scan
+    if path:
+        Path(path).write_text(_json.dumps(surface, indent=2, ensure_ascii=False), encoding="utf-8")
+    if quiet:
+        return
+    total_paths = sum(len(paths) for paths in content.values())
+    console.print(
+        f"\n[bold]Superficie descubierta[/bold]  ·  {len(roots)} host(s), {total_paths} ruta(s) oculta(s)"
+    )
+    for root in roots:
+        paths = content.get(root, [])
+        console.print(f"  [cyan]{urlsplit(root).netloc or root}[/cyan]  ({len(paths)} ruta(s) oculta(s))")
+        for url in paths[:12]:
+            console.print(f"     {urlsplit(url).path or url}")
+        if len(paths) > 12:
+            console.print(f"     … y {len(paths) - 12} más")
+    if path:
+        console.print(f"[dim]Mapa completo: {path}[/dim]")
 
 
 def _print_ai_triage(findings: list[Finding], *, api_key: str | None) -> None:
