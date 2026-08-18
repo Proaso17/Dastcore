@@ -121,6 +121,35 @@ async def test_recursion_descends_into_discovered_directories() -> None:
     assert "/admin/users" in found  # ...and a path only reachable by recursing into it
 
 
+async def test_content_discovery_gives_up_on_a_hanging_host() -> None:
+    """A host that answers / but then hangs on every path must be abandoned fast, not probed
+    thousands of times (the multi-hour stall we hit against a real target)."""
+    import httpx as _httpx
+
+    class _PartialHang:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def is_in_scope(self, url: str) -> bool:
+            return True
+
+        async def get(self, url: str) -> HttpResponse:
+            self.calls += 1
+            if "/dc" in urlsplit(url).path:  # calibration probes answer instantly...
+                return HttpResponse(method="GET", status_code=404, text="not found", url=url)
+            raise _httpx.ReadTimeout("hang")  # ...but real paths hang
+
+    client = _PartialHang()
+    disc = ContentDiscoverer(
+        client,  # type: ignore[arg-type]
+        wordlist=[f"path{i}" for i in range(500)],
+        timeout_giveup=10,
+    )
+    found = await disc.discover("http://t/")
+    assert found == []
+    assert client.calls < 100  # abandoned after a handful of timeouts, not all 500 words
+
+
 def test_custom_wordlist_file_is_honored(tmp_path) -> None:
     path = tmp_path / "mylist.txt"
     path.write_text("# a comment\n/admin\nsecret-path\n\nsecret-path\n", encoding="utf-8")

@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
+
+import httpx
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import HttpResponse
@@ -130,6 +133,8 @@ class ContentDiscoverer:
         concurrency: int = 12,
         max_paths: int = 20000,
         calibration_probes: int = 5,
+        timeout_giveup: int = 30,
+        max_seconds: float = 600.0,
     ) -> None:
         self._client = client
         self._wordlist = wordlist
@@ -138,6 +143,14 @@ class ContentDiscoverer:
         self._concurrency = max(1, concurrency)
         self._max_paths = max_paths
         self._calibration_probes = calibration_probes
+        # Circuit breaker: a host that keeps timing out (accepts connections but never answers) is
+        # abandoned after this many timeouts, so one dead host can't stall the whole scan for hours.
+        # A healthy host answers 404s instantly and never trips it. A generous wall-clock cap backstops it.
+        self._timeout_giveup = timeout_giveup
+        self._max_seconds = max_seconds
+        self._timeouts = 0
+        self._stopped = False
+        self._deadline = 0.0
 
     async def _get(self, url: str) -> HttpResponse | None:
         try:
@@ -146,6 +159,12 @@ class ContentDiscoverer:
             return None
         except BudgetExceededError:
             raise
+        except (httpx.TimeoutException, httpx.TransportError, OSError):
+            # A network stall on this host: count it, and give up on the host once too many pile up.
+            self._timeouts += 1
+            if self._timeouts >= self._timeout_giveup:
+                self._stopped = True
+            return None
         except Exception:  # noqa: BLE001 — a single dead path must not abort the sweep
             return None
 
@@ -183,8 +202,11 @@ class ContentDiscoverer:
         budget = [self._max_paths]
         visited: set[str] = set()
         queue: list[tuple[str, int]] = [(base, 0)]
+        self._timeouts = 0
+        self._stopped = False
+        self._deadline = time.monotonic() + self._max_seconds
 
-        while queue and budget[0] > 0:
+        while queue and budget[0] > 0 and not self._stopped and time.monotonic() < self._deadline:
             directory, depth = queue.pop(0)
             if directory in visited:
                 continue
@@ -212,7 +234,7 @@ class ContentDiscoverer:
         child_dirs: set[str] = set()
 
         async def probe(candidate: str) -> None:
-            if budget[0] <= 0:
+            if budget[0] <= 0 or self._stopped or time.monotonic() >= self._deadline:
                 return
             budget[0] -= 1
             async with semaphore:
