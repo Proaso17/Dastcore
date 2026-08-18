@@ -89,10 +89,12 @@ from dastcore.detectors.request_smuggling import run_smuggling_checks
 from dastcore.detectors.response_splitting import run_response_splitting_checks
 from dastcore.detectors.session_fixation import check_session_fixation
 from dastcore.detectors.shellshock import check_shellshock
+from dastcore.detectors.spa import run_spa_check
 from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
+from dastcore.discovery.api_probe import probe_api_schemas
 from dastcore.discovery.content import (
     ContentDiscoverer,
     content_extensions,
@@ -642,6 +644,25 @@ async def _run_scan(
                         for req in await HttpCrawler(client, max_pages=8, use_robots=False).crawl(endpoint.url):
                             discovered.setdefault(req.signature(), req)
 
+            if discover_content or discover_subdomains:
+                # The API is the real surface: auto-find OpenAPI/GraphQL schemas and ingest every endpoint.
+                progress.status("Detectando esquemas de API (OpenAPI/GraphQL)…")
+                try:
+                    found_openapi, found_graphql = await probe_api_schemas(client, scan_roots)
+                except httpx.HTTPError:
+                    found_openapi, found_graphql = [], []
+                for schema_url in found_openapi:
+                    for req in await fetch_and_parse_openapi(client, schema_url, target):
+                        discovered.setdefault(req.signature(), req)
+                for gql_url in found_graphql:
+                    for req in await discover_graphql(client, gql_url):
+                        discovered.setdefault(req.signature(), req)
+                    extra_findings.extend(await check_graphql_introspection(client, gql_url))
+                    extra_findings.extend(await run_graphql_checks(client, gql_url))
+                    extra_findings.extend(await check_graphql_arg_injection(client, gql_url))
+                if surface is not None and (found_openapi or found_graphql):
+                    surface["api"] = {"openapi": found_openapi, "graphql": found_graphql}
+
             if openapi_url:
                 progress.status("Ingiriendo OpenAPI…")
                 for req in await fetch_and_parse_openapi(client, openapi_url, target):
@@ -668,6 +689,7 @@ async def _run_scan(
                     extra_findings.extend(await fingerprint_and_waf(client, root))
                     extra_findings.extend(await check_trace_method(client, root))
                     extra_findings.extend(await check_dangerous_methods(client, root))
+                    extra_findings.extend(await run_spa_check(client, root, engine))
                 except httpx.HTTPError:
                     pass
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
