@@ -122,6 +122,8 @@ class Identity(BaseModel):
 class RateLimitConfig(BaseModel):
     requests_per_second: float = Field(default=5.0, gt=0)
     max_concurrency: int = Field(default=5, gt=0)
+    timeout: float = Field(default=10.0, gt=0)  # per-request timeout (s); lower it for slow targets
+    max_retries: int = Field(default=2, ge=0)  # transport retries; lower it to avoid dragging on a slow host
 
 
 class OastConfig(BaseModel):

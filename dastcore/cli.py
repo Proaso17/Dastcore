@@ -465,6 +465,8 @@ def _make_client(config: ScanConfig, budget: _Budget, session: SessionManager | 
     return HttpClient(
         config.scope,
         rate_limit=config.rate_limit,
+        timeout=config.rate_limit.timeout,
+        max_retries=config.rate_limit.max_retries,
         session=session,
         max_requests=budget.max_requests,
         time_budget_s=budget.time_budget_s,
@@ -620,9 +622,10 @@ async def _run_scan(
         """Run one check in isolation: a bug or an odd response in it must never abort the whole scan.
 
         A budget cap still stops the scan (it's the intended soft stop, handled upstream); anything else
-        is logged with a traceback, recorded, and skipped so every other check still runs."""
+        is logged with a traceback, recorded, and skipped so every other check still runs. Any findings a
+        check returns are streamed to the sink immediately, so a hard interruption loses nothing."""
         try:
-            return await coro
+            result = await coro
         except BudgetExceededError:
             raise
         except Exception as exc:  # noqa: BLE001 — isolate: log it loudly, skip this one, keep going
@@ -631,6 +634,9 @@ async def _run_scan(
             )
             failed_phases.append(name)
             return []
+        if sink is not None and result and isinstance(result[0], Finding):
+            sink.write(result)  # persist findings the moment the check produces them
+        return result
 
     oast = _build_oast_provider(oast_mode, oast_server)
     if oast is not None:
@@ -792,8 +798,6 @@ async def _run_scan(
             if test_smuggling:
                 progress.status("Probando HTTP request smuggling (CL.TE)…")
                 extra_findings.extend(await phase("smuggling", run_smuggling_checks(client, all_requests)))
-            if sink is not None:
-                sink.write(extra_findings)  # everything gathered before the (long) active scan
             active_passive = await phase(
                 "active-scan", _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink)
             )
@@ -1145,6 +1149,12 @@ def scan(
     max_pages: int = typer.Option(200, "--max-pages", help="Máximo de páginas a recorrer en el crawl."),
     requests_per_second: float = typer.Option(5.0, "--rps", help="Límite de requests por segundo."),
     concurrency: int = typer.Option(5, "--concurrency", help="Peticiones en paralelo durante el escaneo activo."),
+    timeout: float = typer.Option(
+        10.0, "--timeout", help="Timeout por petición en segundos. Bájalo (p. ej. 4) para objetivos lentos."
+    ),
+    max_retries: int = typer.Option(
+        2, "--max-retries", help="Reintentos de transporte por petición. Bájalo (p. ej. 0) en objetivos lentos."
+    ),
     max_requests: int = typer.Option(
         0, "--max-requests", help="Presupuesto total de peticiones (0 = sin límite). Detiene el escaneo al alcanzarlo."
     ),
@@ -1337,7 +1347,12 @@ def scan(
             scope=ScopeConfig(allow_domains=list(allow_domain), deny_domains=list(deny_domain)),
             auth=auth,
             identities=identities,
-            rate_limit=RateLimitConfig(requests_per_second=requests_per_second, max_concurrency=concurrency),
+            rate_limit=RateLimitConfig(
+                requests_per_second=requests_per_second,
+                max_concurrency=concurrency,
+                timeout=timeout,
+                max_retries=max_retries,
+            ),
             output=OutputConfig(format=output_format, path=output_path or None),
             i_have_authorization=i_have_authorization,
         )
