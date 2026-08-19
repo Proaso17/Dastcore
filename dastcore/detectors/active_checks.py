@@ -8,6 +8,7 @@ they live here instead of as YAML rules.
 from __future__ import annotations
 
 import re
+import secrets
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -93,9 +94,22 @@ async def check_cors_reflection(client: HttpClient, request: HttpRequest) -> lis
 
 
 async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding]:
-    """Probe well-known sensitive paths at the target origin; confirm by content signature."""
+    """Probe well-known sensitive paths at the target origin; confirm by content signature.
+
+    Calibrates against a **catch-all** first: a host that serves 200 for a random path (a SPA that
+    returns its ``index.html`` for every route) would otherwise false-positive on any sensitive path —
+    e.g. an n8n login page contains the word "password", which matched the config-backup signature. A
+    hit is only reported when the response genuinely differs from that random-path baseline.
+    """
     parts = urlsplit(target)
     origin = f"{parts.scheme}://{parts.netloc}/"
+    try:
+        baseline = await client.get(urljoin(origin, "dc" + secrets.token_hex(12) + ".notreal"))
+    except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
+        return []
+    catch_all = baseline.status_code == 200
+    baseline_len = len(baseline.text or "")
+
     findings: list[Finding] = []
     for path, name, signature, severity in _SENSITIVE_FILES:
         url = urljoin(origin, path)
@@ -103,9 +117,19 @@ async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding
             response = await client.get(url)
         except (OutOfScopeError, BudgetExceededError):
             break
-        if response.status_code == 200 and re.search(signature, response.text):
-            request = HttpRequest(method="GET", url=url)
-            findings.append(
+        if response.status_code != 200 or not re.search(signature, response.text):
+            continue
+        if catch_all:
+            # The host answers 200 for garbage too. Skip if this response is the same generic page as
+            # the random path (≈ same size), or if the signature already appears in that generic page —
+            # either way the match proves nothing about the file existing.
+            length = len(response.text or "")
+            if abs(length - baseline_len) <= max(64, int(0.03 * max(length, baseline_len, 1))):
+                continue
+            if re.search(signature, baseline.text or ""):
+                continue
+        request = HttpRequest(method="GET", url=url)
+        findings.append(
                 Finding(
                     id=f"active-sensitive-file:{path}",
                     rule_id="active-sensitive-file",
