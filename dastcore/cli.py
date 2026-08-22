@@ -114,6 +114,7 @@ from dastcore.discovery.subdomains import (
     load_subdomain_wordlist,
     subdomain_recursion_depth,
 )
+from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import load_rules
@@ -697,7 +698,7 @@ async def _run_scan(
 
                 thost = urlsplit(target).hostname or ""
                 if thost and not _looks_like_ip(thost):
-                    progress.status("Minando URLs históricas (Wayback)…")
+                    progress.status("Minando URLs históricas (Wayback · Common Crawl · urlscan · OTX)…")
                     hist_hosts: set[str] = set()
                     reqs: list[HttpRequest] = []
                     for hist_url in await gather_historical_urls(_base_domain(thost)):  # passive: hits the archive
@@ -774,6 +775,15 @@ async def _run_scan(
                 for root in scan_roots:
                     progress.status(f"Extrayendo endpoints de JavaScript en {root}…")
                     for req in await JsEndpointDiscoverer(client).discover(root):
+                        discovered.setdefault(req.signature(), req)
+
+            if discover_content:
+                # Tech-aware probing: fingerprint each host's stack and probe the paths that stack exposes
+                # (WordPress /wp-json, Spring /actuator, Laravel /.env…) — far higher signal than a generic
+                # wordlist. Calibrated per host, scope-gated.
+                for root in scan_roots:
+                    progress.status(f"Rutas según la tecnología detectada en {root}…")
+                    for req in await phase("tech-paths", discover_tech_paths(client, root)):
                         discovered.setdefault(req.signature(), req)
 
             if discover_content or discover_subdomains:

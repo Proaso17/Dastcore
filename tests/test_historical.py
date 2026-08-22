@@ -40,6 +40,53 @@ async def test_gather_dedups_across_sources() -> None:
     assert urls == ["https://x.test/a", "https://x.test/b", "https://x.test/c"]
 
 
+class _FakeResp:
+    def __init__(self, *, payload: object = None, text: str = "") -> None:
+        self._payload = payload
+        self.text = text
+
+    def json(self) -> object:
+        return self._payload
+
+
+class _FakeClient:
+    """A stand-in httpx.AsyncClient whose .get returns canned responses (or raises)."""
+
+    def __init__(self, handler) -> None:
+        self._handler = handler
+
+    async def __aenter__(self) -> _FakeClient:
+        return self
+
+    async def __aexit__(self, *_a: object) -> bool:
+        return False
+
+    async def get(self, url: str, params: dict | None = None):
+        return self._handler(url, params)
+
+
+async def test_fetch_otx_urls_parses(monkeypatch) -> None:
+    from dastcore.discovery import historical
+
+    def handler(url: str, params: dict | None):
+        return _FakeResp(payload={"url_list": [{"url": "https://x.test/a"}, {"url": "https://x.test/b"}, {}]})
+
+    monkeypatch.setattr(historical.httpx, "AsyncClient", lambda **kw: _FakeClient(handler))
+    assert await historical.fetch_otx_urls("x.test") == ["https://x.test/a", "https://x.test/b"]
+
+
+async def test_fetch_urlscan_urls_fail_open_on_error(monkeypatch) -> None:
+    import httpx
+
+    from dastcore.discovery import historical
+
+    def boom(url: str, params: dict | None):
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(historical.httpx, "AsyncClient", lambda **kw: _FakeClient(boom))
+    assert await historical.fetch_urlscan_urls("x.test") == []
+
+
 async def test_run_scan_scans_a_historical_parametrised_endpoint(vuln_app_url: str, monkeypatch) -> None:
     import dastcore.cli as cli
 

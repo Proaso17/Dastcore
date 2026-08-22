@@ -3,7 +3,8 @@ get tested across the whole attack surface, not just the one URL you typed.
 
 Sources, most to least safe:
 
-- **Passive** — the crt.sh certificate-transparency log (no traffic to the target). Optional.
+- **Passive (multi-source)** — CT logs, passive-DNS datasets, URL archives, and the live TLS cert's SANs
+  (`discovery/passive_sources.py`; no traffic to the target). Premium sources activate with an API key.
 - **Native DNS brute force** — resolve ``word.domain`` for each word in a wordlist, with **wildcard-DNS
   calibration**: if a random name resolves, the domain answers everything, so DNS alone can't confirm a
   host and we fall back to comparing the HTTP homepage against a random-host baseline (zero false hosts).
@@ -96,6 +97,7 @@ class SubdomainDiscoverer:
         concurrency: int = 40,
         use_passive: bool = True,
         use_external: bool = True,
+        passive_gather: Callable[[str], Awaitable[set[str]]] | None = None,
         probe_timeout: float = 6.0,
         seeds: list[str] | None = None,
         recursion_depth: int = 0,
@@ -107,8 +109,14 @@ class SubdomainDiscoverer:
         self._resolver = resolver or _default_resolver
         self._prober = prober or self._probe
         self._concurrency = max(1, concurrency)
+        # ``use_passive`` gates *all* passive discovery: crt.sh plus the multi-source gather (passive DNS,
+        # URL archives, cert SANs; premium sources activate with their API key). Off = fully offline.
         self._use_passive = use_passive
         self._use_external = use_external
+        # The multi-source gather is queried once for the root domain; injectable for offline tests.
+        self._passive_gather = passive_gather
+        self._root = ""
+        self._passive_root: set[str] = set()
         self._probe_timeout = probe_timeout  # short per-probe timeout so a slow host doesn't drag
         # Manual seeds: known hosts to always probe+scan (and recurse into), regardless of the wordlist.
         self._seeds = [s.strip().lower().lstrip("*.").rstrip(".") for s in (seeds or []) if s.strip()]
@@ -133,18 +141,6 @@ class SubdomainDiscoverer:
                 return url, resp
         return None
 
-    async def _passive_crtsh(self, domain: str) -> set[str]:
-        try:
-            import httpx
-
-            from dastcore.recon.adapters import CrtShAdapter
-
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
-                resp = await http.get("https://crt.sh/", params={"q": f"%.{domain}", "output": "json"})
-            return {asset.host for asset in CrtShAdapter().parse(resp.text)}
-        except Exception:  # noqa: BLE001 — passive source is best-effort
-            return set()
-
     async def _external_subfinder(self, domain: str) -> set[str]:
         if shutil.which("subfinder") is None:
             return set()
@@ -165,10 +161,10 @@ class SubdomainDiscoverer:
         if not domain:
             return []
         candidates: set[str] = {domain} | {f"{word}.{domain}" for word in self._wordlist}
-        if self._use_passive:
-            candidates |= await self._passive_crtsh(domain)
         if self._use_external:
             candidates |= await self._external_subfinder(domain)
+        if self._passive_root and domain == self._root:
+            candidates |= self._passive_root  # multi-source passive hits (incl. crt.sh), gathered for the root
         return await self._resolve_and_probe(candidates, domain, always_keep={domain})
 
     async def _resolve_and_probe(
@@ -215,6 +211,20 @@ class SubdomainDiscoverer:
         """Discover live in-scope hosts under ``domain`` (+ any manual seeds), recursively: found
         subdomains are themselves enumerated up to ``recursion_depth``, so nested hosts aren't missed."""
         domain = domain.strip().lower().lstrip("*.").rstrip(".")
+        self._root = domain
+        # Multi-source passive gathering: one query per source for the root domain (CT logs, passive DNS,
+        # URL archives, cert SANs, + premium if keyed). Results are scope-gated/validated like everything
+        # else, so a passive host that doesn't resolve or answer is dropped.
+        if self._use_passive and domain:
+            gather = self._passive_gather
+            if gather is None:
+                from dastcore.discovery.passive_sources import gather_passive_subdomains
+
+                gather = gather_passive_subdomains
+            try:
+                self._passive_root = await gather(domain)
+            except Exception:  # noqa: BLE001 — passive gathering is best-effort, never fatal
+                self._passive_root = set()
         found: dict[str, DiscoveredHost] = {}
         visited: set[str] = set()
         queue: list[tuple[str, int]] = []

@@ -12,6 +12,8 @@ subdomain discovery as a seed. Sources are pluggable; ``fetch_wayback_urls`` is 
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from urllib.parse import parse_qsl, urlsplit
 
@@ -40,16 +42,82 @@ async def fetch_wayback_urls(domain: str, *, limit: int = 5000, timeout: float =
         return []
 
 
+async def fetch_commoncrawl_urls(domain: str, *, limit: int = 5000, timeout: float = 30.0) -> list[str]:
+    """URLs Common Crawl has indexed for ``*.domain`` (newest crawl). Best-effort, fail-open."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            info = await client.get("https://index.commoncrawl.org/collinfo.json")
+            indexes = info.json()
+            if not indexes:
+                return []
+            cdx_api = str(indexes[0]["cdx-api"])  # collinfo is newest-first
+            resp = await client.get(cdx_api, params={"url": f"*.{domain}/*", "output": "json", "limit": str(limit)})
+    except (httpx.HTTPError, OSError, ValueError, KeyError, IndexError, TypeError):
+        return []
+    urls: list[str] = []
+    for line in resp.text.splitlines():
+        try:
+            urls.append(str(json.loads(line)["url"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return urls
+
+
+async def fetch_urlscan_urls(domain: str, *, timeout: float = 20.0) -> list[str]:
+    """URLs urlscan.io has captured for ``domain`` (the scanned page URLs). Best-effort, fail-open."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://urlscan.io/api/v1/search/", params={"q": f"domain:{domain}", "size": "1000"}
+            )
+        return [
+            str((row.get("page") or {}).get("url", ""))
+            for row in resp.json().get("results", [])
+            if (row.get("page") or {}).get("url")
+        ]
+    except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError):
+        return []
+
+
+async def fetch_otx_urls(domain: str, *, timeout: float = 20.0) -> list[str]:
+    """URLs AlienVault OTX has seen for ``domain``. Best-effort, fail-open."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/url_list",
+                params={"limit": "500"},
+            )
+        return [str(row.get("url", "")) for row in resp.json().get("url_list", []) if row.get("url")]
+    except (httpx.HTTPError, OSError, ValueError, AttributeError, TypeError):
+        return []
+
+
+# The default URL archives, run together. Each is passive (hits the archive, not the target) and fail-open.
+_DEFAULT_URL_SOURCES: list[Source] = [
+    fetch_wayback_urls,
+    fetch_commoncrawl_urls,
+    fetch_urlscan_urls,
+    fetch_otx_urls,
+]
+
+
 async def gather_historical_urls(domain: str, *, sources: list[Source] | None = None) -> list[str]:
-    """Run every source for ``domain`` and return the deduplicated union of URLs."""
+    """Run every source for ``domain`` concurrently and return the deduplicated union of URLs.
+
+    Fail-open: sources run independently, so one being down or rate-limited never blocks the others.
+    """
     domain = domain.strip().lower().lstrip("*.").rstrip(".")
     if not domain:
         return []
+    chosen = sources if sources is not None else _DEFAULT_URL_SOURCES
+    results = await asyncio.gather(*(source(domain) for source in chosen), return_exceptions=True)
     seen: set[str] = set()
     ordered: list[str] = []
-    for source in sources or [fetch_wayback_urls]:
-        for url in await source(domain):
-            if url not in seen:
+    for res in results:
+        if not isinstance(res, list):
+            continue  # a source raised -> skip it, keep the rest
+        for url in res:
+            if url and url not in seen:
                 seen.add(url)
                 ordered.append(url)
     return ordered

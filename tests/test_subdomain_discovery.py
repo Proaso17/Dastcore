@@ -72,6 +72,28 @@ async def test_out_of_scope_subdomains_are_never_probed() -> None:
     assert "api.example.com" not in probed  # scope gate ran before any probe
 
 
+async def test_passive_source_hosts_are_probed_and_scope_gated() -> None:
+    # A host found only via a passive source (injected) is still resolved, probed, and scope-gated:
+    # an in-scope one is discovered; an out-of-scope one is never probed.
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+    resolver = _resolver({"example.com": ["10.0.0.1"], "hidden.example.com": ["10.0.0.9"]})
+    prober = _prober({"example.com": _page(200, "home"), "hidden.example.com": _page(200, "secret admin")})
+
+    async def gather(domain: str) -> set[str]:
+        return {"hidden.example.com", "out.evil.com"}  # evil.com is out of scope
+
+    async with HttpClient(scope) as client:
+        disc = SubdomainDiscoverer(
+            client, wordlist=[], resolver=resolver, prober=prober,
+            use_passive=True, use_external=False, passive_gather=gather,
+        )
+        found = await disc.discover("example.com")
+
+    hosts = {h.host for h in found}
+    assert "hidden.example.com" in hosts  # discovered only via the passive source
+    assert "out.evil.com" not in hosts    # out of scope -> never probed
+
+
 async def test_wildcard_dns_does_not_invent_hosts() -> None:
     # every name resolves (wildcard) and most serve the same default page; only a distinct host counts
     scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
