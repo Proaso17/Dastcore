@@ -325,6 +325,23 @@ async def test_bad_target_rerenders_form_with_error(client: httpx.AsyncClient) -
     assert "no se pudo iniciar" in resp.text.lower()
 
 
+async def test_dashboard_scan_honours_a_manual_seed_path(client: httpx.AsyncClient, vuln_app_url: str) -> None:
+    async with client:
+        # /backup is unlinked; only the manually-seeded path (from the form) leads the scan there
+        resp = await client.post(
+            "/scans",
+            data={"target": vuln_app_url, "engine": "http", "rps": "80", "authorization": "on", "seed_paths": "backup"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        scan_id = resp.headers["location"].rsplit("/", 1)[-1]
+        await _wait_done(client, scan_id)
+        findings = (await client.get(f"/scans/{scan_id}/findings.json")).json()
+    assert any("/backup" in (f.get("request", {}) or {}).get("url", "") for f in findings), (
+        "the seed path entered in the dashboard should have been scanned"
+    )
+
+
 async def test_scan_rejects_a_missing_custom_wordlist(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.post(

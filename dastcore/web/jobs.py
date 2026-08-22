@@ -49,6 +49,8 @@ class ScanRequest:
     discover_depth: str = "aggressive"
     content_wordlist: str = ""  # optional path to a custom paths list (e.g. SecLists); "" = built-in
     subdomain_wordlist: str = ""  # optional path to a custom subdomains list; "" = built-in
+    seed_hosts: list[str] = field(default_factory=list)  # known hosts to always include in discovery
+    seed_paths: list[str] = field(default_factory=list)  # known paths to always probe on each host
     allow_domains: list[str] = field(default_factory=list)
     # Embedded-chatbot ("ai --discover") scans: a second identity for the cross-tenant checks.
     victim_bearer: str = ""
@@ -152,6 +154,8 @@ class ScanManager:
                 discover_depth=req.discover_depth,
                 content_wordlist=req.content_wordlist,
                 subdomain_wordlist=req.subdomain_wordlist,
+                seed_hosts=req.seed_hosts,
+                seed_paths=req.seed_paths,
             )
         )
         self._tasks.add(task)
@@ -212,6 +216,8 @@ class ScanManager:
         discover_depth: str = "aggressive",
         content_wordlist: str = "",
         subdomain_wordlist: str = "",
+        seed_hosts: list[str] | None = None,
+        seed_paths: list[str] | None = None,
     ) -> None:
         started = time.monotonic()
         try:
@@ -227,6 +233,8 @@ class ScanManager:
                 discover_depth=discover_depth,
                 content_wordlist=content_wordlist,
                 subdomain_wordlist=subdomain_wordlist,
+                seed_hosts=seed_hosts or [],
+                seed_paths=seed_paths or [],
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

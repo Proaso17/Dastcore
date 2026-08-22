@@ -158,7 +158,21 @@
               <option value="balanced">Equilibrada</option>
               <option value="light">Ligera (rápida)</option>
             </select>
+            <p class="hint" style="margin-top:5px">El descubrimiento es <strong>recursivo</strong> (subdominios de
+              subdominios y directorios anidados) según la profundidad, para no dejarse ninguna ruta.</p>
           </div>
+          <div class="row" style="margin-top:14px">
+            <div>
+              <label for="seed_hosts">Hosts que ya conoces <span class="muted">(uno por línea, opcional)</span></label>
+              <textarea id="seed_hosts" name="seed_hosts" rows="3" placeholder="api.midominio.com&#10;admin.midominio.com"></textarea>
+            </div>
+            <div>
+              <label for="seed_paths">Rutas que ya conoces <span class="muted">(una por línea, opcional)</span></label>
+              <textarea id="seed_paths" name="seed_paths" rows="3" placeholder="/panel&#10;/api/v1/users"></textarea>
+            </div>
+          </div>
+          <p class="hint" style="margin:2px 0 10px">Lo que escribas aquí se <strong>incluye siempre</strong> en el
+            escaneo (se prueba y se analiza), y además el descubrimiento automático sigue su curso.</p>
           <details class="guide" style="margin-top:12px">
             <summary>Diccionarios propios (avanzado)</summary>
             <div class="gbody">

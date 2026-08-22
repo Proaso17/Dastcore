@@ -181,6 +181,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         discover_depth: str = Form("aggressive"),
         content_wordlist: str = Form(""),
         subdomain_wordlist: str = Form(""),
+        seed_hosts: str = Form(""),
+        seed_paths: str = Form(""),
         authorization: str = Form(""),
     ) -> Response:
         target = target.strip()
@@ -229,6 +231,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                         ),
                         content_wordlist=content_wordlist.strip(),
                         subdomain_wordlist=subdomain_wordlist.strip(),
+                        seed_hosts=[s.strip() for s in seed_hosts.splitlines() if s.strip()],
+                        seed_paths=[s.strip() for s in seed_paths.splitlines() if s.strip()],
                     )
                 )
         except Exception as exc:  # noqa: BLE001 — bad target/config -> re-render the form with the reason
