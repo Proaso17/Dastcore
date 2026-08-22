@@ -92,6 +92,7 @@ from dastcore.detectors.shellshock import check_shellshock
 from dastcore.detectors.spa import run_spa_check
 from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
+from dastcore.detectors.user_enum import run_user_enumeration_checks
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
 from dastcore.discovery.activate import activate_endpoints
@@ -321,6 +322,32 @@ def _print_summary(findings: list[Finding], duration_s: float) -> None:
             border_style="cyan",
         )
     )
+
+
+_CAPABILITY_LABEL = {
+    "full": ("green", "cubierto"),
+    "partial": ("yellow", "parcial"),
+    "none": ("dim", "no aplica (black-box)"),
+}
+
+
+def _print_owasp_coverage(findings: list[Finding]) -> None:
+    """Show the OWASP Top 10 (2021) rollup: what was tested across the surface and what turned up."""
+    from dastcore.owasp import summarize
+
+    table = Table(title="Cobertura OWASP Top 10 (2021)", title_style="bold", show_lines=False)
+    table.add_column("Categoría")
+    table.add_column("Análisis", justify="center")
+    table.add_column("Hallazgos", justify="right")
+    table.add_column("Peor severidad")
+    for row in summarize(findings):
+        style, label = _CAPABILITY_LABEL.get(str(row["capability"]), ("white", str(row["capability"])))
+        count = int(row["count"])  # type: ignore[call-overload]
+        sev = row["worst_severity"]
+        sev_cell = f"[{_SEVERITY_STYLE.get(str(sev), 'white')}]{sev}[/]" if sev else "[dim]—[/dim]"
+        count_cell = f"[bold]{count}[/bold]" if count else "[dim]0[/dim]"
+        table.add_row(f"{row['code']} · {row['name']}", f"[{style}]{label}[/{style}]", count_cell, sev_cell)
+    console.print(table)
 
 
 def _load_suppressions_or_exit(explicit_path: str) -> list[Suppression]:
@@ -874,6 +901,7 @@ async def _run_scan(
             extra_findings.extend(await phase("deserialization", run_deserialization_checks(client, all_requests, oast)))
             extra_findings.extend(await phase("oauth", run_oauth_checks(client, all_requests)))
             extra_findings.extend(await phase("access-bypass", run_access_bypass_checks(client, all_requests)))
+            extra_findings.extend(await phase("user-enumeration", run_user_enumeration_checks(client, all_requests)))
             extra_findings.extend(await phase("response-splitting", run_response_splitting_checks(client, all_requests)))
             extra_findings.extend(await phase("ssi", run_ssi_checks(client, all_requests)))
             extra_findings.extend(await phase("code-injection", run_code_injection_checks(client, all_requests)))
@@ -1751,6 +1779,7 @@ def _emit_report_and_gate(
             console.print()
             _print_findings_table(active)
             _print_summary(active, duration_s)
+            _print_owasp_coverage(active)
             if suppressed:
                 _print_suppressed_note(suppressed)
             if ai_triage:

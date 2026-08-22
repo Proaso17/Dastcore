@@ -27,6 +27,7 @@ from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
 from dastcore.core.models import Finding
 from dastcore.httpsec import add_csrf_protection, add_error_pages, add_security_headers
 from dastcore.obslog import add_request_logging
+from dastcore.owasp import summarize as owasp_summarize
 from dastcore.report import render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate
 from dastcore.report.remediation import guide_for
@@ -139,9 +140,11 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 # Triage: accepted / false-positive findings drop out of the issues table
                 # into a separate "aceptados" section (they still live in the stored JSON).
                 apply_suppressions(findings, store.build_suppressions())
-                ctx["issues"] = correlate([f for f in findings if not f.suppressed])
+                active = [f for f in findings if not f.suppressed]
+                ctx["issues"] = correlate(active)
                 ctx["accepted"] = correlate([f for f in findings if f.suppressed])
                 ctx["chains"] = correlate_chains(findings)  # exploit paths across the active findings
+                ctx["owasp"] = owasp_summarize(active)  # OWASP Top 10 coverage rollup
         return ctx, True
 
     def _with_triage(scan: ScanRow, suppressions: list) -> ScanRow:

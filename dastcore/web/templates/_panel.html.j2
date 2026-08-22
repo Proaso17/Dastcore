@@ -85,6 +85,29 @@
     {% endfor %}
   </div>
   {% endif %}
+  {% if owasp %}
+  {% set cap_label = {'full':'cubierto','partial':'parcial','none':'no aplica'} %}
+  <div class="owasp">
+    <div class="owasp-head">
+      <strong>🛡 Cobertura OWASP Top 10 (2021)</strong>
+      <span class="muted">qué se analizó en toda la superficie descubierta y qué apareció</span>
+    </div>
+    <div class="owasp-grid">
+      {% for cat in owasp %}
+      <div class="owasp-cat cap-{{ cat.capability }}{% if cat.count %} has-findings{% endif %}"
+           title="{{ cap_label[cat.capability] }} · {{ cat.count }} hallazgo(s)">
+        <div class="oc-top">
+          <span class="oc-code">{{ cat.code }}</span>
+          {% if cat.count %}<span class="badge sev-{{ cat.worst_severity }}">{{ cat.count }}</span>
+          {% else %}<span class="oc-zero">0</span>{% endif %}
+        </div>
+        <div class="oc-name">{{ cat.name }}</div>
+        <div class="oc-cap">{{ cap_label[cat.capability] }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
   {% if issues %}
   {% set top = issues[0] %}
   <div class="triage-lead lead-{{ top.severity }}">

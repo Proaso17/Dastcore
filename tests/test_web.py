@@ -113,6 +113,9 @@ async def test_full_scan_flow_finds_planted_vulns(client: httpx.AsyncClient, min
         # each issue carries an inline, actionable remediation guide
         assert "Cómo solucionarlo" in panel.text
         assert "parameterized queries" in panel.text  # a concrete fix step
+        # OWASP Top 10 coverage rollup is shown, with the SQLi mapped to A03 Injection
+        assert "Cobertura OWASP Top 10" in panel.text
+        assert "A03" in panel.text and "Injection" in panel.text
         assert "cheatsheetseries.owasp.org" in panel.text  # a reference link
 
         # history shows the finished run
