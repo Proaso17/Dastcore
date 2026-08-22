@@ -51,6 +51,7 @@ class ScanRequest:
     subdomain_wordlist: str = ""  # optional path to a custom subdomains list; "" = built-in
     seed_hosts: list[str] = field(default_factory=list)  # known hosts to always include in discovery
     seed_paths: list[str] = field(default_factory=list)  # known paths to always probe on each host
+    mine_params: bool = False  # Arjun-style hidden parameter discovery on the discovered endpoints
     allow_domains: list[str] = field(default_factory=list)
     # Embedded-chatbot ("ai --discover") scans: a second identity for the cross-tenant checks.
     victim_bearer: str = ""
@@ -158,6 +159,7 @@ class ScanManager:
                 seed_paths=req.seed_paths,
                 use_historical=req.discover_content and not_quick,  # historical is part of surface discovery
                 use_js=req.discover_content and not_quick,  # JS endpoint extraction too
+                mine_params=req.mine_params and not_quick,
             )
         )
         self._tasks.add(task)
@@ -222,6 +224,7 @@ class ScanManager:
         seed_paths: list[str] | None = None,
         use_historical: bool = False,
         use_js: bool = False,
+        mine_params: bool = False,
     ) -> None:
         started = time.monotonic()
         try:
@@ -241,6 +244,7 @@ class ScanManager:
                 seed_paths=seed_paths or [],
                 use_historical=use_historical,
                 use_js=use_js,
+                mine_params=mine_params,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

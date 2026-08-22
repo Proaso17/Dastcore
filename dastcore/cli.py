@@ -107,6 +107,7 @@ from dastcore.discovery.graphql import discover_graphql
 from dastcore.discovery.historical import gather_historical_urls, prioritise, url_to_request
 from dastcore.discovery.js_endpoints import JsEndpointDiscoverer
 from dastcore.discovery.openapi import fetch_and_parse_openapi
+from dastcore.discovery.params import load_param_wordlist, mine_hidden_params
 from dastcore.discovery.subdomains import (
     SubdomainDiscoverer,
     load_subdomain_wordlist,
@@ -628,6 +629,7 @@ async def _run_scan(
     subdomain_recursion: int = -1,
     use_historical: bool = False,
     use_js: bool = False,
+    mine_params: bool = False,
     findings_log: str = "",
     surface: dict[str, Any] | None = None,
     ai_payloads: AiPayloadGenerator | None = None,
@@ -825,6 +827,13 @@ async def _run_scan(
                 waf_evasion=waf_evasion,
                 ai_payloads=ai_payloads,
             )
+            if mine_params:
+                # Find undocumented query params on the discovered endpoints — each is a new injection point.
+                progress.status("Descubriendo parámetros ocultos (estilo Arjun)…")
+                seeds_for_mining = [HttpRequest(method="GET", url=r) for r in scan_roots] + list(discovered.values())
+                for enriched in await mine_hidden_params(client, seeds_for_mining, load_param_wordlist(discover_depth)):
+                    discovered.setdefault(enriched.signature(), enriched)
+
             all_requests = list(discovered.values())
             extra_findings.extend(await phase("shellshock", check_shellshock(client, all_requests)))
             extra_findings.extend(await phase("nosql", run_nosql_checks(client, all_requests)))
@@ -1237,6 +1246,12 @@ def scan(
         help="Con el descubrimiento activo, extrae endpoints de los bundles JavaScript (SPAs modernas: "
         "Next.js, React…). --no-js para desactivarlo.",
     ),
+    mine_params: bool = typer.Option(
+        False,
+        "--mine-params",
+        help="Descubre parámetros ocultos (estilo Arjun) en los endpoints descubiertos: cada uno es un nuevo "
+        "punto de inyección. Intrusivo (varias peticiones por endpoint); no se activa en el perfil 'quick'.",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1556,6 +1571,7 @@ def scan(
                     and profile != "quick"
                     and historical,
                     use_js=(discover or discover_content or discover_subdomains) and profile != "quick" and js,
+                    mine_params=mine_params and profile != "quick",
                     findings_log=findings_log,
                     surface=surface,
                     ai_payloads=payload_generator,
