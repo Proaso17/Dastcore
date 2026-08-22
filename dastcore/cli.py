@@ -2507,6 +2507,33 @@ def report_cmd(
         console.print(draft)
 
 
+@app.command("seclists")
+def seclists_cmd(
+    install: bool = typer.Option(
+        False, "--install", help="Descarga los diccionarios de SecLists (grandes, ~35 MB, una sola vez)."
+    ),
+) -> None:
+    """Gestiona los diccionarios de SecLists para el descubrimiento (subdominios, rutas, parámetros).
+
+    Sin flags, muestra qué diccionarios están descargados. Con --install los descarga a
+    ~/.dastcore/seclists; luego se seleccionan por nombre (--content-wordlist seclists-content, etc.)
+    o desde el desplegable del panel."""
+    from dastcore.discovery.seclists import download_presets, seclists_dir, status
+
+    if install:
+        console.print(f"[green]Descargando SecLists a[/green] [bold]{seclists_dir()}[/bold] …")
+        done = asyncio.run(download_presets(on_progress=lambda n: console.print(f"  [dim]✓ {n}[/dim]")))
+        console.print(f"\n[bold green]Listo:[/bold green] {len(done)} diccionario(s) disponibles.\n")
+
+    console.print(f"[bold]SecLists[/bold]  ·  {seclists_dir()}")
+    for row in status():
+        mark = "[green]✓[/green]" if row["downloaded"] else "[dim]—[/dim]"
+        size = f"{int(row['size']) / 1024 / 1024:.1f} MB" if row["downloaded"] else ""  # type: ignore[call-overload]
+        console.print(f"  {mark} [bold]{row['name']}[/bold]  [dim]({row['category']})[/dim]  {size}")
+    if not any(r["downloaded"] for r in status()):
+        console.print("\n[yellow]Aún no hay diccionarios.[/yellow] Ejecuta [bold]dastcore seclists --install[/bold].")
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Interfaz donde escuchar. 127.0.0.1 = solo local."),

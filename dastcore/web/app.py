@@ -159,11 +159,37 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         scan.accepted = len(findings) - len(active)
         return scan
 
+    from dastcore.discovery import seclists
+
+    _seclists_state = {"installing": False}
+
+    def _seclists_ctx() -> dict[str, object]:
+        return {
+            "seclists_content": seclists.installed_presets("content"),
+            "seclists_subdomains": seclists.installed_presets("subdomains"),
+            "seclists_installed": seclists.is_installed(),
+            "seclists_installing": _seclists_state["installing"],
+        }
+
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> HTMLResponse:
         suppressions = store.build_suppressions()
         scans = [_with_triage(s, suppressions) for s in store.list_scans()]
-        return render("dashboard.html.j2", scans=scans)
+        return render("dashboard.html.j2", scans=scans, **_seclists_ctx())
+
+    @app.post("/seclists/install")
+    async def install_seclists() -> Response:
+        if not _seclists_state["installing"]:
+            _seclists_state["installing"] = True
+
+            async def _run_install() -> None:
+                try:
+                    await seclists.download_presets()
+                finally:
+                    _seclists_state["installing"] = False
+
+            asyncio.create_task(_run_install())
+        return RedirectResponse("/", status_code=303)
 
     @app.post("/scans")
     async def start_scan(
@@ -190,15 +216,18 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
 
         def form_error(message: str) -> Response:
             return HTMLResponse(
-                env.get_template("dashboard.html.j2").render(scans=store.list_scans(), target=target, error=message),
+                env.get_template("dashboard.html.j2").render(
+                    scans=store.list_scans(), target=target, error=message, **_seclists_ctx()
+                ),
                 status_code=400,
             )
 
         if authorization != "on":
             return form_error("Debes confirmar que tienes autorización para escanear el objetivo.")
-        # Custom wordlists are read from disk on this machine — fail clearly if the path is wrong.
+        # A wordlist can be a SecLists preset (a name) or a custom file on this machine — only a raw path
+        # that doesn't exist is an error.
         for label, path in (("rutas", content_wordlist.strip()), ("subdominios", subdomain_wordlist.strip())):
-            if path and not Path(path).is_file():
+            if path and not seclists.is_preset(path) and not Path(path).is_file():
                 return form_error(f"El diccionario de {label} no existe: {path}")
         if engine not in ("http", "headless", "both"):
             engine = "http"
@@ -240,7 +269,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         except Exception as exc:  # noqa: BLE001 — bad target/config -> re-render the form with the reason
             return HTMLResponse(
                 env.get_template("dashboard.html.j2").render(
-                    scans=store.list_scans(), target=target, error=f"No se pudo iniciar: {exc}"
+                    scans=store.list_scans(), target=target, error=f"No se pudo iniciar: {exc}", **_seclists_ctx()
                 ),
                 status_code=400,
             )

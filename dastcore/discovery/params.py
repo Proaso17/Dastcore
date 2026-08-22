@@ -24,7 +24,10 @@ _DEPTH_LIMITS: dict[str, int | None] = {"light": 100, "balanced": 250, "aggressi
 
 
 def load_param_wordlist(depth: str = "balanced", path: str | Path | None = None) -> list[str]:
-    source = Path(path) if path else _WORDLISTS / "params.txt"
+    from dastcore.discovery.seclists import resolve_wordlist
+
+    resolved = resolve_wordlist("params", path)
+    source = Path(resolved) if resolved else _WORDLISTS / "params.txt"
     seen: set[str] = set()
     words: list[str] = []
     for line in source.read_text(encoding="utf-8", errors="ignore").splitlines():

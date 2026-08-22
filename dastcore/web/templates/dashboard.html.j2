@@ -182,15 +182,37 @@
           <p class="hint" style="margin:2px 0 10px">Busca parámetros no documentados (<code>?debug=</code>,
             <code>?admin=</code>…) que el servidor sí procesa — cada uno es un nuevo punto de inyección. Más intrusivo.</p>
           <details class="guide" style="margin-top:12px">
-            <summary>Diccionarios propios (avanzado)</summary>
+            <summary>Diccionarios (avanzado)</summary>
             <div class="gbody">
-              <p class="hint" style="margin:0 0 10px">dastcore ya trae diccionarios grandes. Si quieres máxima
-                cobertura, indica la ruta de un diccionario propio (p. ej. de
-                <strong>SecLists</strong>) en <strong>esta misma máquina</strong>. Déjalo vacío para usar el integrado.</p>
-              <label for="content_wordlist">Diccionario de rutas / directorios</label>
-              <input id="content_wordlist" name="content_wordlist" placeholder="C:\ruta\SecLists\...\directory-list.txt">
-              <label for="subdomain_wordlist" style="margin-top:8px">Diccionario de subdominios</label>
-              <input id="subdomain_wordlist" name="subdomain_wordlist" placeholder="C:\ruta\SecLists\...\subdomains.txt">
+              <div class="row">
+                <div>
+                  <label for="content_wordlist">Diccionario de rutas / directorios</label>
+                  <select id="content_wordlist" name="content_wordlist">
+                    <option value="">Integrado (recomendado)</option>
+                    {% for preset, label in (seclists_content or []) %}<option value="{{ preset }}">{{ label }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div>
+                  <label for="subdomain_wordlist">Diccionario de subdominios</label>
+                  <select id="subdomain_wordlist" name="subdomain_wordlist">
+                    <option value="">Integrado (recomendado)</option>
+                    {% for preset, label in (seclists_subdomains or []) %}<option value="{{ preset }}">{{ label }}</option>{% endfor %}
+                  </select>
+                </div>
+              </div>
+              {% if seclists_installing %}
+              <p class="hint" style="margin:10px 0 0"><span class="spin"></span> Descargando <strong>SecLists</strong>…
+                recarga esta página en unos minutos y aparecerán en los desplegables.</p>
+              {% elif seclists_installed %}
+              <p class="hint" style="margin:10px 0 0">✓ <strong>SecLists</strong> disponible en los desplegables.
+                <form method="post" action="/seclists/install" style="display:inline">
+                  <button type="submit" class="ghost" style="padding:2px 10px;font-size:12px">Actualizar</button></form></p>
+              {% else %}
+              <p class="hint" style="margin:10px 0 0">¿Quieres diccionarios <strong>enormes</strong> (SecLists)? Descárgalos
+                una vez (~35 MB) y quedarán disponibles aquí para todos los escaneos.
+                <form method="post" action="/seclists/install" style="display:inline">
+                  <button type="submit" style="padding:2px 10px;font-size:12px">Descargar SecLists</button></form></p>
+              {% endif %}
             </div>
           </details>
         </div>

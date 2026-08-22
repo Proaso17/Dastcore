@@ -66,8 +66,11 @@ class DiscoveredEndpoint:
 
 
 def load_content_wordlist(depth: str = "aggressive", path: str | Path | None = None) -> list[str]:
-    """Load the built-in content wordlist (or a user file) and slice it to ``depth``."""
-    source = Path(path) if path else _WORDLISTS / "content.txt"
+    """Load the built-in content wordlist (a SecLists preset, or a user file) and slice it to ``depth``."""
+    from dastcore.discovery.seclists import resolve_wordlist
+
+    resolved = resolve_wordlist("content", path)
+    source = Path(resolved) if resolved else _WORDLISTS / "content.txt"
     seen: set[str] = set()
     words: list[str] = []
     for line in source.read_text(encoding="utf-8", errors="ignore").splitlines():
