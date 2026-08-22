@@ -42,6 +42,10 @@ class ScanRequest:
     concurrency: int = 5
     auth_bearer: str = ""
     auth_cookie: str = ""  # "name=value"
+    # Form login: the scanner POSTs credentials to login_url and reuses the session (with auto-relogin),
+    # so it can reach a SPA's authenticated API. login_fields is "name=value" per line.
+    login_url: str = ""
+    login_fields: list[str] = field(default_factory=list)
     prove_impact: bool = False  # enrich confirmed findings with bounded, read-only proof of impact
     # Full-surface discovery: enumerate in-scope subdomains and/or brute-force hidden paths, then scan each.
     discover_subdomains: bool = False
@@ -117,8 +121,8 @@ class ScanManager:
             auth_cookie=auth_cookie,
             auth_header=[],
             auth_bearer=req.auth_bearer,
-            login_url="",
-            login_field=[],
+            login_url=req.login_url,
+            login_field=list(req.login_fields),
             oauth_token_url="",
             oauth_client_id="",
             oauth_client_secret="",

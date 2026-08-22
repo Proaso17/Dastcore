@@ -54,6 +54,23 @@ async def test_add_custom_wordlist_shows_in_dropdown(client: httpx.AsyncClient, 
     assert "Propio · mi-rutas" in home.text  # the custom list is now an option in the dropdown
 
 
+def test_form_login_builds_form_auth(tmp_path) -> None:
+    from dastcore.web.jobs import ScanManager, ScanRequest
+
+    mgr = ScanManager(Store(tmp_path / "db.sqlite"))
+    req = ScanRequest(
+        target="https://app.test/",
+        login_url="https://app.test/api/auth/login",
+        login_fields=["email=u@app.test", "password=secret"],
+        allow_domains=["app.test"],
+    )
+    config, _engine, _pages = mgr._build_config(req)
+    assert config.auth.type == "form"
+    assert config.auth.form is not None
+    assert config.auth.form.login_url == "https://app.test/api/auth/login"
+    assert config.auth.form.credentials == {"email": "u@app.test", "password": "secret"}
+
+
 async def test_add_custom_wordlist_requires_source(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.post(

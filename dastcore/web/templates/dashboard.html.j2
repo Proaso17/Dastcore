@@ -267,6 +267,21 @@
             <input id="auth_cookie" name="auth_cookie" placeholder="sid=abc123">
           </div>
         </div>
+        <details data-mode="scan" class="guide" style="margin-top:12px">
+          <summary>Iniciar sesión con usuario y contraseña (form-login)</summary>
+          <div class="gbody">
+            <p class="hint" style="margin:0 0 10px">Si no tienes un token a mano, deja que el escáner
+              <strong>inicie sesión solo</strong>: envía las credenciales al endpoint de login y reutiliza la
+              sesión (con re-login automático si caduca). Así llega a la API autenticada de la app.</p>
+            <label for="login_url">URL de login</label>
+            <input id="login_url" name="login_url" type="url" placeholder="https://tuapp.com/api/auth/login">
+            <label for="login_fields" style="margin-top:8px">Credenciales (una <code>campo=valor</code> por línea)</label>
+            <textarea id="login_fields" name="login_fields" rows="2"
+              placeholder="email=usuario@tuapp.com&#10;password=tu-contraseña"></textarea>
+            <p class="hint" style="margin:8px 0 0">Los nombres de campo (<code>email</code>, <code>username</code>,
+              <code>password</code>…) son los que espera tu endpoint de login. El login gana sobre el token/cookie.</p>
+          </div>
+        </details>
         <div data-mode="ai" hidden>
           <p class="hint" style="margin:14px 0 10px">
             Para detectar <strong>fugas entre cuentas</strong> (BOLA/BFLA vía el asistente) añade una segunda
@@ -336,8 +351,10 @@
             rows.push(['Motor', els.engine.options[els.engine.selectedIndex].text]);
             rows.push(['Ritmo', els.rps.value + ' req/s']);
           }
+          var loginUrl = form.querySelector('[name=login_url]');
           var hasAuth = els.auth_bearer.value.trim()
             || (els.auth_cookie && els.auth_cookie.value.trim())
+            || (loginUrl && loginUrl.value.trim())
             || (els.victim_bearer && els.victim_bearer.value.trim());
           rows.push(['Autenticación', hasAuth ? 'Configurada' : 'Sin autenticación']);
           document.getElementById('recap').innerHTML = rows.map(function (r) {
