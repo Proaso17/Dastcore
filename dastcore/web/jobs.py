@@ -156,6 +156,7 @@ class ScanManager:
                 subdomain_wordlist=req.subdomain_wordlist,
                 seed_hosts=req.seed_hosts,
                 seed_paths=req.seed_paths,
+                use_historical=req.discover_content and not_quick,  # historical is part of surface discovery
             )
         )
         self._tasks.add(task)
@@ -218,6 +219,7 @@ class ScanManager:
         subdomain_wordlist: str = "",
         seed_hosts: list[str] | None = None,
         seed_paths: list[str] | None = None,
+        use_historical: bool = False,
     ) -> None:
         started = time.monotonic()
         try:
@@ -235,6 +237,7 @@ class ScanManager:
                 subdomain_wordlist=subdomain_wordlist,
                 seed_hosts=seed_hosts or [],
                 seed_paths=seed_paths or [],
+                use_historical=use_historical,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

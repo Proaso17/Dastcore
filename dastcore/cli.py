@@ -104,6 +104,7 @@ from dastcore.discovery.content import (
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
+from dastcore.discovery.historical import gather_historical_urls, prioritise, url_to_request
 from dastcore.discovery.openapi import fetch_and_parse_openapi
 from dastcore.discovery.subdomains import (
     SubdomainDiscoverer,
@@ -624,6 +625,7 @@ async def _run_scan(
     seed_hosts: Sequence[str] = (),
     seed_paths: Sequence[str] = (),
     subdomain_recursion: int = -1,
+    use_historical: bool = False,
     findings_log: str = "",
     surface: dict[str, Any] | None = None,
     ai_payloads: AiPayloadGenerator | None = None,
@@ -676,11 +678,37 @@ async def _run_scan(
             # Full-surface scanning: expand the single target into every in-scope host we can find,
             # then crawl + brute-force paths on each. Both stages are opt-in and scope-enforced.
             scan_roots = [target]
-            if discover_subdomains or seed_hosts:
+            seed_host_pool = list(seed_hosts)
+            historical_requests: list[HttpRequest] = []
+            if use_historical:
+                from urllib.parse import urlsplit
+
+                thost = urlsplit(target).hostname or ""
+                if thost and not _looks_like_ip(thost):
+                    progress.status("Minando URLs históricas (Wayback)…")
+                    hist_hosts: set[str] = set()
+                    reqs: list[HttpRequest] = []
+                    for hist_url in await gather_historical_urls(_base_domain(thost)):  # passive: hits the archive
+                        req = url_to_request(hist_url)
+                        if req is None or not client.is_in_scope(req.url):  # scope-gate before anything is scanned
+                            continue
+                        found_host = urlsplit(req.url).hostname
+                        if found_host:
+                            hist_hosts.add(found_host)
+                        reqs.append(req)
+                    historical_requests = prioritise(reqs, limit=3000)  # parametrised URLs first, then capped
+                    seed_host_pool.extend(hist_hosts)
+                    progress.status(f"Histórico: {len(historical_requests)} endpoint(s) en scope, {len(hist_hosts)} host(s).")
+                    if surface is not None:
+                        surface["historical"] = {"endpoints": len(historical_requests), "hosts": sorted(hist_hosts)}
+
+            if discover_subdomains or seed_host_pool:
                 scan_roots = await _discover_scan_roots(
                     client, target, discover_depth, progress, subdomain_wordlist,
-                    seeds=seed_hosts, recursion=subdomain_recursion, auto=discover_subdomains,
+                    seeds=seed_host_pool, recursion=subdomain_recursion, auto=discover_subdomains,
                 )
+            for historical_req in historical_requests:  # historical endpoints (with their params) get scanned
+                discovered.setdefault(historical_req.signature(), historical_req)
             if surface is not None:
                 surface["roots"] = list(scan_roots)
                 surface.setdefault("content", {})
@@ -1188,6 +1216,12 @@ def scan(
     subdomain_recursion: int = typer.Option(
         -1, "--subdomain-recursion", help="Niveles de recursión de subdominios (-1 = según profundidad)."
     ),
+    historical: bool = typer.Option(
+        True,
+        "--historical/--no-historical",
+        help="Con el descubrimiento activo, mina URLs históricas (Wayback) — pasivo, sus parámetros son "
+        "puntos de inyección. --no-historical para desactivarlo.",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1503,6 +1537,9 @@ def scan(
                     seed_hosts=seed_hosts,
                     seed_paths=seed_paths,
                     subdomain_recursion=subdomain_recursion,
+                    use_historical=(discover or discover_content or discover_subdomains)
+                    and profile != "quick"
+                    and historical,
                     findings_log=findings_log,
                     surface=surface,
                     ai_payloads=payload_generator,
