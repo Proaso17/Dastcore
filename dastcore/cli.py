@@ -105,7 +105,11 @@ from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavaila
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
 from dastcore.discovery.openapi import fetch_and_parse_openapi
-from dastcore.discovery.subdomains import SubdomainDiscoverer, load_subdomain_wordlist
+from dastcore.discovery.subdomains import (
+    SubdomainDiscoverer,
+    load_subdomain_wordlist,
+    subdomain_recursion_depth,
+)
 from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import load_rules
@@ -550,18 +554,37 @@ def _base_domain(host: str) -> str:
 
 
 async def _discover_scan_roots(
-    client: HttpClient, target: str, depth: str, progress: _ProgressAdapter, wordlist_path: str = ""
+    client: HttpClient,
+    target: str,
+    depth: str,
+    progress: _ProgressAdapter,
+    wordlist_path: str = "",
+    seeds: Sequence[str] = (),
+    recursion: int = -1,
+    auto: bool = True,
 ) -> list[str]:
-    """Expand a target URL into itself + every live, in-scope subdomain we can discover."""
+    """Expand a target URL into itself + every live, in-scope host we can find.
+
+    ``auto`` runs the automatic sweep (wordlist + passive + recursion); ``seeds`` are known hosts always
+    probed and scanned (and recursed into). With ``auto=False`` only the seeds are probed (no sweep)."""
     from urllib.parse import urlsplit
 
     host = urlsplit(target).hostname or ""
     roots = [target]
-    if not host or _looks_like_ip(host):
-        return roots  # a bare IP (or no host) has no domain to expand
-    progress.status("Descubriendo subdominios…")
-    words = load_subdomain_wordlist(depth, wordlist_path or None)
-    found = await SubdomainDiscoverer(client, wordlist=words).discover(_base_domain(host))
+    base = "" if (not host or _looks_like_ip(host)) else _base_domain(host)
+    if not base and not seeds:
+        return roots  # a bare IP with no seeds has nothing to expand
+    progress.status("Descubriendo subdominios…" if auto else "Sondeando hosts semilla…")
+    words = load_subdomain_wordlist(depth, wordlist_path or None) if auto else []
+    depth_recursion = subdomain_recursion_depth(depth) if recursion < 0 else recursion
+    found = await SubdomainDiscoverer(
+        client,
+        wordlist=words,
+        seeds=list(seeds),
+        recursion_depth=depth_recursion,
+        use_passive=auto,
+        use_external=auto,
+    ).discover(base)
     seen = {host}
     for discovered_host in found:
         if discovered_host.host not in seen:
@@ -598,6 +621,9 @@ async def _run_scan(
     discover_depth: str = "aggressive",
     content_wordlist: str = "",
     subdomain_wordlist: str = "",
+    seed_hosts: Sequence[str] = (),
+    seed_paths: Sequence[str] = (),
+    subdomain_recursion: int = -1,
     findings_log: str = "",
     surface: dict[str, Any] | None = None,
     ai_payloads: AiPayloadGenerator | None = None,
@@ -650,8 +676,11 @@ async def _run_scan(
             # Full-surface scanning: expand the single target into every in-scope host we can find,
             # then crawl + brute-force paths on each. Both stages are opt-in and scope-enforced.
             scan_roots = [target]
-            if discover_subdomains:
-                scan_roots = await _discover_scan_roots(client, target, discover_depth, progress, subdomain_wordlist)
+            if discover_subdomains or seed_hosts:
+                scan_roots = await _discover_scan_roots(
+                    client, target, discover_depth, progress, subdomain_wordlist,
+                    seeds=seed_hosts, recursion=subdomain_recursion, auto=discover_subdomains,
+                )
             if surface is not None:
                 surface["roots"] = list(scan_roots)
                 surface.setdefault("content", {})
@@ -678,10 +707,14 @@ async def _run_scan(
                     for req in headless_reqs:
                         discovered.setdefault(req.signature(), req)
 
-            if discover_content:
-                content_words = load_content_wordlist(discover_depth, content_wordlist or None)
-                extensions = content_extensions(discover_depth)
-                recursion = content_recursion_depth(discover_depth)
+            if discover_content or seed_paths:
+                # Manual seed paths are always tried (first, so they lead the sweep); the auto wordlist
+                # + extensions + recursion only run when content discovery is enabled.
+                seed_words = [p.strip().lstrip("/") for p in seed_paths if p.strip()]
+                base_words = load_content_wordlist(discover_depth, content_wordlist or None) if discover_content else []
+                content_words = list(dict.fromkeys(seed_words + base_words))
+                extensions = content_extensions(discover_depth) if discover_content else []
+                recursion = content_recursion_depth(discover_depth) if discover_content else 1
                 for root in scan_roots:
                     progress.status(f"Descubriendo directorios y rutas (dirbusting) en {root}…")
                     endpoints = await ContentDiscoverer(
@@ -1143,6 +1176,18 @@ def scan(
     subdomain_wordlist: str = typer.Option(
         "", "--subdomain-wordlist", help="Diccionario propio de subdominios (p. ej. de SecLists) en vez del integrado."
     ),
+    seed_host: list[str] = typer.Option(
+        [], "--seed-host", help="Host/subdominio ya conocido a incluir siempre en el escaneo (repetible)."
+    ),
+    seed_path: list[str] = typer.Option(
+        [], "--seed-path", help="Ruta ya conocida a probar siempre en cada host (repetible)."
+    ),
+    seeds_file: str = typer.Option(
+        "", "--seeds-file", help="Fichero con seeds (una por línea): host si contiene un punto, si no ruta."
+    ),
+    subdomain_recursion: int = typer.Option(
+        -1, "--subdomain-recursion", help="Niveles de recursión de subdominios (-1 = según profundidad)."
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1402,6 +1447,18 @@ def scan(
         findings_log = f"{_stem}.partial.jsonl"
         surface_path = f"{_stem}.surface.json"
 
+    # Manual seeds (flags + file): a token with a dot is a known host, otherwise a known path. They're
+    # merged into discovery so the automatic sweep always includes what you already know.
+    seed_hosts, seed_paths = list(seed_host), list(seed_path)
+    if seeds_file:
+        for raw in Path(seeds_file).read_text(encoding="utf-8", errors="ignore").splitlines():
+            entry = raw.strip()
+            if not entry or entry.startswith("#"):
+                continue
+            (seed_hosts if "." in entry.split("/")[0] and "/" not in entry else seed_paths).append(entry)
+    if seed_hosts or seed_paths:
+        info(f"Seeds manuales: [bold]{len(seed_hosts)}[/bold] host(s), [bold]{len(seed_paths)}[/bold] ruta(s)")
+
     info()
     started_at = time.monotonic()
     progress = Progress(
@@ -1443,6 +1500,9 @@ def scan(
                     discover_depth=discover_depth,
                     content_wordlist=content_wordlist,
                     subdomain_wordlist=subdomain_wordlist,
+                    seed_hosts=seed_hosts,
+                    seed_paths=seed_paths,
+                    subdomain_recursion=subdomain_recursion,
                     findings_log=findings_log,
                     surface=surface,
                     ai_payloads=payload_generator,

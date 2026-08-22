@@ -97,6 +97,48 @@ async def test_wildcard_dns_does_not_invent_hosts() -> None:
     assert {h.host for h in found} == {"admin.example.com"}  # www/dev/apex were just the wildcard page
 
 
+async def test_recursive_discovery_finds_nested_subdomains() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+    resolver = _resolver({
+        "example.com": ["10.0.0.1"],
+        "api.example.com": ["10.0.0.2"],
+        "v2.api.example.com": ["10.0.0.3"],  # only reachable by recursing INTO api.example.com
+    })
+    prober = _prober({h: _page(200, h) for h in ("example.com", "api.example.com", "v2.api.example.com")})
+
+    async with HttpClient(scope) as client:
+        deep = SubdomainDiscoverer(
+            client, wordlist=["api", "v2"], resolver=resolver, prober=prober,
+            use_passive=False, use_external=False, recursion_depth=1,
+        )
+        found_deep = {h.host for h in await deep.discover("example.com")}
+        flat = SubdomainDiscoverer(
+            client, wordlist=["api", "v2"], resolver=resolver, prober=prober,
+            use_passive=False, use_external=False, recursion_depth=0,
+        )
+        found_flat = {h.host for h in await flat.discover("example.com")}
+
+    assert found_deep == {"example.com", "api.example.com", "v2.api.example.com"}  # recursion reached v2.api
+    assert "v2.api.example.com" not in found_flat  # ...but a flat sweep never does
+    assert "api.example.com" in found_flat
+
+
+async def test_manual_seed_host_is_always_probed_and_scanned() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+    # the seed isn't a wordlist word and only it resolves — a host the user already knows about
+    resolver = _resolver({"secret.example.com": ["10.0.0.9"]})
+    prober = _prober({"secret.example.com": _page(200, "secret internal app")})
+
+    async with HttpClient(scope) as client:
+        disc = SubdomainDiscoverer(
+            client, wordlist=["www", "api"], resolver=resolver, prober=prober,
+            use_passive=False, use_external=False, seeds=["secret.example.com"],
+        )
+        found = {h.host for h in await disc.discover("example.com")}
+
+    assert "secret.example.com" in found  # the manual seed was included, probed and discovered
+
+
 def test_wordlist_depth_slicing() -> None:
     light = load_subdomain_wordlist("light")
     aggressive = load_subdomain_wordlist("aggressive")

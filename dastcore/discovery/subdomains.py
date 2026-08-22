@@ -31,6 +31,13 @@ from dastcore.core.models import HttpResponse
 
 _WORDLISTS = Path(__file__).parent / "wordlists"
 _DEPTH_LIMITS: dict[str, int | None] = {"light": 50, "balanced": 250, "aggressive": None}
+# How many levels of nested subdomains to recurse into (found host -> enumerate ITS subdomains).
+_RECURSION: dict[str, int] = {"light": 0, "balanced": 1, "aggressive": 2}
+
+
+def subdomain_recursion_depth(depth: str) -> int:
+    return _RECURSION.get(depth, _RECURSION["aggressive"])
+
 
 Resolver = Callable[[str], Awaitable[list[str]]]
 # A prober returns (url, response) for a live host, or None if nothing answered.
@@ -87,6 +94,8 @@ class SubdomainDiscoverer:
         use_passive: bool = True,
         use_external: bool = True,
         probe_timeout: float = 6.0,
+        seeds: list[str] | None = None,
+        recursion_depth: int = 0,
     ) -> None:
         self._client = client
         self._wordlist = wordlist
@@ -96,6 +105,10 @@ class SubdomainDiscoverer:
         self._use_passive = use_passive
         self._use_external = use_external
         self._probe_timeout = probe_timeout  # short per-probe timeout so a slow host doesn't drag
+        # Manual seeds: known hosts to always probe+scan (and recurse into), regardless of the wordlist.
+        self._seeds = [s.strip().lower().lstrip("*.").rstrip(".") for s in (seeds or []) if s.strip()]
+        # Recursive enumeration: after finding subdomains, enumerate THEIR subdomains, up to this depth.
+        self._recursion_depth = max(0, recursion_depth)
 
     async def _probe(self, host: str) -> tuple[str, HttpResponse] | None:
         for scheme in ("https", "http"):
@@ -137,7 +150,9 @@ class SubdomainDiscoverer:
         except Exception:  # noqa: BLE001 — accelerator is best-effort
             return set()
 
-    async def discover(self, domain: str) -> list[DiscoveredHost]:
+    async def _enumerate_and_probe(self, domain: str) -> list[DiscoveredHost]:
+        """One level: enumerate subdomains of ``domain``, scope-gate, resolve and probe them. ``domain``
+        itself is always probed (at this point it's a known/seed host, not a guess)."""
         domain = domain.strip().lower().lstrip("*.").rstrip(".")
         if not domain:
             return []
@@ -160,8 +175,8 @@ class SubdomainDiscoverer:
             resolved = in_scope  # DNS answers everything; the HTTP probe/baseline decides reality
         else:
             async def _resolves(host: str) -> str | None:
-                async with semaphore:
-                    return host if await self._resolver(host) else None
+                async with semaphore:  # the queried domain is always kept; guesses must resolve
+                    return host if (host == domain or await self._resolver(host)) else None
 
             resolved = [host for host in await asyncio.gather(*(_resolves(h) for h in in_scope)) if host]
 
@@ -180,5 +195,29 @@ class SubdomainDiscoverer:
                 return None  # just the wildcard default page, not a distinct host
             return DiscoveredHost(host=host, url=url, status_code=resp.status_code)
 
-        found = [host for host in await asyncio.gather(*(_check(h) for h in resolved)) if host]
-        return sorted(found, key=lambda h: h.host)
+        return [host for host in await asyncio.gather(*(_check(h) for h in resolved)) if host]
+
+    async def discover(self, domain: str) -> list[DiscoveredHost]:
+        """Discover live in-scope hosts under ``domain`` (+ any manual seeds), recursively: found
+        subdomains are themselves enumerated up to ``recursion_depth``, so nested hosts aren't missed."""
+        domain = domain.strip().lower().lstrip("*.").rstrip(".")
+        found: dict[str, DiscoveredHost] = {}
+        visited: set[str] = set()
+        queue: list[tuple[str, int]] = []
+        if domain:
+            queue.append((domain, 0))
+        for seed in self._seeds:  # manual seeds start as roots too: probed, scanned, and recursed into
+            if seed != domain and self._client.is_asset_in_scope(seed):
+                queue.append((seed, 0))
+
+        while queue:
+            base, depth = queue.pop(0)
+            if base in visited:
+                continue
+            visited.add(base)
+            for host in await self._enumerate_and_probe(base):
+                found.setdefault(host.host, host)
+                if depth < self._recursion_depth and host.host != base and host.host not in visited:
+                    queue.append((host.host, depth + 1))
+
+        return sorted(found.values(), key=lambda h: h.host)

@@ -10,7 +10,7 @@ checkpoint means an interrupted hunt continues without rescanning what's already
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -70,8 +70,14 @@ async def run_campaign(
     checkpoint_path: str | Path | None = None,
     adapters: list | None = None,
     on_status: Callable[[str], None] | None = None,
+    discover_depth: str = "light",
+    seed_paths: Sequence[str] = (),
 ) -> CampaignResult:
-    """Discover the program's live in-scope surface and scan it. Recon-only if scanning is forbidden."""
+    """Discover the program's live in-scope surface and scan it. Recon-only if scanning is forbidden.
+
+    Uses the same discovery engine as a plain scan: every live host is dirbusted (recursive route
+    discovery at ``discover_depth``) — plus any manual ``seed_paths`` — before its vulnerabilities are
+    tested, so bug-bounty hunts and scans find the same routes."""
     checker = ScopeChecker(program.to_scope_config())
     opts = recon_opts or ReconOptions()
 
@@ -107,7 +113,15 @@ async def run_campaign(
         if checkpoint.is_done(url):
             continue  # resume: already scanned in a previous run
         status(f"Analizando {index}/{len(live)}: {urlsplit(url).hostname}")
-        found = await _run_scan(program.to_scan_config(url, authorized=authorized), max_pages, engine, budget=budget)
+        found = await _run_scan(
+            program.to_scan_config(url, authorized=authorized),
+            max_pages,
+            engine,
+            budget=budget,
+            discover_content=True,  # dirbust each host's routes (recon already found the hosts)
+            discover_depth=discover_depth,
+            seed_paths=seed_paths,
+        )
         checkpoint.mark_done(url, found)
         checkpoint.save()
         scanned.append(url)
