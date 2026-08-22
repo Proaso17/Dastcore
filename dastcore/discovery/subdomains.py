@@ -96,6 +96,8 @@ class SubdomainDiscoverer:
         probe_timeout: float = 6.0,
         seeds: list[str] | None = None,
         recursion_depth: int = 0,
+        use_permutations: bool = False,
+        permutation_words: list[str] | None = None,
     ) -> None:
         self._client = client
         self._wordlist = wordlist
@@ -109,6 +111,9 @@ class SubdomainDiscoverer:
         self._seeds = [s.strip().lower().lstrip("*.").rstrip(".") for s in (seeds or []) if s.strip()]
         # Recursive enumeration: after finding subdomains, enumerate THEIR subdomains, up to this depth.
         self._recursion_depth = max(0, recursion_depth)
+        # Permutation wave: mutate the found subdomains (api -> api-dev, api2…) and probe those too.
+        self._use_permutations = use_permutations
+        self._permutation_words = permutation_words or []
 
     async def _probe(self, host: str) -> tuple[str, HttpResponse] | None:
         for scheme in ("https", "http"):
@@ -156,13 +161,19 @@ class SubdomainDiscoverer:
         domain = domain.strip().lower().lstrip("*.").rstrip(".")
         if not domain:
             return []
-
         candidates: set[str] = {domain} | {f"{word}.{domain}" for word in self._wordlist}
         if self._use_passive:
             candidates |= await self._passive_crtsh(domain)
         if self._use_external:
             candidates |= await self._external_subfinder(domain)
+        return await self._resolve_and_probe(candidates, domain, always_keep={domain})
 
+    async def _resolve_and_probe(
+        self, candidates: set[str], domain: str, *, always_keep: set[str] | None = None
+    ) -> list[DiscoveredHost]:
+        """Scope-gate, DNS-resolve and HTTP-probe a set of candidate hosts. ``always_keep`` hosts are
+        probed even if DNS wouldn't resolve them (the queried root, a manual seed)."""
+        always_keep = always_keep or set()
         # Scope is the hard gate: never resolve or probe a host we aren't authorised for.
         in_scope = sorted(host for host in candidates if self._client.is_asset_in_scope(host))
         if not in_scope:
@@ -175,8 +186,8 @@ class SubdomainDiscoverer:
             resolved = in_scope  # DNS answers everything; the HTTP probe/baseline decides reality
         else:
             async def _resolves(host: str) -> str | None:
-                async with semaphore:  # the queried domain is always kept; guesses must resolve
-                    return host if (host == domain or await self._resolver(host)) else None
+                async with semaphore:
+                    return host if (host in always_keep or await self._resolver(host)) else None
 
             resolved = [host for host in await asyncio.gather(*(_resolves(h) for h in in_scope)) if host]
 
@@ -219,5 +230,13 @@ class SubdomainDiscoverer:
                 found.setdefault(host.host, host)
                 if depth < self._recursion_depth and host.host != base and host.host not in visited:
                     queue.append((host.host, depth + 1))
+
+        # Permutation wave: mutate the found subdomains and probe the new candidates (same scope gate).
+        if self._use_permutations and self._permutation_words and domain and found:
+            from dastcore.discovery.permutations import generate_permutations
+
+            candidates = generate_permutations(set(found), domain, self._permutation_words)
+            for host in await self._resolve_and_probe(candidates, domain):
+                found.setdefault(host.host, host)
 
         return sorted(found.values(), key=lambda h: h.host)

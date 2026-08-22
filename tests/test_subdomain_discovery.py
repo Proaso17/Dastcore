@@ -139,6 +139,42 @@ async def test_manual_seed_host_is_always_probed_and_scanned() -> None:
     assert "secret.example.com" in found  # the manual seed was included, probed and discovered
 
 
+def test_generate_permutations() -> None:
+    from dastcore.discovery.permutations import generate_permutations
+
+    perms = generate_permutations({"api.example.com"}, "example.com", ["dev"])
+    assert "api-dev.example.com" in perms
+    assert "dev-api.example.com" in perms
+    assert "dev.example.com" in perms  # environment swap
+    assert "api2.example.com" in perms  # number suffix
+    assert "api.example.com" not in perms  # never re-emit the input host
+
+
+async def test_permutation_wave_finds_mutated_subdomains() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+    resolver = _resolver({
+        "example.com": ["10.0.0.1"],
+        "api.example.com": ["10.0.0.2"],
+        "api-dev.example.com": ["10.0.0.3"],  # only reachable by mutating the found "api"
+    })
+    prober = _prober({h: _page(200, h) for h in ("example.com", "api.example.com", "api-dev.example.com")})
+
+    async with HttpClient(scope) as client:
+        with_perm = SubdomainDiscoverer(
+            client, wordlist=["api"], resolver=resolver, prober=prober,
+            use_passive=False, use_external=False, use_permutations=True, permutation_words=["dev"],
+        )
+        found_perm = {h.host for h in await with_perm.discover("example.com")}
+        without = SubdomainDiscoverer(
+            client, wordlist=["api"], resolver=resolver, prober=prober,
+            use_passive=False, use_external=False, use_permutations=False,
+        )
+        found_flat = {h.host for h in await without.discover("example.com")}
+
+    assert found_perm == {"example.com", "api.example.com", "api-dev.example.com"}  # permutation reached api-dev
+    assert "api-dev.example.com" not in found_flat  # ...which a flat sweep never does
+
+
 def test_wordlist_depth_slicing() -> None:
     light = load_subdomain_wordlist("light")
     aggressive = load_subdomain_wordlist("aggressive")

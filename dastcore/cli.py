@@ -565,12 +565,16 @@ async def _discover_scan_roots(
     seeds: Sequence[str] = (),
     recursion: int = -1,
     auto: bool = True,
+    permute: bool = False,
 ) -> list[str]:
     """Expand a target URL into itself + every live, in-scope host we can find.
 
     ``auto`` runs the automatic sweep (wordlist + passive + recursion); ``seeds`` are known hosts always
-    probed and scanned (and recursed into). With ``auto=False`` only the seeds are probed (no sweep)."""
+    probed and scanned (and recursed into). ``permute`` mutates the found subdomains and probes those
+    too. With ``auto=False`` only the seeds are probed (no sweep)."""
     from urllib.parse import urlsplit
+
+    from dastcore.discovery.permutations import load_permutation_words
 
     host = urlsplit(target).hostname or ""
     roots = [target]
@@ -587,6 +591,8 @@ async def _discover_scan_roots(
         recursion_depth=depth_recursion,
         use_passive=auto,
         use_external=auto,
+        use_permutations=permute and auto,
+        permutation_words=load_permutation_words() if (permute and auto) else [],
     ).discover(base)
     seen = {host}
     for discovered_host in found:
@@ -627,6 +633,7 @@ async def _run_scan(
     seed_hosts: Sequence[str] = (),
     seed_paths: Sequence[str] = (),
     subdomain_recursion: int = -1,
+    use_permutations: bool = False,
     use_historical: bool = False,
     use_js: bool = False,
     mine_params: bool = False,
@@ -710,6 +717,7 @@ async def _run_scan(
                 scan_roots = await _discover_scan_roots(
                     client, target, discover_depth, progress, subdomain_wordlist,
                     seeds=seed_host_pool, recursion=subdomain_recursion, auto=discover_subdomains,
+                    permute=use_permutations,
                 )
             for historical_req in historical_requests:  # historical endpoints (with their params) get scanned
                 discovered.setdefault(historical_req.signature(), historical_req)
@@ -1252,6 +1260,12 @@ def scan(
         help="Descubre parámetros ocultos (estilo Arjun) en los endpoints descubiertos: cada uno es un nuevo "
         "punto de inyección. Intrusivo (varias peticiones por endpoint); no se activa en el perfil 'quick'.",
     ),
+    permute: bool = typer.Option(
+        True,
+        "--permute/--no-permute",
+        help="Con el descubrimiento de subdominios, genera permutaciones de los hallados (api → api-dev, "
+        "api2, staging-api…) y las prueba. --no-permute para desactivarlo.",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1567,6 +1581,7 @@ def scan(
                     seed_hosts=seed_hosts,
                     seed_paths=seed_paths,
                     subdomain_recursion=subdomain_recursion,
+                    use_permutations=(discover or discover_subdomains) and profile != "quick" and permute,
                     use_historical=(discover or discover_content or discover_subdomains)
                     and profile != "quick"
                     and historical,

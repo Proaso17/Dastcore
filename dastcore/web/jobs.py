@@ -160,6 +160,7 @@ class ScanManager:
                 use_historical=req.discover_content and not_quick,  # historical is part of surface discovery
                 use_js=req.discover_content and not_quick,  # JS endpoint extraction too
                 mine_params=req.mine_params and not_quick,
+                use_permutations=req.discover_subdomains and not_quick,  # permute found subdomains
             )
         )
         self._tasks.add(task)
@@ -225,6 +226,7 @@ class ScanManager:
         use_historical: bool = False,
         use_js: bool = False,
         mine_params: bool = False,
+        use_permutations: bool = False,
     ) -> None:
         started = time.monotonic()
         try:
@@ -245,6 +247,7 @@ class ScanManager:
                 use_historical=use_historical,
                 use_js=use_js,
                 mine_params=mine_params,
+                use_permutations=use_permutations,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)
