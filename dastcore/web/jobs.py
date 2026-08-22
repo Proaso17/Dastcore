@@ -157,6 +157,7 @@ class ScanManager:
                 seed_hosts=req.seed_hosts,
                 seed_paths=req.seed_paths,
                 use_historical=req.discover_content and not_quick,  # historical is part of surface discovery
+                use_js=req.discover_content and not_quick,  # JS endpoint extraction too
             )
         )
         self._tasks.add(task)
@@ -220,6 +221,7 @@ class ScanManager:
         seed_hosts: list[str] | None = None,
         seed_paths: list[str] | None = None,
         use_historical: bool = False,
+        use_js: bool = False,
     ) -> None:
         started = time.monotonic()
         try:
@@ -238,6 +240,7 @@ class ScanManager:
                 seed_hosts=seed_hosts or [],
                 seed_paths=seed_paths or [],
                 use_historical=use_historical,
+                use_js=use_js,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

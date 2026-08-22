@@ -105,6 +105,7 @@ from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavaila
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.discovery.graphql import discover_graphql
 from dastcore.discovery.historical import gather_historical_urls, prioritise, url_to_request
+from dastcore.discovery.js_endpoints import JsEndpointDiscoverer
 from dastcore.discovery.openapi import fetch_and_parse_openapi
 from dastcore.discovery.subdomains import (
     SubdomainDiscoverer,
@@ -626,6 +627,7 @@ async def _run_scan(
     seed_paths: Sequence[str] = (),
     subdomain_recursion: int = -1,
     use_historical: bool = False,
+    use_js: bool = False,
     findings_log: str = "",
     surface: dict[str, Any] | None = None,
     ai_payloads: AiPayloadGenerator | None = None,
@@ -755,6 +757,13 @@ async def _run_scan(
                         # detectors actually get something to test — not just a bare URL.
                         for req in await HttpCrawler(client, max_pages=8, use_robots=False).crawl(endpoint.url):
                             discovered.setdefault(req.signature(), req)
+
+            if use_js:
+                # Modern SPAs hide their API in JS bundles — extract those endpoints and scan them too.
+                for root in scan_roots:
+                    progress.status(f"Extrayendo endpoints de JavaScript en {root}…")
+                    for req in await JsEndpointDiscoverer(client).discover(root):
+                        discovered.setdefault(req.signature(), req)
 
             if discover_content or discover_subdomains:
                 # The API is the real surface: auto-find OpenAPI/GraphQL schemas and ingest every endpoint.
@@ -1222,6 +1231,12 @@ def scan(
         help="Con el descubrimiento activo, mina URLs históricas (Wayback) — pasivo, sus parámetros son "
         "puntos de inyección. --no-historical para desactivarlo.",
     ),
+    js: bool = typer.Option(
+        True,
+        "--js/--no-js",
+        help="Con el descubrimiento activo, extrae endpoints de los bundles JavaScript (SPAs modernas: "
+        "Next.js, React…). --no-js para desactivarlo.",
+    ),
     roles_file: str = typer.Option(
         "", "--roles-file", help="Ruta a un JSON con identidades (name/role/auth) para pruebas de autorización."
     ),
@@ -1540,6 +1555,7 @@ def scan(
                     use_historical=(discover or discover_content or discover_subdomains)
                     and profile != "quick"
                     and historical,
+                    use_js=(discover or discover_content or discover_subdomains) and profile != "quick" and js,
                     findings_log=findings_log,
                     surface=surface,
                     ai_payloads=payload_generator,
