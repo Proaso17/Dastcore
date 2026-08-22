@@ -42,6 +42,27 @@ async def test_dashboard_loads_empty(client: httpx.AsyncClient) -> None:
     assert "Chatbot embebido" in resp.text  # the AI scan mode is offered in the form
 
 
+async def test_add_custom_wordlist_shows_in_dropdown(client: httpx.AsyncClient, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DASTCORE_SECLISTS", str(tmp_path / "seclists"))
+    async with client:
+        resp = await client.post(
+            "/wordlists/add",
+            data={"wl_category": "content", "wl_name": "mi rutas", "wl_url": "", "wl_text": "admin\nsecret"},
+        )
+        assert resp.status_code == 200 and "añadido" in resp.text
+        home = await client.get("/")
+    assert "Propio · mi-rutas" in home.text  # the custom list is now an option in the dropdown
+
+
+async def test_add_custom_wordlist_requires_source(client: httpx.AsyncClient) -> None:
+    async with client:
+        resp = await client.post(
+            "/wordlists/add",
+            data={"wl_category": "content", "wl_name": "x", "wl_url": "", "wl_text": ""},
+        )
+    assert resp.status_code == 400 and "URL" in resp.text
+
+
 async def test_dashboard_sets_security_headers(client: httpx.AsyncClient) -> None:
     """dastcore's own app must pass dastcore's passive checks (dogfooding)."""
     async with client:

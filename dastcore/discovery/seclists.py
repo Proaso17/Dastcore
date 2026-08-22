@@ -8,9 +8,13 @@ fall back to the built-in list when a preset isn't downloaded yet.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 _RAW_BASE = "https://raw.githubusercontent.com/danielmiessler/SecLists/master/"
+
+# Categories a wordlist can belong to (drives where a custom list is stored and which dropdown it fills).
+_CATEGORIES = ("content", "subdomains", "params")
 
 # preset name -> (category, path within the SecLists repo).
 _PRESETS: dict[str, tuple[str, str]] = {
@@ -134,3 +138,105 @@ async def download_presets(names: list[str] | None = None, on_progress=None) -> 
                 if dest.exists():
                     dest.unlink(missing_ok=True)
     return done
+
+
+# ── Custom (user-supplied) wordlists ─────────────────────────────────────────────────────────────
+# Beyond the curated SecLists presets, a user can bring their own dictionary — download one from a URL
+# or paste it — and have it show up in the same dropdowns to scan with. They live under the managed
+# dir so resolution/scoping stay uniform and the web layer can validate a selection is a managed file.
+
+
+def custom_dir(category: str) -> Path:
+    """Directory holding user-supplied wordlists for ``category`` (under the managed SecLists dir)."""
+    return seclists_dir() / "custom" / category
+
+
+def _slug(name: str) -> str:
+    """A safe on-disk basename from a user-supplied wordlist name (``[a-z0-9._-]``)."""
+    return re.sub(r"[^a-z0-9._-]+", "-", name.strip().lower()).strip("-.")
+
+
+def custom_wordlists(category: str) -> list[tuple[str, str]]:
+    """The (path, label) options for ``category`` the user has added, sorted by name."""
+    directory = custom_dir(category)
+    if not directory.is_dir():
+        return []
+    return [(str(path), f"Propio · {path.stem}") for path in sorted(directory.glob("*.txt"))]
+
+
+def wordlist_options(category: str) -> list[tuple[str, str]]:
+    """Every non-built-in wordlist choice for ``category``: installed SecLists presets + custom lists.
+
+    Each option is ``(value, label)`` where ``value`` is what a caller passes to ``resolve_wordlist``
+    (a preset name or a managed file path). The built-in list is the empty value, added by the UI.
+    """
+    return installed_presets(category) + custom_wordlists(category)
+
+
+def is_managed_wordlist(value: str) -> bool:
+    """Whether ``value`` is something we manage — a known preset or a file under a custom dir.
+
+    Lets the web layer accept a dropdown selection without allowing an arbitrary server path.
+    """
+    if is_preset(value):
+        return True
+    if not value:
+        return False
+    try:
+        path = Path(value).resolve()
+        root = (seclists_dir() / "custom").resolve()
+    except OSError:
+        return False
+    return path.is_file() and root in path.parents
+
+
+async def add_custom_wordlist(
+    category: str,
+    name: str,
+    *,
+    url: str | None = None,
+    text: str | None = None,
+    max_bytes: int = 200 * 1024 * 1024,
+    on_progress=None,
+) -> Path:
+    """Add a user wordlist to ``category`` from a ``url`` (downloaded) or literal ``text``; return its path.
+
+    Idempotent by name (re-adding overwrites). A download is streamed and capped at ``max_bytes``; a
+    failed/oversized download leaves no partial file. Raises ``ValueError`` for bad inputs.
+    """
+    if category not in _CATEGORIES:
+        raise ValueError(f"categoría inválida: {category!r} (usa {' | '.join(_CATEGORIES)})")
+    safe = _slug(name)
+    if not safe:
+        raise ValueError("nombre de diccionario inválido")
+    dest = custom_dir(category) / f"{safe}.txt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if text is not None:
+        dest.write_text(text, encoding="utf-8")
+        if on_progress is not None:
+            on_progress(str(dest))
+        return dest
+
+    if not url:
+        raise ValueError("se requiere una URL o texto para el diccionario")
+
+    import httpx
+
+    written = 0
+    try:
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                with dest.open("wb") as handle:
+                    async for chunk in resp.aiter_bytes():
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise ValueError("el diccionario supera el tamaño máximo permitido")
+                        handle.write(chunk)
+    except Exception:
+        dest.unlink(missing_ok=True)  # never leave a partial/corrupt list behind
+        raise
+    if on_progress is not None:
+        on_progress(str(dest))
+    return dest

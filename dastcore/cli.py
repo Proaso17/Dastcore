@@ -94,6 +94,7 @@ from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
+from dastcore.discovery.activate import activate_endpoints
 from dastcore.discovery.api_probe import probe_api_schemas
 from dastcore.discovery.content import (
     ContentDiscoverer,
@@ -841,6 +842,18 @@ async def _run_scan(
                 seeds_for_mining = [HttpRequest(method="GET", url=r) for r in scan_roots] + list(discovered.values())
                 for enriched in await mine_hidden_params(client, seeds_for_mining, load_param_wordlist(discover_depth)):
                     discovered.setdefault(enriched.signature(), enriched)
+
+            if discovered:
+                # A SPA's real surface is its JSON API: endpoints discovered (JS/historical/dirbust) as
+                # bare GETs that 404/405. Probe each for the verb + body it actually takes so the scanner
+                # injects into its JSON fields — otherwise the whole API goes untested. Part of the
+                # normal active scan (which every profile runs), so it applies on every scan.
+                progress.status("Activando endpoints de API (método + cuerpo JSON)…")
+                activated = await phase("activate-endpoints", activate_endpoints(client, list(discovered.values())))
+                if activated:
+                    _scan_log.info("Endpoints de API activados para inyección: %d", len(activated))
+                for req in activated:
+                    discovered.setdefault(req.signature(), req)
 
             all_requests = list(discovered.values())
             extra_findings.extend(await phase("shellshock", check_shellshock(client, all_requests)))
@@ -2532,6 +2545,48 @@ def seclists_cmd(
         console.print(f"  {mark} [bold]{row['name']}[/bold]  [dim]({row['category']})[/dim]  {size}")
     if not any(r["downloaded"] for r in status()):
         console.print("\n[yellow]Aún no hay diccionarios.[/yellow] Ejecuta [bold]dastcore seclists --install[/bold].")
+
+
+@app.command("wordlists")
+def wordlists_cmd(
+    add: bool = typer.Option(False, "--add", help="Añade un diccionario propio (requiere --name y --url o --file)."),
+    category: str = typer.Option("content", "--category", help="Categoría: content | subdomains | params."),
+    name: str = typer.Option("", "--name", help="Nombre del diccionario (aparecerá en los desplegables)."),
+    url: str = typer.Option("", "--url", help="URL de descarga del diccionario."),
+    file: str = typer.Option("", "--file", help="Fichero local cuyo contenido se copia como diccionario propio."),
+) -> None:
+    """Diccionarios propios: descarga uno (o copia un fichero) y queda disponible para todos los escaneos.
+
+    Sin flags, lista los diccionarios propios ya añadidos por categoría. Con --add --name X y --url/--file,
+    lo guarda en ~/.dastcore/seclists/custom y se selecciona por su ruta (o desde el desplegable del panel)."""
+    from dastcore.discovery.seclists import add_custom_wordlist, custom_wordlists
+
+    if add:
+        if not name or (not url and not file):
+            console.print("[red]--add requiere --name y (--url o --file).[/red]")
+            raise typer.Exit(code=1)
+        text = Path(file).read_text(encoding="utf-8", errors="ignore") if file else None
+        try:
+            path = asyncio.run(add_custom_wordlist(category, name, url=url or None, text=text))
+        except (ValueError, httpx.HTTPError, OSError) as exc:
+            console.print(f"[red]No se pudo añadir el diccionario:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        console.print(f"[green]Añadido[/green] [bold]{path.stem}[/bold] → {path}")
+
+    console.print("[bold]Diccionarios propios[/bold]")
+    any_found = False
+    for cat in ("content", "subdomains", "params"):
+        options = custom_wordlists(cat)
+        if options:
+            any_found = True
+            console.print(f"  [dim]{cat}[/dim]")
+            for value, label in options:
+                console.print(f"    [bold]{label}[/bold]  [dim]{value}[/dim]")
+    if not any_found:
+        console.print(
+            "  [yellow]Ninguno todavía.[/yellow] Añade uno: "
+            "[bold]dastcore wordlists --add --name mi-lista --url https://…/lista.txt[/bold]"
+        )
 
 
 @app.command("serve")

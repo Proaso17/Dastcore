@@ -14,6 +14,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -164,9 +165,10 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
     _seclists_state = {"installing": False}
 
     def _seclists_ctx() -> dict[str, object]:
+        # Dropdowns show SecLists presets *and* any custom lists the user has added.
         return {
-            "seclists_content": seclists.installed_presets("content"),
-            "seclists_subdomains": seclists.installed_presets("subdomains"),
+            "seclists_content": seclists.wordlist_options("content"),
+            "seclists_subdomains": seclists.wordlist_options("subdomains"),
             "seclists_installed": seclists.is_installed(),
             "seclists_installing": _seclists_state["installing"],
         }
@@ -190,6 +192,36 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
 
             asyncio.create_task(_run_install())
         return RedirectResponse("/", status_code=303)
+
+    @app.post("/wordlists/add")
+    async def add_wordlist(
+        wl_category: str = Form(...),
+        wl_name: str = Form(...),
+        wl_url: str = Form(""),
+        wl_text: str = Form(""),
+    ) -> Response:
+        def back(message: str, *, ok: bool) -> Response:
+            key = "wordlist_ok" if ok else "wordlist_error"
+            return HTMLResponse(
+                env.get_template("dashboard.html.j2").render(
+                    scans=store.list_scans(), **{key: message}, **_seclists_ctx()
+                ),
+                status_code=200 if ok else 400,
+            )
+
+        url = wl_url.strip()
+        text = wl_text.strip()
+        if not url and not text:
+            return back("Indica una URL de descarga o pega el contenido del diccionario.", ok=False)
+        try:
+            path = await seclists.add_custom_wordlist(
+                wl_category, wl_name, url=url or None, text=(text + "\n") if text else None
+            )
+        except ValueError as exc:
+            return back(str(exc), ok=False)
+        except (httpx.HTTPError, OSError) as exc:
+            return back(f"No se pudo descargar el diccionario: {exc}", ok=False)
+        return back(f"Diccionario «{path.stem}» añadido — ya está en el desplegable.", ok=True)
 
     @app.post("/scans")
     async def start_scan(

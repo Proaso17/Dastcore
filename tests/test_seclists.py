@@ -46,3 +46,37 @@ def test_loader_falls_back_to_builtin_for_a_missing_preset(tmp_path, monkeypatch
     monkeypatch.setenv("DASTCORE_SECLISTS", str(tmp_path))  # empty -> preset not present
     words = load_content_wordlist("light", "seclists-content")
     assert "admin" in words  # the built-in content list, not empty
+
+
+async def test_add_custom_wordlist_from_text_and_use_it(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DASTCORE_SECLISTS", str(tmp_path))
+    path = await seclists.add_custom_wordlist("content", "Mi Lista!", text="foo\nbar\n")
+    assert path.is_file() and path.name == "mi-lista.txt"
+    # It shows up as an option and resolves to its own path (passthrough), and the loader reads it.
+    assert (str(path), "Propio · mi-lista") in seclists.custom_wordlists("content")
+    assert (str(path), "Propio · mi-lista") in seclists.wordlist_options("content")
+    assert seclists.resolve_wordlist("content", str(path)) == str(path)
+    assert load_content_wordlist("aggressive", str(path)) == ["foo", "bar"]
+
+
+async def test_add_custom_wordlist_rejects_bad_inputs(tmp_path, monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setenv("DASTCORE_SECLISTS", str(tmp_path))
+    with pytest.raises(ValueError):
+        await seclists.add_custom_wordlist("nope", "x", text="a")  # bad category
+    with pytest.raises(ValueError):
+        await seclists.add_custom_wordlist("content", "!!!", text="a")  # slug empties out
+    with pytest.raises(ValueError):
+        await seclists.add_custom_wordlist("content", "x")  # neither url nor text
+
+
+def test_is_managed_wordlist(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DASTCORE_SECLISTS", str(tmp_path))
+    assert seclists.is_managed_wordlist("seclists-content")  # a preset
+    assert not seclists.is_managed_wordlist("")  # built-in
+    assert not seclists.is_managed_wordlist(str(tmp_path / "etc" / "passwd"))  # arbitrary path
+    managed = tmp_path / "custom" / "content" / "list.txt"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("a\n", encoding="utf-8")
+    assert seclists.is_managed_wordlist(str(managed))  # a file under the custom dir
