@@ -6,7 +6,7 @@ from __future__ import annotations
 from dastcore.discovery import seclists
 from dastcore.discovery.content import load_content_wordlist
 
-_MEDIUM = "Discovery/Web-Content/directory-list-2.3-medium.txt"
+_MEDIUM = "Discovery/Web-Content/DirBuster-2007_directory-list-2.3-medium.txt"
 
 
 def test_is_preset() -> None:

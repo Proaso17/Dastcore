@@ -14,8 +14,8 @@ _RAW_BASE = "https://raw.githubusercontent.com/danielmiessler/SecLists/master/"
 
 # preset name -> (category, path within the SecLists repo).
 _PRESETS: dict[str, tuple[str, str]] = {
-    "seclists-content": ("content", "Discovery/Web-Content/directory-list-2.3-medium.txt"),
-    "seclists-content-big": ("content", "Discovery/Web-Content/directory-list-2.3-big.txt"),
+    "seclists-content": ("content", "Discovery/Web-Content/DirBuster-2007_directory-list-2.3-medium.txt"),
+    "seclists-content-big": ("content", "Discovery/Web-Content/DirBuster-2007_directory-list-2.3-big.txt"),
     "seclists-content-raft": ("content", "Discovery/Web-Content/raft-large-directories.txt"),
     "seclists-subdomains": ("subdomains", "Discovery/DNS/subdomains-top1million-20000.txt"),
     "seclists-subdomains-big": ("subdomains", "Discovery/DNS/subdomains-top1million-110000.txt"),
