@@ -33,6 +33,24 @@ class SessionError(RuntimeError):
     """Raised when a dynamic login flow cannot establish a session at all."""
 
 
+def auth_endpoint_urls(auth: AuthConfig) -> list[str]:
+    """The IdP URLs a dynamic login flow must reach (login/token/authorize).
+
+    These are exempt from the *attack* scope: the scanner must be able to authenticate against an
+    identity provider on another host (e.g. a Supabase project) without that host becoming a scan
+    target. Only these exact endpoints are reachable — nothing else on the IdP host is scanned.
+    """
+    urls: list[str] = []
+    if auth.form is not None and auth.form.login_url:
+        urls.append(auth.form.login_url)
+    if auth.oauth2 is not None and auth.oauth2.token_url:
+        urls.append(auth.oauth2.token_url)
+    if auth.oauth2_pkce is not None:
+        urls.extend(u for u in (auth.oauth2_pkce.login_url, auth.oauth2_pkce.authorize_url,
+                                auth.oauth2_pkce.token_url) if u)
+    return urls
+
+
 class SessionManager:
     """Holds and refreshes the auth material applied to every scanner request."""
 
@@ -142,6 +160,7 @@ class SessionManager:
         response = await client.send_raw(
             "POST",
             cfg.login_url,
+            headers=cfg.login_headers or None,
             json=cfg.credentials if cfg.as_json else None,
             data=None if cfg.as_json else cfg.credentials,
         )

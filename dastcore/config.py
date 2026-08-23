@@ -31,6 +31,8 @@ class FormLoginConfig(BaseModel):
     login_url: str
     credentials: dict[str, str] = Field(default_factory=dict)
     as_json: bool = True
+    # Extra headers on the login request itself (e.g. an IdP API key: Supabase's `apikey`).
+    login_headers: dict[str, str] = Field(default_factory=dict)
     # If set, pull a token out of the JSON login response instead of relying on a cookie.
     token_json_field: str | None = None
     token_header: str = "Authorization"
@@ -92,7 +94,10 @@ class AuthConfig(BaseModel):
     # Dropped-session detection: a response matching either signal triggers an auto re-login.
     logged_out_status: int = 401
     logged_out_pattern: str | None = None
-    max_relogin: int = 3
+    # Long deep scans outlive a short-lived token (e.g. a ~1h Supabase JWT), so allow many
+    # automatic re-logins — one per expiry — not just a handful. Still bounded to catch a broken
+    # login loop. Concurrent expiries coalesce into a single re-login (epoch-guarded).
+    max_relogin: int = 20
 
     @model_validator(mode="after")
     def _require_flow_config_for_dynamic_types(self) -> AuthConfig:

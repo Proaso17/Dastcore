@@ -51,7 +51,7 @@ from dastcore.config import (
 )
 from dastcore.core.http_client import BudgetExceededError, HttpClient
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
-from dastcore.core.session import SessionManager
+from dastcore.core.session import SessionManager, auth_endpoint_urls
 from dastcore.detectors.access_bypass import run_access_bypass_checks
 from dastcore.detectors.active_checks import (
     check_dangerous_methods,
@@ -446,6 +446,9 @@ def _build_auth_config(
     oauth_scope: str,
     login_macro: str = "",
     macro_var: list[str] | None = None,
+    login_header: list[str] | None = None,
+    login_token_field: str = "",
+    login_token_header: str = "Authorization",
 ) -> AuthConfig:
     """Resolve the auth flags into a single AuthConfig. Most 'active' flow wins."""
     if login_macro:
@@ -467,7 +470,13 @@ def _build_auth_config(
     if login_url:
         return AuthConfig(
             type="form",
-            form=FormLoginConfig(login_url=login_url, credentials=_parse_kv_list(login_field, "--login-field")),
+            form=FormLoginConfig(
+                login_url=login_url,
+                credentials=_parse_kv_list(login_field, "--login-field"),
+                login_headers=_parse_kv_list(login_header or [], "--login-header"),
+                token_json_field=login_token_field or None,
+                token_header=login_token_header or "Authorization",
+            ),
         )
     if auth_bearer:
         return AuthConfig(type="bearer", bearer_token=auth_bearer)
@@ -506,6 +515,8 @@ def _make_client(config: ScanConfig, budget: _Budget, session: SessionManager | 
         session=session,
         max_requests=budget.max_requests,
         time_budget_s=budget.time_budget_s,
+        # Let the session (re)authenticate against its IdP endpoints even if off the attack scope.
+        auth_urls=auth_endpoint_urls(config.auth),
     )
 
 
@@ -1362,6 +1373,17 @@ def scan(
     oauth_client_id: str = typer.Option("", "--oauth-client-id", help="OAuth2: client_id."),
     oauth_client_secret: str = typer.Option("", "--oauth-client-secret", help="OAuth2: client_secret."),
     oauth_scope: str = typer.Option("", "--oauth-scope", help="OAuth2: scope opcional."),
+    login_header: list[str] = typer.Option(
+        [], "--login-header",
+        help="Form-login: cabecera extra en el login 'Nombre=valor' (p. ej. la 'apikey' de Supabase; repetible).",
+    ),
+    login_token_field: str = typer.Option(
+        "", "--login-token-field",
+        help="Form-login: campo JSON de la respuesta de login del que sacar el token (p. ej. 'access_token').",
+    ),
+    login_token_header: str = typer.Option(
+        "Authorization", "--login-token-header", help="Form-login: cabecera donde poner el token extraído."
+    ),
     auth_macro: str = typer.Option(
         "", "--auth-macro", help="Login por macro de navegador: fichero .json grabado con 'dastcore auth record'."
     ),
@@ -1513,6 +1535,9 @@ def scan(
             oauth_scope=oauth_scope,
             login_macro=auth_macro,
             macro_var=auth_macro_var,
+            login_header=login_header,
+            login_token_field=login_token_field,
+            login_token_header=login_token_header,
         )
         if auth.type == "none" and scan_file.auth is not None:
             auth = scan_file.auth

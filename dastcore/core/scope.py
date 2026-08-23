@@ -38,11 +38,20 @@ def _domain_matches(host: str, pattern: str, allow_subdomains: bool) -> bool:
     return False
 
 
+def _endpoint_key(url: str) -> str:
+    """scheme://host/path (lowercased, no query) — the identity used to exempt an auth endpoint."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{(parts.hostname or '').lower()}{parts.path or ''}".rstrip("/")
+
+
 class ScopeChecker:
     """Allow/deny enforcement for a single scan. Deny always wins over allow."""
 
-    def __init__(self, scope: ScopeConfig) -> None:
+    def __init__(self, scope: ScopeConfig, auth_urls: list[str] | None = None) -> None:
         self._scope = scope
+        # Auth/IdP endpoints the session manager may reach to (re)authenticate, even if their host
+        # isn't in the attack scope. Exact scheme+host+path only — never opens the IdP to scanning.
+        self._auth_endpoints = {_endpoint_key(u) for u in (auth_urls or [])}
 
     def is_in_scope(self, url: str) -> bool:
         try:
@@ -64,7 +73,11 @@ class ScopeChecker:
 
         for pattern in self._scope.deny_domains:
             if _domain_matches(host, pattern, self._scope.allow_subdomains):
-                return False
+                return False  # deny always wins, even for an auth endpoint
+
+        # A configured auth endpoint is reachable for (re)login regardless of the attack scope.
+        if self._auth_endpoints and _endpoint_key(url) in self._auth_endpoints:
+            return True
 
         if self._scope.allowed_ports is not None and port not in self._scope.allowed_ports:
             return False

@@ -60,15 +60,18 @@ def test_form_login_builds_form_auth(tmp_path) -> None:
     mgr = ScanManager(Store(tmp_path / "db.sqlite"))
     req = ScanRequest(
         target="https://app.test/",
-        login_url="https://app.test/api/auth/login",
+        login_url="https://proj.supabase.co/auth/v1/token?grant_type=password",
         login_fields=["email=u@app.test", "password=secret"],
+        login_headers=["apikey=ANON-KEY"],
+        login_token_field="access_token",
         allow_domains=["app.test"],
     )
     config, _engine, _pages = mgr._build_config(req)
     assert config.auth.type == "form"
     assert config.auth.form is not None
-    assert config.auth.form.login_url == "https://app.test/api/auth/login"
     assert config.auth.form.credentials == {"email": "u@app.test", "password": "secret"}
+    assert config.auth.form.login_headers == {"apikey": "ANON-KEY"}   # Supabase api key on the login req
+    assert config.auth.form.token_json_field == "access_token"        # token pulled from the JSON reply
 
 
 async def test_add_custom_wordlist_requires_source(client: httpx.AsyncClient) -> None:

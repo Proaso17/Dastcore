@@ -78,6 +78,46 @@ async def test_static_cookie_auth_reaches_protected_page(vuln_app_url: str) -> N
     assert '"account"' in response.text
 
 
+def test_auth_endpoint_urls_collects_login_and_token_urls() -> None:
+    from dastcore.core.session import auth_endpoint_urls
+
+    auth = AuthConfig(
+        type="form",
+        form=FormLoginConfig(login_url="https://proj.supabase.co/auth/v1/token?grant_type=password"),
+    )
+    assert auth_endpoint_urls(auth) == ["https://proj.supabase.co/auth/v1/token?grant_type=password"]
+    assert auth_endpoint_urls(AuthConfig(type="bearer", bearer_token="x")) == []
+
+
+class _CapturingClient:
+    """Captures the login request and returns a JSON body carrying an access_token."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def send_raw(self, method, url, *, headers=None, json=None, data=None, **_kw):
+        from dastcore.core.models import HttpResponse
+
+        self.calls.append({"url": url, "headers": headers or {}, "json": json})
+        return HttpResponse(status_code=200, text='{"access_token": "FRESH-JWT", "token_type": "bearer"}')
+
+
+async def test_form_login_sends_login_headers_and_extracts_token() -> None:
+    session = SessionManager(AuthConfig(
+        type="form",
+        form=FormLoginConfig(
+            login_url="https://proj.supabase.co/auth/v1/token?grant_type=password",
+            credentials={"email": "a@b.c", "password": "pw"},
+            login_headers={"apikey": "ANON-KEY"},
+            token_json_field="access_token",
+        ),
+    ))
+    client = _CapturingClient()
+    assert await session.ensure_logged_in(client, initial=True) is True  # type: ignore[arg-type]
+    assert client.calls[0]["headers"].get("apikey") == "ANON-KEY"  # the IdP api key was sent
+    assert session.headers["Authorization"] == "Bearer FRESH-JWT"   # token extracted + applied
+
+
 # --- integration: form login -----------------------------------------------------------
 
 

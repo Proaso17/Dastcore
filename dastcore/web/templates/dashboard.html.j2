@@ -279,7 +279,21 @@
             <textarea id="login_fields" name="login_fields" rows="2"
               placeholder="email=usuario@tuapp.com&#10;password=tu-contraseña"></textarea>
             <p class="hint" style="margin:8px 0 0">Los nombres de campo (<code>email</code>, <code>username</code>,
-              <code>password</code>…) son los que espera tu endpoint de login. El login gana sobre el token/cookie.</p>
+              <code>password</code>…) son los que espera tu endpoint de login. El login gana sobre el token/cookie.
+              <strong>Ventaja clave:</strong> el escáner <strong>vuelve a iniciar sesión solo</strong> cuando el token
+              caduca, así no te «saca» a mitad de un escaneo largo.</p>
+            <details style="margin-top:10px">
+              <summary class="hint">Opciones avanzadas (Supabase / API con token JSON)</summary>
+              <label for="login_headers" style="margin-top:8px">Cabeceras del login (una <code>Nombre=valor</code> por línea)</label>
+              <textarea id="login_headers" name="login_headers" rows="2"
+                placeholder="apikey=eyJ… (anon key de Supabase)&#10;Content-Type=application/json"></textarea>
+              <label for="login_token_field" style="margin-top:8px">Campo JSON del token en la respuesta</label>
+              <input id="login_token_field" name="login_token_field" type="text" placeholder="access_token">
+              <p class="hint" style="margin:8px 0 0">Para logins tipo <strong>Supabase</strong>: URL de login
+                <code>https://&lt;proyecto&gt;.supabase.co/auth/v1/token?grant_type=password</code>, la
+                <code>apikey</code> como cabecera, y <code>access_token</code> como campo del token. El endpoint de
+                login se contacta aunque sea de otro dominio (solo para autenticar; nunca se escanea).</p>
+            </details>
           </div>
         </details>
         <div data-mode="ai" hidden>

@@ -14,6 +14,24 @@ def test_denies_domain_not_in_allowlist() -> None:
     assert is_in_scope("http://evil.com/path", scope) is False
 
 
+def test_auth_endpoint_is_reachable_off_scope_but_not_the_rest_of_its_host() -> None:
+    # The IdP (supabase) isn't in the attack scope, but the exact token endpoint must be reachable
+    # for (re)login — while nothing else on that host is.
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+    token_url = "https://proj.supabase.co/auth/v1/token?grant_type=password"
+    checker = ScopeChecker(scope, auth_urls=[token_url])
+    assert checker.is_in_scope(token_url) is True                                   # exact auth endpoint
+    assert checker.is_in_scope("https://proj.supabase.co/auth/v1/token") is True    # same path, other query
+    assert checker.is_in_scope("https://proj.supabase.co/rest/v1/users") is False   # rest of the IdP: not scanned
+    assert checker.is_in_scope("https://api.example.com/") is True                  # real scope still works
+
+
+def test_auth_endpoint_exemption_still_respects_deny() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], deny_domains=["idp.example.com"])
+    url = "https://idp.example.com/token"
+    assert ScopeChecker(scope, auth_urls=[url]).is_in_scope(url) is False  # deny wins over the exemption
+
+
 def test_allows_subdomain_when_enabled() -> None:
     scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
     assert is_in_scope("http://api.example.com/path", scope) is True

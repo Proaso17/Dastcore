@@ -91,8 +91,10 @@ class HttpClient:
         session: SessionManager | None = None,
         max_requests: int | None = None,
         time_budget_s: float | None = None,
+        auth_urls: list[str] | None = None,
     ) -> None:
-        self._scope_checker = ScopeChecker(scope)
+        # Auth/IdP endpoints (from the auth config) are reachable for (re)login even off the attack scope.
+        self._scope_checker = ScopeChecker(scope, auth_urls=auth_urls)
         rate_limit = rate_limit or RateLimitConfig()
         self._bucket = TokenBucket(rate_limit.requests_per_second)
         self._semaphore = asyncio.Semaphore(rate_limit.max_concurrency)
