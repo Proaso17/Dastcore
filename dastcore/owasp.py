@@ -51,7 +51,8 @@ CAPABILITY: dict[str, str] = {
 _KEYWORD_TO_CAT: list[tuple[str, tuple[str, ...]]] = [
     ("A10", ("ssrf",)),
     ("A07", ("jwt", "auth-bypass", "authentication", "login", "session", "weak-cred", "default-cred",
-             "credential", "brute", "user-enum", "enumerat", "session-fixation", "mfa", "oauth")),
+             "credential", "brute", "user-enum", "enumerat", "session-fixation", "mfa", "oauth",
+             "password-reset", "reset-poison")),
     ("A08", ("deserial", "mass-assignment", "mass assignment", "proto-pollution", "prototype",
              "integrity", "takeover", "smuggling", "unsigned")),
     ("A03", ("sqli", "sql-injection", "xss", "ssti", "template-injection", "cmdi", "command-injection",

@@ -73,11 +73,13 @@ from dastcore.detectors.graphql_injection import check_graphql_arg_injection
 from dastcore.detectors.js_secrets import run_js_secret_scan
 from dastcore.detectors.jwt import (
     check_jwt_algorithm_confusion,
+    check_jwt_jwk_injection,
     check_jwt_key_url_ssrf,
     check_jwt_kid_injection,
     check_jwt_none_acceptance,
     check_jwt_signature_not_verified,
     check_jwt_weak_secret,
+    check_jwt_x5c_injection,
     looks_like_jwt,
 )
 from dastcore.detectors.mass_assignment import run_mass_assignment_checks
@@ -86,11 +88,13 @@ from dastcore.detectors.oauth import run_oauth_checks
 from dastcore.detectors.proto_pollution import run_proto_pollution_checks
 from dastcore.detectors.redos import run_redos_checks
 from dastcore.detectors.request_smuggling import run_smuggling_checks
+from dastcore.detectors.reset_poison import run_reset_poisoning_checks
 from dastcore.detectors.response_splitting import run_response_splitting_checks
 from dastcore.detectors.session_fixation import check_session_fixation
 from dastcore.detectors.shellshock import check_shellshock
 from dastcore.detectors.spa import run_spa_check
 from dastcore.detectors.ssi import run_ssi_checks
+from dastcore.detectors.ssrf_metadata import run_cloud_ssrf_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.user_enum import run_user_enumeration_checks
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
@@ -872,6 +876,8 @@ async def _run_scan(
                 extra_findings.extend(await phase("jwt-weak-secret", check_jwt_weak_secret(client, target, jwt)))
                 extra_findings.extend(await phase("jwt-no-verify", check_jwt_signature_not_verified(client, target, jwt)))
                 extra_findings.extend(await phase("jwt-kid", check_jwt_kid_injection(client, target, jwt)))
+                extra_findings.extend(await phase("jwt-jwk", check_jwt_jwk_injection(client, target, jwt)))
+                extra_findings.extend(await phase("jwt-x5c", check_jwt_x5c_injection(client, target, jwt)))
                 extra_findings.extend(await phase("jwt-alg-confusion", check_jwt_algorithm_confusion(client, target, jwt)))
                 extra_findings.extend(await phase("jwt-key-ssrf", check_jwt_key_url_ssrf(client, target, jwt, oast)))
 
@@ -913,6 +919,8 @@ async def _run_scan(
             extra_findings.extend(await phase("oauth", run_oauth_checks(client, all_requests)))
             extra_findings.extend(await phase("access-bypass", run_access_bypass_checks(client, all_requests)))
             extra_findings.extend(await phase("user-enumeration", run_user_enumeration_checks(client, all_requests)))
+            extra_findings.extend(await phase("reset-poisoning", run_reset_poisoning_checks(client, all_requests)))
+            extra_findings.extend(await phase("ssrf-cloud-metadata", run_cloud_ssrf_checks(client, all_requests)))
             extra_findings.extend(await phase("response-splitting", run_response_splitting_checks(client, all_requests)))
             extra_findings.extend(await phase("ssi", run_ssi_checks(client, all_requests)))
             extra_findings.extend(await phase("code-injection", run_code_injection_checks(client, all_requests)))
