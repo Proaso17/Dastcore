@@ -36,6 +36,22 @@ def test_unclassified_defaults_to_misconfig() -> None:
     assert category_for(_f(name="totally novel", cwe="")) == "A05"
 
 
+def test_tech_fingerprint_maps_to_components_not_access_control() -> None:
+    # a tech/version disclosure carries a generic CWE-200; it must not land in A01 via the CWE fallback
+    assert category_for(_f(rule_id="tech-fingerprint", name="Technology fingerprint", cwe="CWE-200")) == "A06"
+
+
+def test_advisories_are_excluded_from_the_rollup() -> None:
+    findings = [
+        _f(rule_id="spa-detected", name="SPA detected", cwe="CWE-200", severity="info", fid="s"),
+        _f(rule_id="scan-coverage", name="Cobertura parcial", cwe="CWE-200", severity="info", fid="c"),
+        _f(rule_id="user-enumeration", name="User enumeration", cwe="CWE-204", severity="medium", fid="u"),
+    ]
+    by_code = {row["code"]: row for row in summarize(findings)}
+    assert by_code["A01"]["count"] == 0  # the CWE-200 advisories no longer pollute Broken Access Control
+    assert by_code["A07"]["count"] == 1  # only the real finding is counted
+
+
 def test_summarize_lists_all_ten_in_order_with_counts() -> None:
     findings = [
         _f(rule_id="sqli-injection", severity="critical", fid="a"),

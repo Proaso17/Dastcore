@@ -65,7 +65,8 @@ _KEYWORD_TO_CAT: list[tuple[str, tuple[str, ...]]] = [
              "stack-trace", "xxe", "xml-expansion", "redos", "default", "cache-poison", "csp")),
     ("A02", ("cleartext", "insecure-transport", "hsts", "secret-exposure", "secret", "sensitive-cookie",
              "insecure-cookie", "cookie-secure", "tls")),
-    ("A06", ("version-disclosure", "outdated", "component", "cve", "vulnerable-version", "version")),
+    ("A06", ("version-disclosure", "outdated", "component", "cve", "vulnerable-version", "version",
+             "tech-fingerprint", "fingerprint")),
     ("A04", ("insecure-design", "business-logic", "race")),
 ]
 
@@ -111,6 +112,16 @@ _KEYWORD_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     for cat, kws in _KEYWORD_TO_CAT
 ]
 
+# dastcore-internal advisories (coverage notes, SPA/engine hints) — informational meta about the *scan*,
+# not vulnerabilities of the target, so they're kept out of the OWASP rollup (they'd otherwise pollute a
+# category via their generic CWE-200). WAF/tech-fingerprint stay: they say something about the target.
+_ADVISORY_RULE_IDS: frozenset[str] = frozenset({"scan-coverage", "spa-detected", "spa-awareness"})
+
+
+def is_advisory(finding: Finding) -> bool:
+    """A dastcore meta/advisory finding (not a target vulnerability) — excluded from the OWASP rollup."""
+    return finding.rule_id in _ADVISORY_RULE_IDS
+
 
 def category_for(finding: Finding) -> str:
     """The OWASP 2021 category id (``A01``…``A10``) for a finding — family keyword first, then CWE."""
@@ -145,6 +156,8 @@ def summarize(findings: Sequence[Finding]) -> list[dict[str, object]]:
     """
     buckets: dict[str, list[Finding]] = {cat: [] for cat, _ in OWASP_2021}
     for finding in findings:
+        if is_advisory(finding):
+            continue  # scan meta (coverage notes, SPA hints) aren't target vulns — keep them out
         buckets.setdefault(category_for(finding), []).append(finding)
     summary: list[dict[str, object]] = []
     for cat, name in OWASP_2021:
