@@ -13,6 +13,7 @@ import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -92,9 +93,14 @@ class HttpClient:
         max_requests: int | None = None,
         time_budget_s: float | None = None,
         auth_urls: list[str] | None = None,
+        host_overrides: dict[str, str] | None = None,
     ) -> None:
         # Auth/IdP endpoints (from the auth config) are reachable for (re)login even off the attack scope.
         self._scope_checker = ScopeChecker(scope, auth_urls=auth_urls)
+        # Virtual-host scanning: hostname -> IP to connect to. A request for an overridden host is scope-
+        # checked on its real name (unchanged), then the socket is pointed at the IP while the Host header
+        # and TLS SNI keep the real name — so a vhost that doesn't resolve in DNS is still fully scannable.
+        self._host_overrides = {h.lower().rstrip("."): ip for h, ip in (host_overrides or {}).items()}
         rate_limit = rate_limit or RateLimitConfig()
         self._bucket = TokenBucket(rate_limit.requests_per_second)
         self._semaphore = asyncio.Semaphore(rate_limit.max_concurrency)
@@ -129,6 +135,27 @@ class HttpClient:
     def is_asset_in_scope(self, host_or_ip: str) -> bool:
         """Scope check for a bare host/IP (a discovered subdomain before it has a URL)."""
         return self._scope_checker.is_asset_in_scope(host_or_ip)
+
+    def add_host_override(self, host: str, ip: str) -> None:
+        """Route future requests for ``host`` to ``ip`` (keeping Host/SNI = ``host``) — for scanning a
+        virtual host that isn't in DNS. The scope gate still runs on ``host``, so this cannot widen scope."""
+        self._host_overrides[host.lower().rstrip(".")] = ip
+
+    def _apply_host_override(self, url: str, headers: dict[str, str] | None) -> tuple[str, dict[str, str] | None, dict | None]:
+        """If ``url``'s host is overridden, rewrite the connect URL to the IP and pin Host + SNI to the
+        real host. Returns (send_url, send_headers, extensions). Scope is already checked on the real url."""
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        ip = self._host_overrides.get(host)
+        if not ip:
+            return url, headers, None
+        netloc = f"[{ip}]" if ":" in ip else ip
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
+        send_url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+        send_headers = dict(headers or {})
+        send_headers["Host"] = parts.netloc  # real vhost name (with port if any)
+        return send_url, send_headers, {"sni_hostname": parts.hostname}
 
     @property
     def request_count(self) -> int:
@@ -200,7 +227,12 @@ class HttpClient:
             self._client.cookies.update(cookies)
 
         max_retries = self._max_retries if retries is None else max(0, retries)
-        extra = {"timeout": timeout} if timeout is not None else {}  # else use the client default
+        extra: dict = {"timeout": timeout} if timeout is not None else {}  # else use the client default
+        # Virtual-host override: point the socket at the IP while Host/SNI keep the real name. Scope was
+        # already enforced above on the real ``url``; only the connection target changes.
+        send_url, send_headers, extensions = self._apply_host_override(url, headers)
+        if extensions is not None:
+            extra["extensions"] = extensions
         await self._bucket.acquire()
         async with self._semaphore:
             attempt = 0
@@ -209,9 +241,9 @@ class HttpClient:
                     start = time.monotonic()
                     response = await self._client.request(
                         method,
-                        url,
+                        send_url,
                         params=params,
-                        headers=headers,
+                        headers=send_headers,
                         data=data,
                         json=json,
                         files=files,
@@ -233,13 +265,16 @@ class HttpClient:
                     continue
 
                 logger.debug("%s %s -> %s (%.0f ms)", method, url, response.status_code, elapsed_ms)
+                # On a host override, report the real (vhost) URL, not the IP we connected to, so the
+                # scanner keeps the vhost's identity for dedup/evidence.
+                reported_url = url if send_url != url else str(response.url)
                 return HttpResponse(
                     status_code=response.status_code,
                     headers=dict(response.headers),
                     cookies=dict(response.cookies),
                     text=response.text,
                     elapsed_ms=elapsed_ms,
-                    url=str(response.url),
+                    url=reported_url,
                 )
 
     async def send_raw(self, method: str, url: str, **kwargs) -> HttpResponse:

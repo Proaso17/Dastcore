@@ -103,6 +103,7 @@ from dastcore.detectors.weak_credentials import run_weak_credentials_check
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
 from dastcore.discovery.activate import activate_endpoints
 from dastcore.discovery.api_probe import probe_api_schemas
+from dastcore.discovery.asn import asn_intel_findings, gather_asn_intel
 from dastcore.discovery.content import (
     ContentDiscoverer,
     content_extensions,
@@ -117,6 +118,7 @@ from dastcore.discovery.graphql import discover_graphql
 from dastcore.discovery.historical import gather_historical_urls, prioritise, url_to_request
 from dastcore.discovery.js_endpoints import JsEndpointDiscoverer
 from dastcore.discovery.openapi import fetch_and_parse_openapi
+from dastcore.discovery.osint import bucket_findings, check_buckets, github_code_search, github_findings
 from dastcore.discovery.params import load_param_wordlist, mine_hidden_params
 from dastcore.discovery.ports import discover_http_ports
 from dastcore.discovery.subdomains import (
@@ -126,6 +128,7 @@ from dastcore.discovery.subdomains import (
 )
 from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.discovery.tls_info import run_tls_checks
+from dastcore.discovery.vhosts import VhostDiscoverer, vhost_findings
 from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import load_rules
@@ -585,6 +588,19 @@ def _looks_like_ip(host: str) -> bool:
         return False
 
 
+async def _resolve_ip(host: str) -> str:
+    """Resolve ``host`` to a single IP (for a vhost host-override). Empty string if it doesn't resolve."""
+    import socket
+
+    if not host:
+        return ""
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError, OSError):
+        return ""
+    return str(infos[0][4][0]) if infos else ""
+
+
 # Second-level public suffixes where the registrable domain is the last THREE labels.
 _TWO_LEVEL_TLDS = frozenset(
     {"co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "org.au", "co.nz", "co.jp",
@@ -678,6 +694,8 @@ async def _run_scan(
     discover_subdomains: bool = False,
     discover_content: bool = False,
     discover_ports: bool = False,
+    discover_vhosts: bool = False,
+    osint: bool = False,
     discover_depth: str = "aggressive",
     content_wordlist: str = "",
     subdomain_wordlist: str = "",
@@ -829,6 +847,21 @@ async def _run_scan(
                             if rs.cname or rs.mx or rs.ns or rs.txt
                         }
 
+                    # ASN footprint: from the resolved IPs, learn the org's autonomous system and its
+                    # announced prefixes (RIPEstat, passive). Purely informational — never scanned here.
+                    seed_ips = sorted({ip for rs in dns_records.values() for ip in rs.a})
+                    if seed_ips:
+                        progress.status("Consultando ASN y prefijos del objetivo (RIPEstat)…")
+                        try:
+                            intel = await gather_asn_intel(seed_ips)
+                            extra_findings.extend(asn_intel_findings(intel, target))
+                            if surface is not None and intel.asns:
+                                surface["asn"] = {
+                                    "asns": intel.asns, "holders": intel.holders, "prefixes": intel.prefixes
+                                }
+                        except Exception:  # noqa: BLE001 — ASN lookup is best-effort, never fatal
+                            _scan_log.warning("Consulta ASN omitida por un error", exc_info=True)
+
                 # Favicon fingerprint per root — identifies/correlates the stack behind each host.
                 favicons: dict[str, dict[str, object]] = {}
                 for root in scan_roots:
@@ -837,6 +870,64 @@ async def _run_scan(
                         favicons[root] = {"hash": info.hash, "product": info.product}
                 if surface is not None and favicons:
                     surface["favicon"] = favicons
+
+            if discover_vhosts:
+                # Host-header fuzzing per root: find virtual hosts not published in DNS. Every request
+                # goes to the in-scope URL and every candidate Host is scope-gated. Each vhost found is
+                # then added as a full scan root: a host override points its requests at the serving IP
+                # (Host/SNI keep the vhost name), so the crawler + every detector scan it like any host.
+                from urllib.parse import urlsplit as _urlsplit_vhost
+
+                progress.status("Fuzzing de virtual hosts (cabecera Host)…")
+                vhost_words = load_subdomain_wordlist(discover_depth, subdomain_wordlist or None)
+                base = _base_domain(_urlsplit_vhost(target).hostname or "")
+                vhost_candidates = [f"{word}.{base}" for word in vhost_words] if base else []
+                if vhost_candidates:
+                    seen_vhosts = set()
+                    for root in list(scan_roots):
+                        root_parts = _urlsplit_vhost(root)
+                        root_host = root_parts.hostname or ""
+                        try:
+                            found_vhosts = await VhostDiscoverer(client, candidates=vhost_candidates).discover(root)
+                        except Exception:  # noqa: BLE001 — vhost fuzzing is best-effort, never fatal
+                            _scan_log.warning("Fuzzing de vhosts omitido para %s", root, exc_info=True)
+                            continue
+                        fresh = [v for v in found_vhosts if v.host not in seen_vhosts]
+                        if not fresh:
+                            continue
+                        # The IP serving this root also serves its vhosts — resolve it once and route
+                        # the vhost roots there so they are actually reachable (they aren't in DNS).
+                        serving_ip = root_host if _looks_like_ip(root_host) else await _resolve_ip(root_host)
+                        for vhost in fresh:
+                            seen_vhosts.add(vhost.host)
+                            if serving_ip:
+                                client.add_host_override(vhost.host, serving_ip)
+                                vhost_root = f"{root_parts.scheme}://{vhost.host}/"
+                                if vhost_root not in scan_roots:
+                                    scan_roots.append(vhost_root)
+                        extra_findings.extend(vhost_findings(root, fresh))
+                    if surface is not None and seen_vhosts:
+                        surface["vhosts"] = sorted(seen_vhosts)
+
+            if osint:
+                # Organisational OSINT (passive): public-code references + world-listable cloud buckets,
+                # derived only from the scope's own domain labels. Reports findings; never scans them.
+                progress.status("OSINT organizacional (código público · buckets cloud)…")
+                osint_domains = sorted(
+                    {
+                        _base_domain(p) for p in config.scope.allow_domains if "/" not in p and "." in p
+                    }
+                )
+                labels = sorted({d.split(".", 1)[0] for d in osint_domains if d})
+                try:
+                    for osint_domain in osint_domains:
+                        extra_findings.extend(
+                            github_findings(osint_domain, await github_code_search(osint_domain))
+                        )
+                    if labels:
+                        extra_findings.extend(bucket_findings(await check_buckets(labels)))
+                except Exception:  # noqa: BLE001 — OSINT is best-effort, never fatal
+                    _scan_log.warning("OSINT omitido por un error", exc_info=True)
 
             if surface is not None:
                 surface["roots"] = list(scan_roots)
@@ -872,6 +963,11 @@ async def _run_scan(
                 content_words = list(dict.fromkeys(seed_words + base_words))
                 extensions = content_extensions(discover_depth) if discover_content else []
                 recursion = content_recursion_depth(discover_depth) if discover_content else 1
+                from urllib.parse import urljoin as _urljoin_dir
+                from urllib.parse import urlsplit as _urlsplit_dir
+
+                probed_dirs: set[str] = set()  # directories already swept for sensitive files (deduped)
+                dir_probe_budget = 200  # cap so a huge dirbust doesn't multiply into an unbounded sweep
                 for root in scan_roots:
                     progress.status(f"Descubriendo directorios y rutas (dirbusting) en {root}…")
                     endpoints = await ContentDiscoverer(
@@ -884,6 +980,20 @@ async def _run_scan(
                         # detectors actually get something to test — not just a bare URL.
                         for req in await HttpCrawler(client, max_pages=8, use_robots=False).crawl(endpoint.url):
                             discovered.setdefault(req.signature(), req)
+
+                    # Per-directory leak sweep: probe each discovered directory for its OWN sensitive
+                    # files (/admin/.env, /backup/config.php.bak, /api/.git/config…), not just the site
+                    # root. Complements the injection scan (which already covers every route's params).
+                    for endpoint in endpoints:
+                        if len(probed_dirs) >= dir_probe_budget:
+                            break
+                        directory = _urljoin_dir(endpoint.url, ".")  # the endpoint's containing directory
+                        if _urlsplit_dir(directory).path in ("", "/") or directory in probed_dirs:
+                            continue  # the origin root is already swept per-root; skip dupes
+                        probed_dirs.add(directory)
+                        extra_findings.extend(
+                            await phase("dir-sensitive-files", probe_sensitive_files(client, directory, under_directory=True))
+                        )
 
             if use_js:
                 # Modern SPAs hide their API in JS bundles — extract those endpoints and scan them too.
@@ -1383,6 +1493,18 @@ def scan(
         help="Escaneo de puertos (connect-scan nativo, sin privilegios) de cada host descubierto: los servicios "
         "HTTP en puertos no estándar (8080, 8443, 9200…) se añaden como raíces de escaneo. Intrusivo; no en 'quick'.",
     ),
+    discover_vhosts: bool = typer.Option(
+        False,
+        "--discover-vhosts",
+        help="Fuzzing de virtual hosts (cabecera Host) sobre cada raíz: encuentra sitios servidos por Host que no "
+        "están publicados en DNS (staging/internos). Solo prueba nombres dentro del scope. Se reportan como info.",
+    ),
+    osint: bool = typer.Option(
+        False,
+        "--osint",
+        help="OSINT organizacional (pasivo): referencias al dominio en código público (GitHub, requiere GITHUB_TOKEN) "
+        "y buckets S3/GCS/Azure públicos derivados de los dominios en scope. No escanea; reporta hallazgos.",
+    ),
     discover_depth: str = typer.Option(
         "aggressive", "--discover-depth", help="Profundidad del descubrimiento: light | balanced | aggressive."
     ),
@@ -1752,6 +1874,8 @@ def scan(
                     discover_subdomains=(discover or discover_subdomains) and profile != "quick",
                     discover_content=(discover or discover_content) and profile != "quick",
                     discover_ports=discover_ports and profile != "quick",
+                    discover_vhosts=discover_vhosts and profile != "quick",
+                    osint=osint and profile != "quick",
                     discover_depth=discover_depth,
                     content_wordlist=content_wordlist,
                     subdomain_wordlist=subdomain_wordlist,

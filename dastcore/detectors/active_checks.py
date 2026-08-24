@@ -149,8 +149,13 @@ async def check_cors_reflection(client: HttpClient, request: HttpRequest) -> lis
     return []
 
 
-async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding]:
-    """Probe well-known sensitive paths at the target origin; confirm by content signature.
+async def probe_sensitive_files(client: HttpClient, target: str, *, under_directory: bool = False) -> list[Finding]:
+    """Probe well-known sensitive paths at the target; confirm by content signature.
+
+    By default the probes are relative to the **origin** (``https://host/.env``…). With
+    ``under_directory=True`` they are relative to the target's **directory** instead
+    (``https://host/admin/.env``…), so every discovered directory can be swept for its own leaked
+    backups/config, not just the site root.
 
     Calibrates against a **catch-all** first: a host that serves 200 for a random path (a SPA that
     returns its ``index.html`` for every route) would otherwise false-positive on any sensitive path —
@@ -158,9 +163,13 @@ async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding
     hit is only reported when the response genuinely differs from that random-path baseline.
     """
     parts = urlsplit(target)
-    origin = f"{parts.scheme}://{parts.netloc}/"
+    if under_directory and parts.path:
+        directory = parts.path.rsplit("/", 1)[0] + "/"  # "/admin/x" and "/admin/" both -> "/admin/"
+        base = f"{parts.scheme}://{parts.netloc}{directory}"
+    else:
+        base = f"{parts.scheme}://{parts.netloc}/"
     try:
-        baseline = await client.get(urljoin(origin, "dc" + secrets.token_hex(12) + ".notreal"))
+        baseline = await client.get(urljoin(base, "dc" + secrets.token_hex(12) + ".notreal"))
     except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
         return []
     catch_all = baseline.status_code == 200
@@ -168,7 +177,7 @@ async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding
 
     findings: list[Finding] = []
     for path, name, signature, severity in _SENSITIVE_FILES:
-        url = urljoin(origin, path)
+        url = urljoin(base, path)
         try:
             response = await client.get(url)
         except (OutOfScopeError, BudgetExceededError):
@@ -187,7 +196,7 @@ async def probe_sensitive_files(client: HttpClient, target: str) -> list[Finding
         request = HttpRequest(method="GET", url=url)
         findings.append(
                 Finding(
-                    id=f"active-sensitive-file:{path}",
+                    id=f"active-sensitive-file:{urlsplit(url).path}",
                     rule_id="active-sensitive-file",
                     name=name,
                     severity=severity,  # type: ignore[arg-type]
