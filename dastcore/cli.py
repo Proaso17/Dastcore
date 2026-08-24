@@ -118,12 +118,14 @@ from dastcore.discovery.historical import gather_historical_urls, prioritise, ur
 from dastcore.discovery.js_endpoints import JsEndpointDiscoverer
 from dastcore.discovery.openapi import fetch_and_parse_openapi
 from dastcore.discovery.params import load_param_wordlist, mine_hidden_params
+from dastcore.discovery.ports import discover_http_ports
 from dastcore.discovery.subdomains import (
     SubdomainDiscoverer,
     load_subdomain_wordlist,
     subdomain_recursion_depth,
 )
 from dastcore.discovery.tech_paths import discover_tech_paths
+from dastcore.discovery.tls_info import run_tls_checks
 from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import load_rules
@@ -675,6 +677,7 @@ async def _run_scan(
     prove_impact: bool = False,
     discover_subdomains: bool = False,
     discover_content: bool = False,
+    discover_ports: bool = False,
     discover_depth: str = "aggressive",
     content_wordlist: str = "",
     subdomain_wordlist: str = "",
@@ -770,6 +773,24 @@ async def _run_scan(
                 )
             for historical_req in historical_requests:  # historical endpoints (with their params) get scanned
                 discovered.setdefault(historical_req.signature(), historical_req)
+
+            if discover_subdomains or discover_content or discover_ports:
+                from urllib.parse import urlsplit as _urlsplit
+
+                # Port discovery: connect-scan each root host and add the extra HTTP services (8080,
+                # 8443, 9200…) as scan roots. Scope-gated (host:port must be in scope) and best-effort.
+                if discover_ports:
+                    progress.status("Escaneando puertos (servicios HTTP no estándar)…")
+                    port_hosts = sorted(
+                        {h for r in list(scan_roots) if (h := (_urlsplit(r).hostname or ""))}
+                    )
+                    for phost in port_hosts:
+                        try:
+                            for port_root in await discover_http_ports(client, phost):
+                                if port_root not in scan_roots:
+                                    scan_roots.append(port_root)
+                        except Exception:  # noqa: BLE001 — port discovery is best-effort, never fatal
+                            _scan_log.warning("Escaneo de puertos omitido para %s", phost, exc_info=True)
 
             if discover_subdomains or discover_content:
                 # DNS enrichment: reverse-resolve any in-scope CIDR ranges into real hosts (added as
@@ -922,6 +943,7 @@ async def _run_scan(
                 extra_findings.extend(await phase("trace-method", check_trace_method(client, root)))
                 extra_findings.extend(await phase("dangerous-methods", check_dangerous_methods(client, root)))
                 extra_findings.extend(await phase("spa-awareness", run_spa_check(client, root, engine)))
+                extra_findings.extend(await phase("tls-info", run_tls_checks(root)))
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
                 jwt = config.auth.bearer_token
                 extra_findings.extend(await phase("jwt-none", check_jwt_none_acceptance(client, target, jwt)))
@@ -1355,6 +1377,12 @@ def scan(
     discover_content: bool = typer.Option(
         False, "--discover-content", help="Solo descubrimiento de rutas / dirbusting (subconjunto de --discover)."
     ),
+    discover_ports: bool = typer.Option(
+        False,
+        "--discover-ports",
+        help="Escaneo de puertos (connect-scan nativo, sin privilegios) de cada host descubierto: los servicios "
+        "HTTP en puertos no estándar (8080, 8443, 9200…) se añaden como raíces de escaneo. Intrusivo; no en 'quick'.",
+    ),
     discover_depth: str = typer.Option(
         "aggressive", "--discover-depth", help="Profundidad del descubrimiento: light | balanced | aggressive."
     ),
@@ -1723,6 +1751,7 @@ def scan(
                     prove_impact=prove_impact,  # opt-in explícito: enriquece confirmados, no depende del perfil
                     discover_subdomains=(discover or discover_subdomains) and profile != "quick",
                     discover_content=(discover or discover_content) and profile != "quick",
+                    discover_ports=discover_ports and profile != "quick",
                     discover_depth=discover_depth,
                     content_wordlist=content_wordlist,
                     subdomain_wordlist=subdomain_wordlist,

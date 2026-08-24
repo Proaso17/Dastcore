@@ -6,7 +6,7 @@ from __future__ import annotations
 from dastcore.bugbounty import Program
 from dastcore.core.scope import ScopeChecker
 from dastcore.recon import AssetStore, ReconOptions, run_recon
-from dastcore.recon.adapters import CrtShAdapter, HttpxAdapter, SubfinderAdapter
+from dastcore.recon.adapters import CrtShAdapter, HttpxAdapter, NaabuAdapter, SubfinderAdapter
 from dastcore.recon.models import Asset
 
 _CRTSH = '[{"name_value":"api.acme.com\\nwww.acme.com\\n*.acme.com"},{"name_value":"evil.com"}]'
@@ -38,6 +38,14 @@ def test_crtsh_parses_and_normalizes_subdomains() -> None:
 
 def test_subfinder_parses_lines() -> None:
     assert {a.host for a in SubfinderAdapter().parse(_SUBFINDER)} == {"api.acme.com", "dev.acme.com"}
+
+
+def test_naabu_parses_plain_and_json_lines() -> None:
+    raw = 'api.acme.com:8080\napi.acme.com:443\n{"host":"dev.acme.com","port":22}\n\nbroken\n'
+    assets = NaabuAdapter().parse(raw)
+    pairs = {(a.host, a.port) for a in assets}
+    assert pairs == {("api.acme.com", 8080), ("api.acme.com", 443), ("dev.acme.com", 22)}
+    assert all(a.source == "naabu" for a in assets)
 
 
 def test_httpx_parses_live_hosts() -> None:
