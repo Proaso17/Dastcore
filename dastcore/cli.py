@@ -111,6 +111,8 @@ from dastcore.discovery.content import (
 )
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
+from dastcore.discovery.dns_records import RecordSet, gather_dns_records, ptr_sweep
+from dastcore.discovery.favicon import probe_favicon
 from dastcore.discovery.graphql import discover_graphql
 from dastcore.discovery.historical import gather_historical_urls, prioritise, url_to_request
 from dastcore.discovery.js_endpoints import JsEndpointDiscoverer
@@ -699,6 +701,7 @@ async def _run_scan(
     dom_findings: list[Finding] = []
     extra_findings: list[Finding] = []
     active_passive: list[Finding] = []
+    dns_records: dict[str, RecordSet] = {}  # host -> DNS records; feeds the takeover check its CNAMEs
     budget_hit = False
     sink = FindingSink(findings_log).open() if findings_log else None  # persist findings as they're found
     failed_phases: list[str] = []
@@ -767,6 +770,53 @@ async def _run_scan(
                 )
             for historical_req in historical_requests:  # historical endpoints (with their params) get scanned
                 discovered.setdefault(historical_req.signature(), historical_req)
+
+            if discover_subdomains or discover_content:
+                # DNS enrichment: reverse-resolve any in-scope CIDR ranges into real hosts (added as
+                # scan roots), then resolve each host's records. The CNAMEs feed the takeover check;
+                # MX/TXT/NS enrich the surface report. All fail-open and scope-gated.
+                from urllib.parse import urlsplit as _urlsplit
+
+                cidrs = [p for p in config.scope.allow_domains if "/" in p]
+                if cidrs:
+                    progress.status("Barrido inverso (PTR) de rangos en scope…")
+                    try:
+                        for ptr_host in sorted(await ptr_sweep(cidrs, client.is_asset_in_scope)):
+                            root = f"https://{ptr_host}"
+                            if root not in scan_roots:
+                                scan_roots.append(root)
+                    except Exception:  # noqa: BLE001 — PTR enrichment is best-effort, never fatal
+                        _scan_log.warning("Barrido PTR omitido por un error", exc_info=True)
+
+                root_hosts = sorted(
+                    {
+                        h
+                        for r in scan_roots
+                        if (h := (_urlsplit(r).hostname or "")) and not _looks_like_ip(h)
+                    }
+                )
+                if root_hosts:
+                    progress.status("Resolviendo registros DNS (CNAME · MX · TXT · NS)…")
+                    try:
+                        dns_records = await gather_dns_records(root_hosts)
+                    except Exception:  # noqa: BLE001 — DNS enrichment is best-effort, never fatal
+                        _scan_log.warning("Enriquecimiento DNS omitido por un error", exc_info=True)
+                    if surface is not None and dns_records:
+                        surface["dns"] = {
+                            host: {"cname": rs.cname, "mx": rs.mx, "ns": rs.ns, "txt": rs.txt}
+                            for host, rs in dns_records.items()
+                            if rs.cname or rs.mx or rs.ns or rs.txt
+                        }
+
+                # Favicon fingerprint per root — identifies/correlates the stack behind each host.
+                favicons: dict[str, dict[str, object]] = {}
+                for root in scan_roots:
+                    info = await probe_favicon(client, root)
+                    if info is not None:
+                        favicons[root] = {"hash": info.hash, "product": info.product}
+                if surface is not None and favicons:
+                    surface["favicon"] = favicons
+
             if surface is not None:
                 surface["roots"] = list(scan_roots)
                 surface.setdefault("content", {})
@@ -916,7 +966,12 @@ async def _run_scan(
             extra_findings.extend(await phase("nosql", run_nosql_checks(client, all_requests)))
             extra_findings.extend(await phase("mass-assignment", run_mass_assignment_checks(client, all_requests)))
             extra_findings.extend(await phase("js-secrets", run_js_secret_scan(client, all_requests)))
-            extra_findings.extend(await phase("subdomain-takeover", run_subdomain_takeover_check(client, target, all_requests)))
+            extra_findings.extend(
+                await phase(
+                    "subdomain-takeover",
+                    run_subdomain_takeover_check(client, target, all_requests, dns_records=dns_records),
+                )
+            )
             extra_findings.extend(await phase("deserialization", run_deserialization_checks(client, all_requests, oast)))
             extra_findings.extend(await phase("oauth", run_oauth_checks(client, all_requests)))
             extra_findings.extend(await phase("access-bypass", run_access_bypass_checks(client, all_requests)))
