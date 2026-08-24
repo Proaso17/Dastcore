@@ -61,6 +61,7 @@ from dastcore.detectors.active_checks import (
 )
 from dastcore.detectors.authz import Identity as AuthzIdentity
 from dastcore.detectors.authz import run_authz_checks
+from dastcore.detectors.cache_deception import run_cache_deception_checks
 from dastcore.detectors.cache_poison import run_cache_poisoning_checks
 from dastcore.detectors.code_injection import run_code_injection_checks
 from dastcore.detectors.csrf import run_csrf_checks
@@ -95,6 +96,7 @@ from dastcore.detectors.shellshock import check_shellshock
 from dastcore.detectors.spa import run_spa_check
 from dastcore.detectors.ssi import run_ssi_checks
 from dastcore.detectors.ssrf_metadata import run_cloud_ssrf_checks
+from dastcore.detectors.ssti_error import run_ssti_error_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.user_enum import run_user_enumeration_checks
 from dastcore.detectors.weak_credentials import run_weak_credentials_check
@@ -921,8 +923,15 @@ async def _run_scan(
             extra_findings.extend(await phase("user-enumeration", run_user_enumeration_checks(client, all_requests)))
             extra_findings.extend(await phase("reset-poisoning", run_reset_poisoning_checks(client, all_requests)))
             extra_findings.extend(await phase("ssrf-cloud-metadata", run_cloud_ssrf_checks(client, all_requests)))
+            if config.auth.type != "none":
+                # Web cache deception needs an authenticated session + an anonymous client to prove a
+                # cached authenticated page is served cross-user.
+                async with _make_client(config, budget) as anon_client:
+                    extra_findings.extend(await phase(
+                        "web-cache-deception", run_cache_deception_checks(client, anon_client, all_requests)))
             extra_findings.extend(await phase("response-splitting", run_response_splitting_checks(client, all_requests)))
             extra_findings.extend(await phase("ssi", run_ssi_checks(client, all_requests)))
+            extra_findings.extend(await phase("ssti-error", run_ssti_error_checks(client, all_requests)))
             extra_findings.extend(await phase("code-injection", run_code_injection_checks(client, all_requests)))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.

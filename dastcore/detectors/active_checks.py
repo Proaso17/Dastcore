@@ -46,50 +46,106 @@ def _point(request: HttpRequest, location: str, name: str) -> InjectionPoint:
     return InjectionPoint(location=location, name=name, base_value="", request_template=request)  # type: ignore[arg-type]
 
 
-async def check_cors_reflection(client: HttpClient, request: HttpRequest) -> list[Finding]:
-    """Send a forged Origin and flag a server that reflects it *with* credentials."""
+_CORS_ATTACK_SUFFIX = "dcattacker.example"  # an attacker-registrable domain used to prove a bypass
+
+
+async def _cors_probe(client: HttpClient, request: HttpRequest, origin: str) -> tuple[str, str, bool] | None:
+    """Send ``request`` with ``Origin: origin``; return (ACAO, ACAC-lowercased, cors_aware) or None.
+
+    ``cors_aware`` means the endpoint does dynamic per-origin handling (any ``Access-Control-*`` header,
+    or ``Vary: Origin``) — the signal that a *restrictive* endpoint (which won't reflect our evil probe)
+    is still worth testing for an allowlist bypass, without a second request.
+    """
     try:
         response = await client.request(
-            request.method,
-            request.url,
-            params=request.params,
-            headers={**request.headers, "Origin": _CORS_PROBE_ORIGIN},
-            data=request.data,
-            json=request.json_body,
+            request.method, request.url, params=request.params,
+            headers={**request.headers, "Origin": origin},
+            data=request.data, json=request.json_body,
         )
     except (OutOfScopeError, BudgetExceededError):
+        return None
+    headers = {name.lower(): value for name, value in response.headers.items()}
+    aware = any(h.startswith("access-control-") for h in headers) or "origin" in headers.get("vary", "").lower()
+    return headers.get("access-control-allow-origin", ""), headers.get("access-control-allow-credentials", "").lower(), aware
+
+
+def _cors_bypass_origins(request: HttpRequest) -> list[tuple[str, str]]:
+    """(origin, why) pairs that are attacker-controllable yet trick common naive Origin checks."""
+    host = (urlsplit(request.url).hostname or "").lower()
+    reg = ".".join(host.split(".")[-2:]) if host.count(".") >= 1 else host
+    return [
+        ("null", "null origin trusted (exploitable from a sandboxed iframe)"),
+        (f"https://{host}.{_CORS_ATTACK_SUFFIX}", "target host as a prefix (naive startsWith/regex)"),
+        (f"https://{reg}.{_CORS_ATTACK_SUFFIX}", "target domain as a subdomain of an attacker domain (substring match)"),
+        (f"https://dcattacker-{reg}", "attacker domain ending in the target (naive endsWith)"),
+    ]
+
+
+def _cors_finding(
+    request: HttpRequest, rule_id: str, name: str, origin: str, with_creds: bool, why: str
+) -> Finding:
+    path = urlsplit(request.url).path or "/"
+    return Finding(
+        id=f"{rule_id}:{request.method}:{path}",
+        rule_id=rule_id,
+        name=name,
+        severity="high" if with_creds else "medium",  # credentials => a real cross-account read
+        cwe="CWE-942",
+        owasp="WSTG-CLNT-07",
+        family="cors",
+        injection_point=_point(request, "header", "Origin"),
+        evidence=[Evidence(
+            type="reflected",
+            data=(f"Origin {origin} was reflected in Access-Control-Allow-Origin"
+                  + (" with Access-Control-Allow-Credentials: true" if with_creds else " (no credentials)")
+                  + f" — {why}")[:240],
+            confidence="high",
+        )],
+        request=request.model_copy(update={"headers": {**request.headers, "Origin": origin}}),
+        response=HttpResponse(status_code=200, url=request.url),
+        remediation=(
+            "Valida el Origin contra un allowlist **exacto** de orígenes de confianza (comparación de "
+            "igualdad, no prefijo/sufijo/substring/regex). Nunca reflejes un Origin arbitrario ni `null`, "
+            "y nunca combines reflexión de Origin con Access-Control-Allow-Credentials: true."
+        ),
+    )
+
+
+async def check_cors_reflection(client: HttpClient, request: HttpRequest) -> list[Finding]:
+    """Flag CORS misconfigurations: an arbitrary/`null`/attacker-controllable Origin reflected in ACAO
+    (highest impact with credentials). Bypass probes only run on CORS-aware endpoints, so a non-CORS
+    endpoint still costs a single probe."""
+    arb = await _cors_probe(client, request, _CORS_PROBE_ORIGIN)
+    if arb is None:
+        return []
+    acao, acac, aware = arb
+    with_creds = acac == "true"
+
+    # 1) Arbitrary origin reflected → the fully-open case (unchanged rule id, highest signal).
+    if acao == _CORS_PROBE_ORIGIN:
+        return [_cors_finding(
+            request, "active-cors-reflected-origin",
+            "CORS misconfiguration: arbitrary origin reflected"
+            + (" with credentials" if with_creds else ""),
+            _CORS_PROBE_ORIGIN, with_creds, "any origin is reflected (fully open)",
+        )]
+
+    # Not doing dynamic per-origin CORS → nothing to bypass; keep cost at one probe for the common case.
+    if not aware:
         return []
 
-    headers = {name.lower(): value for name, value in response.headers.items()}
-    acao = headers.get("access-control-allow-origin", "")
-    acac = headers.get("access-control-allow-credentials", "").lower()
-    if acao == _CORS_PROBE_ORIGIN and acac == "true":
-        path = urlsplit(request.url).path or "/"
-        return [
-            Finding(
-                id=f"active-cors-reflected-origin:{request.method}:{path}",
-                rule_id="active-cors-reflected-origin",
-                name="CORS misconfiguration: arbitrary origin reflected with credentials",
-                severity="high",
-                cwe="CWE-942",
-                owasp="WSTG-CLNT-07",
-                family="cors",
-                injection_point=_point(request, "header", "Origin"),
-                evidence=[
-                    Evidence(
-                        type="reflected",
-                        data=f"reflected Origin {_CORS_PROBE_ORIGIN} with Access-Control-Allow-Credentials: true",
-                        confidence="high",
-                    )
-                ],
-                request=request,
-                response=response,
-                remediation=(
-                    "Nunca reflejes un Origin arbitrario con allow-credentials. Valida el Origin "
-                    "contra un allowlist estricto de orígenes de confianza."
-                ),
-            )
-        ]
+    # 2) CORS-aware endpoint → try null + prefix/suffix/substring bypasses (all attacker-controllable).
+    for origin, why in _cors_bypass_origins(request):
+        probed = await _cors_probe(client, request, origin)
+        if probed is None:
+            continue
+        got_acao, got_acac, _ = probed
+        if got_acao == origin:
+            return [_cors_finding(
+                request, "active-cors-origin-bypass",
+                "CORS misconfiguration: attacker-controllable origin accepted (allowlist bypass)",
+                origin, got_acac == "true", why,
+            )]
     return []
 
 
