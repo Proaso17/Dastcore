@@ -2772,6 +2772,18 @@ def hunt(
     resume_path: str = typer.Option(".dastcore/hunt.json", "--resume", help="Checkpoint por asset (resumible)."),
     output_format: str = typer.Option("json", "--format", "-f", help="Formato del reporte: json | sarif | html."),
     output_path: str = typer.Option("", "--output", "-o", help="Ruta del reporte (por defecto, no se escribe)."),
+    discover_ports: bool = typer.Option(
+        False, "--discover-ports", help="Escaneo de puertos por host (servicios HTTP no estándar → nuevas raíces)."
+    ),
+    discover_vhosts: bool = typer.Option(
+        False, "--discover-vhosts", help="Fuzzing de virtual hosts por host (se escanean por completo)."
+    ),
+    osint: bool = typer.Option(
+        False, "--osint", help="OSINT organizacional (código público + buckets cloud), una vez por programa."
+    ),
+    screenshots: bool = typer.Option(
+        False, "--screenshots", help="Screenshot headless de cada host escaneado (triaje visual)."
+    ),
     i_have_authorization: bool = typer.Option(
         False, "--i-have-authorization", help="Confirmas autorización sobre el scope del programa."
     ),
@@ -2810,6 +2822,10 @@ def hunt(
             engine=engine,
             max_pages=max_pages,
             checkpoint_path=resume_path,
+            discover_ports=discover_ports,
+            discover_vhosts=discover_vhosts,
+            osint=osint,
+            screenshots=screenshots,
         )
     )
     store.close()

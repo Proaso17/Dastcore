@@ -35,7 +35,19 @@ async def run_recon(
     allow_active: bool = True,
     adapters: list[Adapter] | None = None,
 ) -> list[Asset]:
-    """Enumerate subdomains from the seeds, probe them for liveness, and store the in-scope assets."""
+    """Enumerate subdomains from the seeds, probe them for liveness, and store the in-scope assets.
+
+    Two engines behind one API. **Replay mode** (``opts.replay`` populated — tests/offline) runs the
+    pure tool adapters against recorded output. **Real mode** (no replay) runs the rich ``discovery/``
+    engine (multi-source passive + DNS-calibrated brute + permutations + DNS records + ports + favicon),
+    so ``dastcore recon`` and ``dastcore hunt`` inherit everything the scan flow gained — one engine.
+    The scope gate is identical in both paths: nothing out of scope is ever probed or stored.
+    """
+    if not opts.replay:
+        from dastcore.recon.discovery_enum import discover_assets
+
+        return await discover_assets(list(seeds), opts, store, checker, allow_active=allow_active)
+
     pool = _adapters_for(adapters or default_adapters(), opts.profile, allow_active)
     now = time.time()
     stored: list[Asset] = []

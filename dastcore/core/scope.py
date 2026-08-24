@@ -53,6 +53,11 @@ class ScopeChecker:
         # isn't in the attack scope. Exact scheme+host+path only — never opens the IdP to scanning.
         self._auth_endpoints = {_endpoint_key(u) for u in (auth_urls or [])}
 
+    @property
+    def scope(self) -> ScopeConfig:
+        """The allow/deny configuration this checker enforces (for building a matching HttpClient)."""
+        return self._scope
+
     def is_in_scope(self, url: str) -> bool:
         try:
             parts = urlsplit(url)

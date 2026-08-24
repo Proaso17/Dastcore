@@ -72,12 +72,18 @@ async def run_campaign(
     on_status: Callable[[str], None] | None = None,
     discover_depth: str = "light",
     seed_paths: Sequence[str] = (),
+    discover_ports: bool = False,
+    discover_vhosts: bool = False,
+    osint: bool = False,
+    screenshots: bool = False,
 ) -> CampaignResult:
     """Discover the program's live in-scope surface and scan it. Recon-only if scanning is forbidden.
 
     Uses the same discovery engine as a plain scan: every live host is dirbusted (recursive route
     discovery at ``discover_depth``) — plus any manual ``seed_paths`` — before its vulnerabilities are
-    tested, so bug-bounty hunts and scans find the same routes."""
+    tested, so bug-bounty hunts and scans find the same routes. The opt-in flags map to the scan flow's
+    recon extensions: per-host port discovery and vhost fuzzing, plus organisation-level OSINT (run once)
+    and headless screenshots."""
     checker = ScopeChecker(program.to_scope_config())
     opts = recon_opts or ReconOptions()
 
@@ -121,6 +127,10 @@ async def run_campaign(
             discover_content=True,  # dirbust each host's routes (recon already found the hosts)
             discover_depth=discover_depth,
             seed_paths=seed_paths,
+            discover_ports=discover_ports,
+            discover_vhosts=discover_vhosts,
+            osint=osint and index == 1,  # org-level OSINT is identical per host: run it once
+            screenshots=screenshots,
         )
         checkpoint.mark_done(url, found)
         checkpoint.save()
