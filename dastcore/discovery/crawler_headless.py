@@ -184,6 +184,35 @@ class HeadlessEngine:
         finally:
             await page.close()
 
+    # --- Screenshots ------------------------------------------------------------------
+
+    async def screenshot(self, url: str, path: str) -> bool:
+        """Render ``url`` and save a PNG screenshot to ``path``. Scope-enforced; False on any failure.
+
+        Reuses the authenticated, scope-checked context, so it captures the page exactly as the scanner
+        sees it (logged in, in scope). A navigation/render failure is swallowed — a screenshot is a
+        nice-to-have for triage, never something that should break a scan."""
+        base = url.split("#", 1)[0]
+        if not self._scope.is_in_scope(base):
+            return False
+        page = await self._context.new_page()
+        try:
+            try:
+                await page.goto(base, wait_until="load", timeout=self._nav_timeout)
+            except Exception:  # noqa: BLE001 — unreachable/slow page: no screenshot, not fatal
+                return False
+            await page.wait_for_timeout(200)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=2000)
+            except Exception:  # noqa: BLE001 — best-effort settle
+                pass
+            await page.screenshot(path=path, full_page=False)
+            return True
+        except Exception:  # noqa: BLE001 — capture failed: skip, keep scanning
+            return False
+        finally:
+            await page.close()
+
     # --- DOM-XSS ----------------------------------------------------------------------
 
     async def scan_dom_xss(self, urls: list[str]) -> list[Finding]:

@@ -696,6 +696,8 @@ async def _run_scan(
     discover_ports: bool = False,
     discover_vhosts: bool = False,
     osint: bool = False,
+    screenshots: bool = False,
+    screenshots_dir: str = "",
     discover_depth: str = "aggressive",
     content_wordlist: str = "",
     subdomain_wordlist: str = "",
@@ -932,6 +934,22 @@ async def _run_scan(
             if surface is not None:
                 surface["roots"] = list(scan_roots)
                 surface.setdefault("content", {})
+
+            if screenshots:
+                # Visual triage: one headless screenshot per host. Best-effort — a missing browser just
+                # skips it, never breaks the scan.
+                progress.status("Capturando screenshots (headless) de cada host…")
+                try:
+                    shots = await _capture_screenshots(
+                        config, client, scan_roots, screenshots_dir or "dastcore-screenshots"
+                    )
+                    if surface is not None and shots:
+                        surface["screenshots"] = shots
+                    _scan_log.info("Screenshots capturadas: %d", len(shots))
+                except HeadlessUnavailableError:
+                    progress.status("Screenshots omitidas: Playwright/Chromium no disponible.")
+                except Exception:  # noqa: BLE001 — screenshots are best-effort, never fatal
+                    _scan_log.warning("Captura de screenshots omitida por un error", exc_info=True)
 
             if engine in ("http", "both"):
                 for root in scan_roots:
@@ -1189,7 +1207,26 @@ async def _run_scan(
         extra_findings.append(_coverage_finding(target, failed_phases))
 
     # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
-    return cross_correlate(active_passive + extra_findings + dom_findings + authz_findings)
+    final_findings = cross_correlate(active_passive + extra_findings + dom_findings + authz_findings)
+
+    # Unified, ranked attack-surface model: fold every host + discovered endpoint + finding into one
+    # prioritised view (highest attack-surface interest first) for the surface report/dashboard.
+    if surface is not None and (scan_roots or discovered):
+        from urllib.parse import urlsplit as _urlsplit_surface
+
+        from dastcore.discovery.surface import build_scored_surface
+
+        favicon_tech: dict[str, list[str]] = {}
+        for root, info in (surface.get("favicon") or {}).items():
+            product = info.get("product") if isinstance(info, dict) else None
+            if product:
+                favicon_tech.setdefault(_urlsplit_surface(root).netloc.lower(), []).append(str(product))
+        scored = build_scored_surface(
+            scan_roots, list(discovered.values()), final_findings, host_tech=favicon_tech
+        )
+        surface["scored"] = scored.to_dict()
+
+    return final_findings
 
 
 async def _run_retest(
@@ -1264,6 +1301,34 @@ async def _run_headless(
         page_urls = [req.url for req in discovered if req.method == "GET"]
         dom_findings = await engine.scan_dom_xss([target, *page_urls])
         return discovered, dom_findings
+
+
+def _screenshot_filename(root: str) -> str:
+    """A filesystem-safe PNG name for a root URL (its netloc, sanitised)."""
+    from urllib.parse import urlsplit
+
+    netloc = urlsplit(root).netloc or root
+    safe = "".join(c if c.isalnum() or c in ".-" else "_" for c in netloc)
+    return f"{safe or 'root'}.png"
+
+
+async def _capture_screenshots(
+    config: ScanConfig, client: HttpClient, roots: list[str], out_dir: str
+) -> dict[str, str]:
+    """Screenshot each root with one shared headless browser. Returns {root: file}. Fail-open."""
+    shots: dict[str, str] = {}
+    async with HeadlessEngine(
+        config.scope,
+        cookies=client.cookie_pairs(),
+        extra_headers=client.session_headers(),
+    ) as engine:  # raises HeadlessUnavailableError before the dir is created if the browser is missing
+        directory = Path(out_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        for root in roots:
+            path = directory / _screenshot_filename(root)
+            if await engine.screenshot(root, str(path)):
+                shots[root] = str(path)
+    return shots
 
 
 class SessionLoginError(RuntimeError):
@@ -1504,6 +1569,15 @@ def scan(
         "--osint",
         help="OSINT organizacional (pasivo): referencias al dominio en código público (GitHub, requiere GITHUB_TOKEN) "
         "y buckets S3/GCS/Azure públicos derivados de los dominios en scope. No escanea; reporta hallazgos.",
+    ),
+    screenshots: bool = typer.Option(
+        False,
+        "--screenshots",
+        help="Captura una screenshot (headless) de cada host descubierto para triaje visual. Requiere Playwright; "
+        "se guardan en --screenshots-dir (por defecto 'dastcore-screenshots/').",
+    ),
+    screenshots_dir: str = typer.Option(
+        "", "--screenshots-dir", help="Directorio donde guardar las screenshots (por defecto 'dastcore-screenshots')."
     ),
     discover_depth: str = typer.Option(
         "aggressive", "--discover-depth", help="Profundidad del descubrimiento: light | balanced | aggressive."
@@ -1876,6 +1950,8 @@ def scan(
                     discover_ports=discover_ports and profile != "quick",
                     discover_vhosts=discover_vhosts and profile != "quick",
                     osint=osint and profile != "quick",
+                    screenshots=screenshots and profile != "quick",
+                    screenshots_dir=screenshots_dir,
                     discover_depth=discover_depth,
                     content_wordlist=content_wordlist,
                     subdomain_wordlist=subdomain_wordlist,
@@ -1945,6 +2021,16 @@ def _emit_surface(surface: dict[str, Any], path: str, *, quiet: bool) -> None:
             console.print(f"     {urlsplit(url).path or url}")
         if len(paths) > 12:
             console.print(f"     … y {len(paths) - 12} más")
+
+    # Prioritised view: hosts ranked by attack-surface interest, so the eye goes to what matters first.
+    scored = (surface.get("scored") or {}).get("hosts") or []
+    ranked = [h for h in scored if h.get("score", 0) > 0][:8]
+    if ranked:
+        console.print("\n[bold]Prioridad de superficie[/bold] (mayor interés de ataque primero)")
+        for host in ranked:
+            reasons = "; ".join(host.get("reasons", [])) or "—"
+            console.print(f"  [yellow]{host['score']:>4.0f}[/yellow]  [cyan]{host['host']}[/cyan]  · {reasons}")
+
     if path:
         console.print(f"[dim]Mapa completo: {path}[/dim]")
 
