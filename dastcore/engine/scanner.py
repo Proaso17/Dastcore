@@ -15,6 +15,7 @@ correlated interaction actually arrived. No callback, no finding.
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,6 +44,8 @@ from dastcore.report.correlation import cross_correlate
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import OracleSpec, evaluate_oracle
 from dastcore.validation.reflection import analyze_reflection
+
+_scan_logger = logging.getLogger("dastcore.scanner")
 
 
 def _reflection_excerpt(body: str, marker: str, window: int = 120) -> str:
@@ -154,6 +157,12 @@ class Scanner:
             # A mutated payload produced a request httpx refuses to send (e.g. illegal
             # header value). Skip it rather than aborting the whole scan.
             return None
+        except (httpx.HTTPError, OSError):
+            # A flaky or hostile target — the reality of scanning third-party sites: a disconnect,
+            # connection reset, protocol error, timeout or read error on ONE probe must never abort the
+            # scan. Treat it as "no response for this probe" and carry on; the rest of the surface is
+            # still tested. (httpx.HTTPError covers RemoteProtocolError and every transport error.)
+            return None
 
     def _oast_active(self) -> bool:
         return self._oast is not None and self._oast.is_available()
@@ -208,8 +217,15 @@ class Scanner:
         semaphore = asyncio.Semaphore(self._concurrency)
 
         async def _worker(request: HttpRequest) -> list[Finding]:
-            async with semaphore:
-                request_findings = await self.scan_request(request)
+            try:
+                async with semaphore:
+                    request_findings = await self.scan_request(request)
+            except BudgetExceededError:
+                raise  # the intended soft-stop — let it bubble up to end the scan cleanly
+            except Exception:  # noqa: BLE001 — isolate per request: one bad target response, an odd
+                # payload, or a transient error must not cancel every other request in the gather.
+                _scan_logger.warning("Escaneo de %s omitido por un error", request.url, exc_info=True)
+                request_findings = []
             if on_request_done is not None:
                 on_request_done(request, request_findings)
             return request_findings

@@ -32,6 +32,9 @@ _RETRYABLE_EXCEPTIONS = (
     httpx.ReadTimeout,
     httpx.WriteTimeout,
     httpx.PoolTimeout,
+    # A third-party server that closes the connection without a response — common on fragile targets
+    # under scan load. Transient, so retry it (bounded by max_retries) before giving up.
+    httpx.RemoteProtocolError,
 )
 
 
@@ -299,6 +302,11 @@ class HttpClient:
         send_headers = headers
         epoch: int | None = None
         if self._session is not None:
+            # Don't fire with stale session material while a re-login is mid-flight — that is what turns a
+            # single dropped session into a re-login cascade under concurrency. Wait for it, then apply the
+            # fresh material and read the fresh epoch.
+            if _allow_relogin and self._session.can_relogin:
+                await self._session.wait_until_ready()
             send_headers = self._session.apply(headers)
             epoch = self._session.epoch
 

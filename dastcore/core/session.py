@@ -82,6 +82,20 @@ class SessionManager:
     def is_established(self) -> bool:
         return self._established
 
+    async def wait_until_ready(self) -> None:
+        """Block while a re-login is in progress, then return.
+
+        Under concurrency, a dropped session makes many in-flight requests 302 to login at once. If each
+        fires with the now-stale session material it triggers its own re-login, and each re-login mints a
+        fresh cookie that invalidates the previous one — a cascade that burns through ``max_relogin`` and
+        leaves the session dead. Gating every request on the re-login lock here means: while one task
+        re-establishes the session, the others wait and then proceed with the *fresh* material, so exactly
+        one re-login happens per drop instead of a stampede."""
+        if self._auth.type == "none":
+            return
+        async with self._lock:
+            return
+
     def apply(self, headers: dict[str, str] | None) -> dict[str, str]:
         """Merge session headers under any per-request overrides (explicit values win).
 
@@ -99,7 +113,36 @@ class SessionManager:
             return True
         if self._auth.logged_out_pattern and re.search(self._auth.logged_out_pattern, response.text):
             return True
+        # The most common "your session dropped" signal in the wild (and the one bWAPP/DVWA/most PHP and
+        # framework apps use): a redirect to the login page. Detect it so an authenticated scan of a
+        # third-party app recovers instead of silently scanning the login page for the rest of the run.
+        if self._redirects_to_login(response):
+            return True
         return False
+
+    def _redirects_to_login(self, response) -> bool:
+        """True if ``response`` is a redirect whose target is this session's login/authorize URL."""
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return False
+        login_url = self._login_url()
+        if not login_url:
+            return False
+        location = response.headers.get("location") or response.headers.get("Location") or ""
+        if not location:
+            return False
+        login_last = urlsplit(login_url).path.rstrip("/").rsplit("/", 1)[-1].lower()
+        location_path = urlsplit(location).path.lower()
+        # Match on the login endpoint's final path segment (e.g. "login.php", "login", "signin"), which
+        # survives relative/absolute Location forms and query strings.
+        return bool(login_last) and (location_path.endswith("/" + login_last) or location_path == login_last)
+
+    def _login_url(self) -> str:
+        """The configured login/authorize URL for the dynamic auth types (empty for static ones)."""
+        if self._auth.form is not None:
+            return self._auth.form.login_url
+        if self._auth.oauth2_pkce is not None:
+            return self._auth.oauth2_pkce.login_url or self._auth.oauth2_pkce.authorize_url
+        return ""
 
     async def ensure_logged_in(
         self, client: HttpClient, *, seen_epoch: int | None = None, initial: bool = False

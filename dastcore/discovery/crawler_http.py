@@ -22,6 +22,16 @@ from dastcore.core.models import HttpRequest
 
 _SITEMAP_LOC = re.compile(r"<loc>\s*(.*?)\s*</loc>", re.IGNORECASE | re.DOTALL)
 
+# URL paths that end an authenticated session. Following them mid-crawl logs the scanner out, so every
+# request after that hits the login page and the whole authenticated scan finds nothing. Never crawl them.
+_LOGOUT_RE = re.compile(r"(?:^|/)(?:logout|log-?out|signout|sign-?out|logoff|log-?off|deauth|disconnect)\b", re.I)
+
+
+def _is_logout(url: str) -> bool:
+    """Whether a URL looks like a logout/sign-out endpoint (which would drop the session if crawled)."""
+    parts = urlsplit(url)
+    return bool(_LOGOUT_RE.search(parts.path)) or "logout" in (parts.query or "").lower()
+
 
 class HttpCrawler:
     """Breadth-first static crawler bounded by scope and `max_pages`."""
@@ -72,7 +82,7 @@ class HttpCrawler:
                 if not href:
                     continue
                 absolute = urljoin(url, href).split("#", 1)[0]
-                if absolute not in seen_urls and self._http.is_in_scope(absolute):
+                if absolute not in seen_urls and self._http.is_in_scope(absolute) and not _is_logout(absolute):
                     queue.append(absolute)
 
             for form in tree.css("form"):

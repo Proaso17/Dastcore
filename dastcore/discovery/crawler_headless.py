@@ -20,6 +20,7 @@ from dastcore.config import ScopeConfig
 from dastcore.core.models import Finding, HttpRequest
 from dastcore.core.scope import ScopeChecker
 from dastcore.detectors.dom_xss import probe_dom_xss
+from dastcore.discovery.crawler_http import _is_logout
 
 _FORM_EXTRACT_JS = """
 () => Array.from(document.querySelectorAll('form')).map(f => ({
@@ -150,7 +151,7 @@ class HeadlessEngine:
 
             for href in anchors:
                 absolute = href.split("#", 1)[0]
-                if absolute not in seen_urls and self._scope.is_in_scope(absolute):
+                if absolute not in seen_urls and self._scope.is_in_scope(absolute) and not _is_logout(absolute):
                     queue.append(absolute)
 
             for form in forms:
