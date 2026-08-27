@@ -18,7 +18,9 @@ oracle:
     - type: response_match
       part: body
       patterns:
-        - "XPath(?:Exception)?\\b"
+        # Require an actual XPath *error*, not the bare product name — "XPATH Injection" in a menu/label
+        # is not a signal (was a false-positive source alongside the LDAP rule).
+        - "XPathException\\b"
         - "Invalid predicate"
         - "XPST\\d{4}"
         - "unterminated (?:string|expression)"

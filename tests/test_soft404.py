@@ -36,10 +36,16 @@ def _request() -> HttpRequest:
 
 
 class _CatchAllClient:
-    """Returns the same signature-matching help page for ANY value (ignores the param)."""
+    """Ignores the param: returns the signature help page for any *injected* value (payloads + junk),
+    but a clean page for the original base value. This isolates the rule's ``catch_all_guard`` — the
+    oracle's own baseline guard (marker-already-in-base) can't tell this apart, since the base is clean,
+    so only the catch-all probe (junk also returns the signature) reveals the soft-404."""
 
     async def request(self, method: str, url: str, **kwargs) -> HttpResponse:
-        return HttpResponse(status_code=200, text=SIG_PAGE, url=url)
+        value = (kwargs.get("params") or {}).get("name", "")
+        if value == "readme.txt":  # the untouched base request -> a clean page (no signature)
+            return HttpResponse(status_code=200, text=NORMAL, url=url)
+        return HttpResponse(status_code=200, text=SIG_PAGE, url=url)  # any injected value -> the signature
 
 
 class _RealLfiClient:

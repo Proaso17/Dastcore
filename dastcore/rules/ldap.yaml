@@ -18,7 +18,9 @@ oracle:
     - type: response_match
       part: body
       patterns:
-        - "LDAP(?:Error|Exception)?[^a-z]"
+        # Require an actual LDAP *error*, not the bare product name — "LDAP Injection" in a menu/label
+        # is not a signal (was the source of false positives on apps that list it in a bug picker).
+        - "LDAP(?:Error|Exception)\\b"
         - "invalid (?:DN |filter|search filter)"
         - "bad search filter"
         - "LDAP: error code \\d+"

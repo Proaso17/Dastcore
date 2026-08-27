@@ -70,12 +70,25 @@ def _headers_haystack(response: HttpResponse) -> str:
 
 
 def check_response_match(
-    response: HttpResponse, patterns: list[str], part: OraclePart = "body", payload: str = ""
+    response: HttpResponse,
+    patterns: list[str],
+    part: OraclePart = "body",
+    payload: str = "",
+    base_response: HttpResponse | None = None,
 ) -> Evidence | None:
     """Fire when the response carries a server-generated signal (a DB/parse error, a
-    disclosure). A match that is merely the *echoed payload* — the app reflecting our
-    input, e.g. in a JSON validation error — is skipped: reflection isn't a signal."""
+    disclosure). Two guards keep it zero-FP:
+
+    - A match that is merely the *echoed payload* — the app reflecting our input, e.g. in a JSON
+      validation error — is skipped: reflection isn't a signal.
+    - When the unmutated ``base_response`` is available, a pattern that *already matched it* is skipped:
+      the marker was on the page before we injected, so the payload didn't cause it. This kills the whole
+      class of false positives where an error keyword lives in the page normally (e.g. bWAPP's bug-picker
+      lists "LDAP Injection"/"XPATH Injection" on every page — a bare product name is not an error)."""
     haystack = response.text if part == "body" else _headers_haystack(response)
+    base_haystack = ""
+    if base_response is not None:
+        base_haystack = base_response.text if part == "body" else _headers_haystack(base_response)
     payload_lower = payload.lower()
     for pattern in patterns:
         for match in re.finditer(pattern, haystack, re.IGNORECASE):
@@ -84,6 +97,10 @@ def check_response_match(
             # server signal. In headers it's the opposite: a payload reflected into
             # Location *is* the signal (open redirect), so the guard is body-only.
             if payload and part == "body" and hit.lower() in payload_lower:
+                continue
+            # The marker must be *introduced* by the payload: if the same pattern already matched the
+            # unmutated baseline, it's part of the page, not a sign the injection landed.
+            if base_haystack and re.search(pattern, base_haystack, re.IGNORECASE):
                 continue
             return Evidence(type="response_match", data=hit[:200], confidence="high")
     return None
@@ -228,7 +245,7 @@ def _run_check(
     baseline: BaselineProfile | None,
 ) -> Evidence | None:
     if check.type == "response_match":
-        return check_response_match(mutated_response, check.patterns, check.part, payload)
+        return check_response_match(mutated_response, check.patterns, check.part, payload, base_response)
     if check.type == "formula_injection":
         return check_formula_injection(mutated_response, payload)
     if check.type == "php_filter":
