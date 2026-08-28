@@ -16,3 +16,7 @@ htmlcov/
 
 # runtime recon asset store
 .dastcore/
+
+# bug-bounty engagement artifacts (keep local)
+bancoplata-*
+*.partial.jsonl
