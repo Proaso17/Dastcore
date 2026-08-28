@@ -54,6 +54,28 @@ def test_cname_map_extracts_first_cname_only() -> None:
     assert cname_map(records) == {"a.acme.com": "a.github.io"}
 
 
+def test_is_third_party_cname_by_domain_suffix() -> None:
+    from dastcore.discovery.dns_records import is_third_party_cname
+
+    own = ["acme.com"]
+    assert is_third_party_cname("sites.framer.app", own) is True  # third-party host builder
+    assert is_third_party_cname("careers.greenhouse.io", own) is True  # third-party ATS
+    assert is_third_party_cname("cdn.acme.com", own) is False  # own domain
+    assert is_third_party_cname("acme.com", own) is False  # the apex itself
+    assert is_third_party_cname("", own) is False  # no cname -> not third-party
+
+
+def test_third_party_hosts_flags_only_external_cnames() -> None:
+    from dastcore.discovery.dns_records import third_party_hosts
+
+    records = {
+        "www.acme.com": RecordSet(host="www.acme.com", a=["104.20.0.1"]),  # A record (CDN) -> not flagged
+        "app.acme.com": RecordSet(host="app.acme.com", cname=["origin.acme.com"]),  # own cname
+        "history.acme.com": RecordSet(host="history.acme.com", cname=["sites.framer.app"]),  # third party
+    }
+    assert third_party_hosts(records, ["acme.com"]) == {"history.acme.com": "sites.framer.app"}
+
+
 def test_iter_scope_ips_skips_network_broadcast_and_caps() -> None:
     ips = _iter_scope_ips(["192.0.2.0/29"], max_hosts=100)
     assert "192.0.2.0" not in ips and "192.0.2.7" not in ips  # network + broadcast excluded

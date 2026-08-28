@@ -2754,6 +2754,27 @@ def recon(
     for asset in assets:
         table.add_row(asset.host, asset.url or "", str(asset.status_code or ""), ",".join(asset.tech), asset.source)
     console.print(table)
+
+    # Safe-harbor hygiene: resolve CNAMEs (passive — hits a resolver, not the target) and flag hosts
+    # served by THIRD-PARTY infra. A bug-bounty safe harbor authorises the target's own systems, never a
+    # third party's, so these should be excluded from scope even though the *name* is in scope.
+    from dastcore.discovery.dns_records import gather_dns_records, third_party_hosts
+
+    own_domains = [*program.scope.domains, *(w.lstrip("*.") for w in program.scope.wildcards)]
+    try:
+        records = asyncio.run(gather_dns_records([a.host for a in assets]))
+        third_party = third_party_hosts(records, own_domains)
+    except Exception:  # noqa: BLE001 — CNAME enrichment is best-effort, never fatal
+        third_party = {}
+    if third_party:
+        console.print(
+            f"\n[yellow]⚠  {len(third_party)} host(s) apuntan a infraestructura de TERCEROS "
+            "(fuera del safe harbor — excluir del scope):[/yellow]"
+        )
+        for host, target in sorted(third_party.items()):
+            console.print(f"   [yellow]{host}[/yellow] → {target}")
+        console.print("[dim]Añádelos a scope.out_of_scope en el program.yaml.[/dim]")
+
     if output_path:
         Path(output_path).write_text(
             _json.dumps([a.model_dump() for a in assets], indent=2, ensure_ascii=False), encoding="utf-8"

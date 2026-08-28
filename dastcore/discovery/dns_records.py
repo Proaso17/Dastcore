@@ -126,6 +126,33 @@ def cname_map(records: dict[str, RecordSet]) -> dict[str, str]:
     return {host: rs.cname[0] for host, rs in records.items() if rs.cname}
 
 
+def is_third_party_cname(cname: str, own_domains: Iterable[str]) -> bool:
+    """True if a CNAME target is not under any of the program's own domains — i.e. the host is served by
+    **third-party infrastructure**.
+
+    This matters for bug bounty: a Gold-Standard-style safe harbor authorises research on the target's
+    own systems but explicitly *cannot* authorise it on third-party infra (a CNAME to Framer, an ATS, an
+    email/CDN provider…). So a subdomain that is in scope by *name* (``*.target``) but *hosted* by a third
+    party should be excluded. Comparison is by domain suffix, so ``x.framer.app`` counts as third-party
+    for a ``target.com`` program while ``cdn.target.com`` does not.
+    """
+    target = _norm_host(cname)
+    if not target:
+        return False
+    owned = [_norm_host(d) for d in own_domains if _norm_host(d)]
+    return not any(target == domain or target.endswith("." + domain) for domain in owned)
+
+
+def third_party_hosts(records: dict[str, RecordSet], own_domains: Iterable[str]) -> dict[str, str]:
+    """host -> its CNAME target, for hosts whose CNAME points at third-party infra (safe-harbor excluded)."""
+    owned = list(own_domains)
+    return {
+        host: rs.cname[0]
+        for host, rs in records.items()
+        if rs.cname and is_third_party_cname(rs.cname[0], owned)
+    }
+
+
 # ── Reverse (PTR) sweep ─────────────────────────────────────────────────────────────────────────────
 
 
