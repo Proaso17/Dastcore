@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from dastcore.config import RateLimitConfig, ScanConfig, ScopeConfig
+from dastcore.config import AuthConfig, RateLimitConfig, ScanConfig, ScopeConfig
 
 Platform = Literal["hackerone", "bugcrowd", "intigriti", "immunefi", "self"]
 
@@ -47,6 +47,13 @@ class Program(BaseModel):
     policy_url: str | None = None
     scope: ProgramScope = Field(default_factory=ProgramScope)
     limits: ProgramLimits = Field(default_factory=ProgramLimits)
+    # How to connect: route the hunt via a proxy/VPN (exit from a trusted IP, past WAF IP-reputation
+    # blocks) and/or send a specific User-Agent (pair with a cf_clearance cookie). Empty = defaults.
+    proxy: str = ""
+    user_agent: str = ""
+    # Session cookies sent on every request — a WAF-clearance token (cf_clearance) and/or a logged-in
+    # session, so the hunt reaches the real app behind Cloudflare/auth. Paired with user_agent + proxy.
+    cookies: dict[str, str] = Field(default_factory=dict)
     seeds: list[str] = Field(default_factory=list)  # root domains/URLs recon starts from
     payouts: dict[str, float] = Field(default_factory=dict)  # per vuln-class expected payout (Phase 12)
 
@@ -71,6 +78,7 @@ class Program(BaseModel):
         return ScanConfig(
             target=target,  # type: ignore[arg-type]
             scope=self.to_scope_config(),
+            auth=AuthConfig(type="cookie", cookies=dict(self.cookies)) if self.cookies else AuthConfig(),
             rate_limit=RateLimitConfig(
                 requests_per_second=self.limits.requests_per_second,
                 max_concurrency=self.limits.max_concurrency,

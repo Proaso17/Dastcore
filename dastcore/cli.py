@@ -519,7 +519,13 @@ async def _open_authenticated_client(
     return client
 
 
-def _make_client(config: ScanConfig, budget: _Budget, session: SessionManager | None = None) -> HttpClient:
+def _make_client(
+    config: ScanConfig,
+    budget: _Budget,
+    session: SessionManager | None = None,
+    user_agent: str = "",
+    proxy: str = "",
+) -> HttpClient:
     return HttpClient(
         config.scope,
         rate_limit=config.rate_limit,
@@ -530,6 +536,8 @@ def _make_client(config: ScanConfig, budget: _Budget, session: SessionManager | 
         time_budget_s=budget.time_budget_s,
         # Let the session (re)authenticate against its IdP endpoints even if off the attack scope.
         auth_urls=auth_endpoint_urls(config.auth),
+        user_agent=user_agent or None,
+        proxy=proxy or None,  # route every request via the proxy/VPN so traffic exits a trusted IP
     )
 
 
@@ -574,6 +582,33 @@ def _coverage_finding(target: str, failed: list[str]) -> Finding:
         remediation=(
             "Algunas comprobaciones se saltaron por un error interno o del objetivo, así que este escaneo "
             "es de cobertura parcial. Revisa los registros (nivel WARNING) para ver cuál falló y por qué."
+        ),
+    )
+
+
+def _waf_blocking_finding(target: str, ratio: float, blocked: int, total: int) -> Finding:
+    """An advisory (not a vuln) that the target's WAF blocked most requests, so results are unreliable."""
+    request = HttpRequest(method="GET", url=target)
+    detail = (
+        f"{blocked}/{total} respuestas ({ratio * 100:.0f}%) fueron bloqueos del WAF/CDN (403/429/503). "
+        "El escaneo automático no está viendo la aplicación real, así que sus hallazgos NO son fiables."
+    )
+    return Finding(
+        id="waf-blocking-scan",
+        rule_id="waf-blocking",
+        name="El WAF/CDN está bloqueando el escaneo (resultados no fiables)",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="response_match", data=detail, confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation=(
+            "El WAF (p. ej. Cloudflare) rechaza las peticiones automáticas. Para escanear la app real: usa "
+            "--engine both (headless sigiloso), y sobre todo pasa la cookie de tu navegador que superó el "
+            "challenge con --auth-cookie \"cf_clearance=...\" + --user-agent \"<tu UA exacto>\", lanzándolo "
+            "desde tu misma IP. Si no, prueba con una sesión autenticada real o testing manual."
         ),
     )
 
@@ -698,6 +733,8 @@ async def _run_scan(
     osint: bool = False,
     screenshots: bool = False,
     screenshots_dir: str = "",
+    user_agent: str = "",
+    proxy: str = "",
     discover_depth: str = "aggressive",
     content_wordlist: str = "",
     subdomain_wordlist: str = "",
@@ -753,7 +790,7 @@ async def _run_scan(
     if oast is not None:
         await oast.start()
     try:
-        async with _make_client(config, budget, session) as client:
+        async with _make_client(config, budget, session, user_agent=user_agent, proxy=proxy) as client:
             if session is not None and session.can_relogin:
                 if not await session.ensure_logged_in(client, initial=True):
                     raise SessionLoginError("El login inicial falló: revisa credenciales / URL de login.")
@@ -964,7 +1001,9 @@ async def _run_scan(
                 for root in scan_roots:
                     progress.status(f"Crawleando (headless / SPA) {root}…")
                     try:
-                        headless_reqs, root_dom = await _run_headless(config, client, root, max_pages)
+                        headless_reqs, root_dom = await _run_headless(
+                            config, client, root, max_pages, user_agent, proxy
+                        )
                     except httpx.HTTPError:
                         continue  # a flaky host must not abort the whole multi-host scan
                     dom_findings.extend(root_dom)
@@ -1172,6 +1211,18 @@ async def _run_scan(
             active_passive = await phase(
                 "active-scan", _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink)
             )
+
+            # WAF-block advisory: if the target's WAF/CDN rejected most requests, the scan didn't see the
+            # real app — say so loudly instead of letting the empty/partial result look like "all clear".
+            waf_ratio = client.waf_block_ratio()
+            if waf_ratio >= 0.5 and client.response_count >= 10:
+                progress.status(
+                    f"⚠ El WAF bloqueó el {waf_ratio * 100:.0f}% de las peticiones — resultados no fiables."
+                )
+                extra_findings.append(
+                    _waf_blocking_finding(target, waf_ratio, client.blocked_count, client.response_count)
+                )
+
             if prove_impact:
                 progress.status("Probando impacto de los hallazgos confirmados…")
                 await phase("prove-impact", _prove_impact_isolated(client, active_passive + extra_findings))
@@ -1287,15 +1338,22 @@ async def _scan_with_optional_resume(
 
 
 async def _run_headless(
-    config: ScanConfig, client: HttpClient, target: str, max_pages: int
+    config: ScanConfig, client: HttpClient, target: str, max_pages: int, user_agent: str = "", proxy: str = ""
 ) -> tuple[list[HttpRequest], list[Finding]]:
-    """Render with a headless browser: crawl JS/XHR + probe DOM-XSS, reusing the auth session."""
+    """Render with a headless browser: crawl JS/XHR + probe DOM-XSS, reusing the auth session.
+
+    Stealth is on by default (the engine presents itself as a normal browser), so headless crawling
+    gets past bot-detection/WAFs like Cloudflare. ``user_agent`` overrides the UA to match a real
+    browser exactly — pair it with that browser's ``cf_clearance`` cookie to scan through the challenge.
+    """
     async with HeadlessEngine(
         config.scope,
         cookies=client.cookie_pairs(),
         cookie_url=target,
         extra_headers=client.session_headers(),
         max_pages=max_pages,
+        user_agent=user_agent or None,
+        proxy=proxy or None,
     ) as engine:
         discovered = await engine.crawl(target)
         page_urls = [req.url for req in discovered if req.method == "GET"]
@@ -1636,6 +1694,15 @@ def scan(
     max_retries: int = typer.Option(
         2, "--max-retries", help="Reintentos de transporte por petición. Bájalo (p. ej. 0) en objetivos lentos."
     ),
+    user_agent: str = typer.Option(
+        "", "--user-agent", help="User-Agent para el motor headless (por defecto uno realista). Pon el de tu "
+        "navegador real para emparejarlo con su cookie cf_clearance y atravesar WAFs/challenges tipo Cloudflare."
+    ),
+    proxy: str = typer.Option(
+        "", "--proxy", help="Enruta TODO el escaneo (HTTP + headless) por un proxy/VPN, p. ej. "
+        "http://127.0.0.1:8080 o socks5://user:pass@host:1080. Úsalo para salir por tu IP de confianza y "
+        "esquivar bloqueos de reputación de IP del WAF (túnel a tu casa, VPN, o proxy residencial)."
+    ),
     max_requests: int = typer.Option(
         0, "--max-requests", help="Presupuesto total de peticiones (0 = sin límite). Detiene el escaneo al alcanzarlo."
     ),
@@ -1761,6 +1828,8 @@ def scan(
     output_format = _pick(ctx, "output_format", output_format, scan_file.format).lower()
     output_path = _pick(ctx, "output_path", output_path, scan_file.output)
     fail_on = _pick(ctx, "fail_on", fail_on, scan_file.fail_on).lower()
+    proxy = _pick(ctx, "proxy", proxy, scan_file.proxy)
+    user_agent = _pick(ctx, "user_agent", user_agent, scan_file.user_agent)
     if _is_default_source(ctx, "allow_domain") and scan_file.allow_domains is not None:
         allow_domain = scan_file.allow_domains
     if _is_default_source(ctx, "deny_domain") and scan_file.deny_domains is not None:
@@ -1952,6 +2021,8 @@ def scan(
                     osint=osint and profile != "quick",
                     screenshots=screenshots and profile != "quick",
                     screenshots_dir=screenshots_dir,
+                    user_agent=user_agent,
+                    proxy=proxy,
                     discover_depth=discover_depth,
                     content_wordlist=content_wordlist,
                     subdomain_wordlist=subdomain_wordlist,

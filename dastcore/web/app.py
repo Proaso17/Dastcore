@@ -74,6 +74,9 @@ def _program_from_form(
     allow_active: bool,
     rps: float = 5.0,
     concurrency: int = 5,
+    proxy: str = "",
+    user_agent: str = "",
+    cookies: str = "",
 ) -> Program:
     """Build a Program from the friendly dashboard form (seeds derived from the in-scope hosts).
 
@@ -93,8 +96,25 @@ def _program_from_form(
             requests_per_second=rps if rps > 0 else 5.0,
             max_concurrency=concurrency if concurrency > 0 else 5,
         ),
+        proxy=proxy.strip(),
+        user_agent=user_agent.strip(),
+        cookies=_parse_cookies(cookies),
         seeds=seeds,
     )
+
+
+def _parse_cookies(raw: str) -> dict[str, str]:
+    """Parse pasted cookies into a dict. Accepts ``name=value`` per line and/or a ``a=1; b=2`` header
+    string (what you copy from DevTools) — so a cf_clearance/session paste 'just works'."""
+    out: dict[str, str] = {}
+    for chunk in raw.replace("\n", ";").split(";"):
+        chunk = chunk.strip()
+        if "=" in chunk:
+            name, _, value = chunk.partition("=")
+            name = name.strip()
+            if name:
+                out[name] = value.strip()
+    return out
 
 
 def _build_env() -> Environment:
@@ -604,9 +624,13 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         allow_active: str = Form(""),
         rps: float = Form(5.0),
         concurrency: int = Form(5),
+        proxy: str = Form(""),
+        user_agent: str = Form(""),
+        cookies: str = Form(""),
     ) -> Response:
         program = _program_from_form(
-            handle, platform, in_scope, out_of_scope, allow_active == "on", rps=rps, concurrency=concurrency
+            handle, platform, in_scope, out_of_scope, allow_active == "on",
+            rps=rps, concurrency=concurrency, proxy=proxy, user_agent=user_agent, cookies=cookies,
         )
         if not program.scope.allow_patterns():
             return render(

@@ -171,6 +171,8 @@ class ScanFile(BaseModel):
     format: str | None = None
     output: str | None = None
     fail_on: str | None = None
+    proxy: str | None = None       # route all traffic via a proxy/VPN (exit from a trusted IP)
+    user_agent: str | None = None  # override the headless/HTTP User-Agent (pair with cf_clearance)
 
 
 class ScanConfig(BaseModel):

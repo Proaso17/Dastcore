@@ -35,6 +35,37 @@ _FORM_EXTRACT_JS = """
 """
 
 
+# A realistic recent-Chrome UA — the default headless UA contains "HeadlessChrome", which bot-detection
+# (Cloudflare, Akamai…) flags instantly. Overridable so a researcher can match their real browser's UA.
+_DEFAULT_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+# Launch flags that reduce automation fingerprints. AutomationControlled is the big one: it stops
+# Chromium from advertising itself as automated (removes the tell that sets navigator.webdriver).
+_STEALTH_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-dev-shm-usage",
+]
+
+# Injected before any page script runs: patches the properties bot-detectors check to tell a headless
+# browser from a real one (webdriver flag, window.chrome, plugins, languages, permissions API).
+_STEALTH_INIT_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+window.chrome = window.chrome || { runtime: {} };
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+const _q = window.navigator.permissions && window.navigator.permissions.query;
+if (_q) {
+  window.navigator.permissions.query = (p) =>
+    p && p.name === 'notifications'
+      ? Promise.resolve({ state: Notification.permission })
+      : _q(p);
+}
+"""
+
+
 class HeadlessUnavailableError(RuntimeError):
     """Raised when Playwright or its Chromium browser is not available."""
 
@@ -51,6 +82,9 @@ class HeadlessEngine:
         extra_headers: dict[str, str] | None = None,
         max_pages: int = 100,
         nav_timeout_ms: int = 8000,
+        stealth: bool = True,
+        user_agent: str | None = None,
+        proxy: str | None = None,
     ) -> None:
         self._scope = ScopeChecker(scope)
         self._cookies = cookies or {}
@@ -58,6 +92,13 @@ class HeadlessEngine:
         self._headers = extra_headers or {}
         self._max_pages = max_pages
         self._nav_timeout = nav_timeout_ms
+        # Stealth: present the headless browser as a normal one so bot-detection/WAFs (Cloudflare…) let
+        # it through. On by default; a caller can pass a user_agent to match their real browser exactly.
+        self._stealth = stealth
+        self._user_agent = user_agent or (_DEFAULT_UA if stealth else None)
+        # Route the browser through a proxy/VPN so its traffic exits from a trusted IP (bypasses WAF
+        # IP-reputation blocks). Same proxy the HTTP client uses, so both engines share the exit IP.
+        self._proxy = proxy
         self._captured: dict[str, HttpRequest] = {}
         self._pw = None
         self._browser = None
@@ -72,15 +113,31 @@ class HeadlessEngine:
             ) from exc
 
         self._pw = await async_playwright().start()
+        launch_args = _STEALTH_LAUNCH_ARGS if self._stealth else []
+        launch_kwargs: dict = {"args": launch_args}
+        if self._proxy:
+            launch_kwargs["proxy"] = {"server": self._proxy}  # route the browser via the proxy/VPN
         try:
-            self._browser = await self._pw.chromium.launch()
+            self._browser = await self._pw.chromium.launch(**launch_kwargs)
         except Exception as exc:  # pragma: no cover - depends on browser download
             await self._pw.stop()
             raise HeadlessUnavailableError(
                 "No se pudo lanzar Chromium. Ejecuta: python -m playwright install chromium"
             ) from exc
 
-        self._context = await self._browser.new_context(extra_http_headers=self._headers or None)
+        # A real-looking context: a proper UA + viewport + locale, and an Accept-Language header — the
+        # cheap tells a WAF checks before it even runs a JS challenge.
+        context_kwargs: dict = {"extra_http_headers": self._headers or None}
+        if self._user_agent:
+            context_kwargs["user_agent"] = self._user_agent
+        if self._stealth:
+            context_kwargs["viewport"] = {"width": 1280, "height": 800}
+            context_kwargs["locale"] = "en-US"
+            headers = {"Accept-Language": "en-US,en;q=0.9", **(self._headers or {})}
+            context_kwargs["extra_http_headers"] = headers
+        self._context = await self._browser.new_context(**context_kwargs)
+        if self._stealth:
+            await self._context.add_init_script(_STEALTH_INIT_JS)  # runs before any page script
         if self._cookies and self._cookie_url:
             await self._context.add_cookies(
                 [{"name": name, "value": value, "url": self._cookie_url} for name, value in self._cookies.items()]

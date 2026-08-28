@@ -131,6 +131,8 @@ async def run_campaign(
             discover_vhosts=discover_vhosts,
             osint=osint and index == 1,  # org-level OSINT is identical per host: run it once
             screenshots=screenshots,
+            proxy=program.proxy,  # route via the program's proxy/VPN + UA (past WAF IP-reputation blocks)
+            user_agent=program.user_agent,
         )
         checkpoint.mark_done(url, found)
         checkpoint.save()

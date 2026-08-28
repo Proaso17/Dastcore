@@ -26,6 +26,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("dastcore.http")
 
+# Default request headers that make the scanner look like a real browser. httpx's own default UA
+# (``python-httpx/x.y``) is an instant tell that a WAF/CDN (Cloudflare, Akamai…) blocks — sending a
+# normal browser UA + Accept/Sec-Fetch headers gets past the lighter WAF rules that gate on that alone.
+# Per-request headers still override these (e.g. a shellshock check that injects into User-Agent).
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+_BROWSER_HEADERS = {
+    "User-Agent": _BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-User": "?1",
+    "Sec-Fetch-Dest": "document",
+    "Upgrade-Insecure-Requests": "1",
+}
+
 _RETRYABLE_EXCEPTIONS = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -97,6 +116,7 @@ class HttpClient:
         time_budget_s: float | None = None,
         auth_urls: list[str] | None = None,
         host_overrides: dict[str, str] | None = None,
+        user_agent: str | None = None,
     ) -> None:
         # Auth/IdP endpoints (from the auth config) are reachable for (re)login even off the attack scope.
         self._scope_checker = ScopeChecker(scope, auth_urls=auth_urls)
@@ -112,11 +132,21 @@ class HttpClient:
         self._max_requests = max_requests
         self._time_budget_s = time_budget_s
         self._request_count = 0
+        # WAF-block telemetry: how many responses came back as a block (403/429/503). A high ratio means
+        # the target's WAF is refusing the scan, so its findings are unreliable — the CLI surfaces that.
+        self._response_count = 0
+        self._blocked_count = 0
         self._deadline: float | None = None
+        # Browser-like default headers so the scanner isn't blocked on its User-Agent alone. A caller can
+        # pass ``user_agent`` (e.g. their real browser's, to pair with a cf_clearance cookie) to match it.
+        default_headers = dict(_BROWSER_HEADERS)
+        if user_agent:
+            default_headers["User-Agent"] = user_agent
         self._client = httpx.AsyncClient(
             timeout=timeout,
             proxy=proxy,
             follow_redirects=follow_redirects,
+            headers=default_headers,
         )
         # Seed the jar with any static session cookies. Dynamically-obtained cookies
         # (form-login) are persisted into this same jar automatically by httpx.
@@ -163,6 +193,18 @@ class HttpClient:
     @property
     def request_count(self) -> int:
         return self._request_count
+
+    @property
+    def blocked_count(self) -> int:
+        return self._blocked_count
+
+    @property
+    def response_count(self) -> int:
+        return self._response_count
+
+    def waf_block_ratio(self) -> float:
+        """Fraction of responses that came back as a WAF block (403/429/503). 0.0 if nothing was sent."""
+        return self._blocked_count / self._response_count if self._response_count else 0.0
 
     def budget_exceeded(self) -> bool:
         """True once the request count or the time budget has been reached."""
@@ -270,6 +312,9 @@ class HttpClient:
                 logger.debug("%s %s -> %s (%.0f ms)", method, url, response.status_code, elapsed_ms)
                 # On a host override, report the real (vhost) URL, not the IP we connected to, so the
                 # scanner keeps the vhost's identity for dedup/evidence.
+                self._response_count += 1
+                if response.status_code in (403, 429, 503):  # WAF block / rate limit / challenge
+                    self._blocked_count += 1
                 reported_url = url if send_url != url else str(response.url)
                 return HttpResponse(
                     status_code=response.status_code,
