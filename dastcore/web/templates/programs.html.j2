@@ -55,6 +55,18 @@
         </div>
       </div>
 
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label for="rps">Peticiones/segundo</label>
+          <input id="rps" name="rps" type="number" step="0.5" min="0.5" value="5" style="max-width:120px">
+        </div>
+        <div>
+          <label for="concurrency">Concurrencia</label>
+          <input id="concurrency" name="concurrency" type="number" step="1" min="1" value="5" style="max-width:120px">
+        </div>
+      </div>
+      <p class="hint" style="margin:5px 0 0">Baja el ritmo en objetivos sensibles (p. ej. banca: 2 rps / 2) para cumplir el "avoid harm" del safe harbor.</p>
+
       <button type="submit" style="margin-top:6px">Guardar objetivo</button>
     </form>
   </div>

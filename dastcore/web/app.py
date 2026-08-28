@@ -66,8 +66,21 @@ def _classify_scope(text: str) -> tuple[list[str], list[str], list[str]]:
     return domains, wildcards, cidrs
 
 
-def _program_from_form(handle: str, platform: str, in_scope: str, out_of_scope: str, allow_active: bool) -> Program:
-    """Build a Program from the friendly dashboard form (seeds derived from the in-scope hosts)."""
+def _program_from_form(
+    handle: str,
+    platform: str,
+    in_scope: str,
+    out_of_scope: str,
+    allow_active: bool,
+    rps: float = 5.0,
+    concurrency: int = 5,
+) -> Program:
+    """Build a Program from the friendly dashboard form (seeds derived from the in-scope hosts).
+
+    ``rps``/``concurrency`` are the program's rate limit — the key control for honouring a bug-bounty
+    safe harbor's "avoid harm" clause (a bank wants a low rps). They flow into every request the hunt
+    makes via ``Program.to_scan_config``.
+    """
     domains, wildcards, cidrs = _classify_scope(in_scope)
     out_lines = [line.strip().lower() for line in out_of_scope.splitlines() if line.strip()]
     seeds = domains + [w[2:] for w in wildcards]  # start recon from the apex of each in-scope host
@@ -75,7 +88,11 @@ def _program_from_form(handle: str, platform: str, in_scope: str, out_of_scope: 
         handle=handle.strip() or "objetivo",
         platform=platform if platform in ("hackerone", "bugcrowd", "intigriti", "immunefi", "self") else "self",
         scope=ProgramScope(domains=domains, wildcards=wildcards, cidrs=cidrs, out_of_scope=out_lines),
-        limits=ProgramLimits(no_automated_scanning=not allow_active),
+        limits=ProgramLimits(
+            no_automated_scanning=not allow_active,
+            requests_per_second=rps if rps > 0 else 5.0,
+            max_concurrency=concurrency if concurrency > 0 else 5,
+        ),
         seeds=seeds,
     )
 
@@ -585,8 +602,12 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         in_scope: str = Form(""),
         out_of_scope: str = Form(""),
         allow_active: str = Form(""),
+        rps: float = Form(5.0),
+        concurrency: int = Form(5),
     ) -> Response:
-        program = _program_from_form(handle, platform, in_scope, out_of_scope, allow_active == "on")
+        program = _program_from_form(
+            handle, platform, in_scope, out_of_scope, allow_active == "on", rps=rps, concurrency=concurrency
+        )
         if not program.scope.allow_patterns():
             return render(
                 "programs.html.j2",
