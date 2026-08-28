@@ -13,3 +13,6 @@ dist/
 .coverage.*
 coverage.xml
 htmlcov/
+
+# runtime recon asset store
+.dastcore/
