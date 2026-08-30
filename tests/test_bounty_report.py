@@ -60,3 +60,33 @@ def test_all_platforms_render_without_error() -> None:
     bf = _sqli_bounty()
     for platform in PLATFORMS:
         assert render_bounty_report(bf, None, platform).strip()
+
+
+def _weak_bounty():
+    """A BountyFinding whose FP checklist fails (no strong oracle, low confidence) -> not submittable."""
+    from dastcore.bugbounty.triage import BountyFinding, FpChecklist
+
+    req = HttpRequest(method="GET", url="http://api.acme.com/x", params={"q": "1"})
+    point = InjectionPoint(location="query", name="q", base_value="1", request_template=req)
+    finding = Finding(
+        id="x", rule_id="reflected-xss", name="Reflected value", severity="low", cwe="CWE-79", owasp="",
+        family="xss", injection_point=point,
+        evidence=[Evidence(type="reflected", data="value reflected", confidence="low")],
+        request=req, response=HttpResponse(status_code=200), remediation="x",
+    )
+    return BountyFinding(
+        finding=finding, vrt_category="XSS", vrt_priority="P4", cvss_vector="", expected_payout=0.0,
+        signature="s", variants=1, priority_score=1.0,
+        checklist=FpChecklist(exploitable_now=False, deterministic_repro=False, evidence_attached=True),
+    )
+
+
+def test_anti_na_banner_warns_when_not_submittable() -> None:
+    md = render_bounty_report(_weak_bounty(), Program(handle="acme"), "hackerone")
+    assert "NO LISTO PARA ENVIAR" in md  # the anti-N/A gate is surfaced
+    assert "oráculo determinista" in md  # and it names what's missing
+
+
+def test_no_banner_for_a_solid_finding() -> None:
+    md = render_bounty_report(_sqli_bounty(), Program(handle="acme"), "hackerone")
+    assert "NO LISTO PARA ENVIAR" not in md  # a confirmed SQLi is submittable

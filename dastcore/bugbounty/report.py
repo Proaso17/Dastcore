@@ -134,6 +134,22 @@ def render_bounty_report(bf: BountyFinding, program: Program | None = None, plat
     layout = _LAYOUTS.get(platform, _LAYOUTS["generic"])
     sections = _sections(bf)
     lines = [_title(bf, platform), ""]
+    # Anti-N/A gate: if the finding doesn't clear the false-positive checklist, it would very likely be
+    # closed as N/A — say so loudly at the top instead of handing over a draft that looks submittable.
+    if not bf.checklist.passes:
+        missing: list[str] = []
+        if not bf.checklist.exploitable_now:
+            missing.append("explotabilidad no confirmada (confianza del motor por debajo del umbral)")
+        if not bf.checklist.deterministic_repro:
+            missing.append("sin PoC/oráculo determinista (falta señal de confirmación: differential/OAST/time/DOM)")
+        if not bf.checklist.evidence_attached:
+            missing.append("sin evidencia adjunta")
+        lines += [
+            "> ⚠️ **NO LISTO PARA ENVIAR** — con esto probablemente se cerraría como N/A. "
+            "Falta: " + "; ".join(missing) + ".",
+            "> Verifica manualmente y adjunta la prueba antes de reportar.",
+            "",
+        ]
     if program is not None:
         lines += [
             f"> Programa: **{program.handle}** ({program.platform}). Borrador para revisión — no se envía automáticamente.",
