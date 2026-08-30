@@ -149,3 +149,55 @@ async def test_generic_tampers_alone_do_not_confirm_the_space_blocked_cmdi() -> 
 
     generic_values = [v for _, v in tv("; cat /etc/passwd")]  # family="" -> generic only
     assert not any("${IFS}" in v for v in generic_values)
+
+
+# --- alternative evasion: reshape the request (HPP / relocation), payload bytes unchanged ------------
+
+
+def test_reshaped_requests_produce_hpp_and_relocation() -> None:
+    from dastcore.core.models import InjectionPoint
+    from dastcore.engine.waf_shape import reshaped_requests
+
+    req = HttpRequest(method="GET", url="http://x/item", params={"q": "1", "lang": "en"})
+    point = InjectionPoint(location="query", name="q", base_value="1", request_template=req)
+    variants = dict(reshaped_requests(point, "' OR SELECT"))
+    # HPP: the parameter appears twice in the URL, both orders, payload byte-for-byte unchanged.
+    assert "q=1&q=%27+OR+SELECT" in variants["hpp-payload-last"].url
+    assert "q=%27+OR+SELECT&q=1" in variants["hpp-payload-first"].url
+    assert variants["hpp-payload-last"].params == {}  # whole query moved into the URL for a deterministic order
+    assert "lang=en" in variants["hpp-payload-last"].url  # other params preserved
+    # Relocation: the payload leaves the query for a body carrier (POST), unchanged.
+    assert variants["relocate-json"].json_body == {"q": "' OR SELECT"} and variants["relocate-json"].method == "POST"
+    assert variants["relocate-form"].data == {"q": "' OR SELECT"} and variants["relocate-form"].params == {}
+
+
+class _QueryOnlyWaf:
+    """Inspects only the QUERY string: blocks a quote in ``q`` (403). The backend reads ``q`` from the
+    query OR the body and is injectable, so relocating the payload into the body slips past it."""
+
+    async def request(self, method: str, url: str, **kwargs) -> HttpResponse:
+        params = kwargs.get("params") or {}
+        data = kwargs.get("data") or {}
+        json_body = kwargs.get("json") or {}
+        if "'" in str(params.get("q", "")):  # WAF only looks at the query string
+            return HttpResponse(status_code=403, text="Request blocked by WAF", url=url)
+        value = str(params.get("q") or data.get("q") or (json_body.get("q") if isinstance(json_body, dict) else ""))
+        if "'" in value:  # the backend is injectable regardless of where q came from
+            return HttpResponse(status_code=500, text="You have an SQL syntax error near '...'", url=url)
+        return HttpResponse(status_code=200, text="ok", url=url)
+
+
+async def test_waf_reshape_confirms_sqli_masked_by_a_query_only_waf() -> None:
+    # Tampers stay in the query (still blocked, or lose the quote and stop being injectable); only the
+    # alternative — reshaping the request to carry the payload in the body — both evades and confirms.
+    scanner = Scanner(_QueryOnlyWaf(), [_sqli_rule()], active_checks=False, waf_evasion=True)
+    findings = await scanner.scan_request(_request())
+    hits = [f for f in findings if f.rule_id == "sqli-injection"]
+    assert len(hits) == 1
+    assert any("reshaping the request" in e.data for e in hits[0].evidence)
+
+
+async def test_reshape_not_attempted_without_the_waf_evasion_flag() -> None:
+    scanner = Scanner(_QueryOnlyWaf(), [_sqli_rule()], active_checks=False, waf_evasion=False)
+    findings = await scanner.scan_request(_request())
+    assert not any(f.rule_id == "sqli-injection" for f in findings)  # no over-claim when the flag is off

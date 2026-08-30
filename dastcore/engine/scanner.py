@@ -40,6 +40,7 @@ from dastcore.engine.rule_engine import (
     render_payload_template,
 )
 from dastcore.engine.waf import tampered_variants
+from dastcore.engine.waf_shape import reshaped_requests
 from dastcore.report.correlation import cross_correlate
 from dastcore.validation.baseline import BaselineProfile, build_baseline, responses_similar
 from dastcore.validation.oracles import OracleSpec, evaluate_oracle
@@ -275,8 +276,12 @@ class Scanner:
             note: str | None = None
 
             # If the raw payload was blocked and nothing fired, try to evade the WAF and confirm.
+            # Two complementary strategies: rewrite the payload bytes (tampers), then — as an
+            # alternative — keep the payload and reshape the request (HPP / relocation).
             if not evidence and self._waf_evasion and looks_blocked(response) is not None:
                 evaded = await self._try_waf_evasion(inband_oracle, point, value, base_response, baseline, rule.family)
+                if evaded is None:
+                    evaded = await self._try_waf_reshape(inband_oracle, point, value, base_response, baseline)
                 if evaded is not None:
                     request, response, value, evidence, note = evaded
 
@@ -398,6 +403,31 @@ class Scanner:
             if evidence:
                 note = f"WAF-evaded: the raw payload was blocked, confirmed via the {name!r} tamper (masked, not fixed)"
                 return request, response, tampered, evidence, note
+        return None
+
+    async def _try_waf_reshape(
+        self,
+        oracle: OracleSpec,
+        point,
+        payload_value: str,
+        base_response: HttpResponse,
+        baseline: BaselineProfile,
+    ) -> tuple[HttpRequest, HttpResponse, str, list[Evidence], str] | None:
+        """Alternative WAF evasion: keep the payload unchanged but reshape the request (HTTP parameter
+        pollution / carrier relocation). Same oracle-gated confirmation as the tamper path, so a hit
+        still proves a real, WAF-masked vulnerability — never a false positive."""
+        for name, request in reshaped_requests(point, payload_value):
+            response = await self._send(request)
+            if response is None or looks_blocked(response) is not None:
+                continue  # still blocked (or failed) — try the next shape
+            evidence = evaluate_oracle(
+                oracle, base_response=base_response, mutated_response=response, payload=payload_value,
+                baseline=baseline,
+            )
+            if evidence:
+                note = (f"WAF-evaded: the raw payload was blocked, confirmed by reshaping the request "
+                        f"({name!r}: same payload, different carrier — masked, not fixed)")
+                return request, response, payload_value, evidence, note
         return None
 
     @staticmethod
