@@ -71,6 +71,21 @@ def test_open_redirect_handles_protocol_relative_and_backslash_bypass() -> None:
     assert check_open_redirect(_response(headers={"Location": "https:/\\dastcore-redirect-probe.invalid/"}), _PROBE)
 
 
+def test_open_redirect_confirms_userinfo_parser_confusion_payloads() -> None:
+    # New parser-confusion payloads: the "trusted" label is only userinfo, the real host is the probe.
+    # The oracle resolves both the payload and the echoed Location to the probe host, so it fires.
+    for payload in (
+        "https://trusted.example@dastcore-redirect-probe.invalid/",
+        "https://dastcore-redirect-probe.invalid\\@trusted.example/",
+        "/\\dastcore-redirect-probe.invalid/",
+    ):
+        resp = _response(status_code=302, headers={"Location": payload})
+        assert check_open_redirect(resp, payload) is not None, payload
+    # But when the server redirects to a genuinely trusted host instead of the probe, it must NOT fire.
+    attack = "https://trusted.example@dastcore-redirect-probe.invalid/"
+    assert check_open_redirect(_response(headers={"Location": "https://trusted.example/"}), attack) is None
+
+
 def test_open_redirect_reads_the_refresh_header_target() -> None:
     resp = _response(headers={"Refresh": f"0; url={_PROBE}"})
     assert check_open_redirect(resp, _PROBE) is not None

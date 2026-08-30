@@ -61,3 +61,32 @@ async def test_urlish_value_is_treated_as_a_sink() -> None:
     req = HttpRequest(method="GET", url="http://t.test/x", params={"weird": "https://cdn.example.com/a.png"})
     findings = await run_cloud_ssrf_checks(_SsrfServer(), [req])  # type: ignore[arg-type]
     assert len(findings) == 1 and findings[0].injection_point.name == "weird"
+
+
+class _FilteredSsrfServer:
+    """A sink that *blocklists the literal link-local string* ``169.254.169.254`` but naively resolves
+    an alternate IP encoding (decimal ``2852039166``) — the classic SSRF filter bypass."""
+
+    async def request(self, method: str, url: str, *, params=None, json=None, data=None, **_kw) -> HttpResponse:
+        values = list((params or {}).values()) + list((json or {}).values()) + list((data or {}).values())
+        fetched = next((str(v) for v in values if str(v).startswith("http")), "")
+        if "169.254.169.254" in fetched:  # literal is filtered
+            return HttpResponse(status_code=403, text="blocked", url=url)
+        canonical = fetched.replace("2852039166", "169.254.169.254")  # the parser resolves the encoding
+        if canonical == "http://169.254.169.254/latest/meta-data/":
+            return HttpResponse(status_code=200, text=_AWS_LIST, url=url)
+        if canonical == "http://169.254.169.254/latest/meta-data/iam/security-credentials/":
+            return HttpResponse(status_code=200, text=_AWS_ROLE, url=url)
+        if canonical == f"http://169.254.169.254/latest/meta-data/iam/security-credentials/{_AWS_ROLE}":
+            return HttpResponse(status_code=200, text=_AWS_CREDS, url=url)
+        return HttpResponse(status_code=200, text="nothing here", url=url)
+
+
+async def test_ip_encoding_bypass_defeats_a_literal_blocklist() -> None:
+    req = HttpRequest(method="GET", url="http://t.test/fetch", params={"url": "http://example.com/ok"})
+    findings = await run_cloud_ssrf_checks(_FilteredSsrfServer(), [req])  # type: ignore[arg-type]
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "ssrf-cloud-metadata" and f.severity == "critical"
+    assert "2852039166" in f.evidence[0].data  # the bypass encoding is recorded as evidence
+    assert "ASIAEXAM" in f.evidence[0].data  # creds still extracted through the bypassed host

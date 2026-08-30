@@ -9,6 +9,12 @@ inject_into: [query, body, json]
 payloads:
   - "{{oast_url}}"
   - "http://{{oast_domain}}/"
+  # Scheme / parser-confusion variants. All OAST-gated: the finding only fires if the collaborator
+  # receives the callback, i.e. the server truly fetched our host, so any variant is zero-FP —
+  # worst case it simply doesn't call back. They slip past filters that only block a given scheme.
+  - "https://{{oast_domain}}/" # some filters only blocklist http://
+  - "//{{oast_domain}}/" # scheme-relative: bypasses scheme allowlists
+  - "http://foo@{{oast_domain}}/" # userinfo: the fetched host is still the collaborator
 oracle:
   type: any_of
   checks:

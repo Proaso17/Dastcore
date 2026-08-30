@@ -9,6 +9,12 @@ inject_into: [query]
 payloads:
   - "https://dastcore-redirect-probe.invalid/"
   - "//dastcore-redirect-probe.invalid/" # protocol-relative: bypasses naive "http"/"https" blocks
+  # Parser-confusion variants (Orange Tsai "A New Era of SSRF" style). The open_redirect oracle
+  # still requires the *resolved target host* to be our probe, so each of these only fires if the
+  # server actually redirects there — zero new false positives, just more filters bypassed.
+  - "/\\dastcore-redirect-probe.invalid/" # backslash authority: browsers read \ as /, naive same-origin filters see a path
+  - "https://trusted.example@dastcore-redirect-probe.invalid/" # userinfo: real host is the probe; the "trusted" label is only userinfo
+  - "https://dastcore-redirect-probe.invalid\\@trusted.example/" # backslash+userinfo: browser navigates to the probe, filter reads trusted.example
 oracle:
   type: any_of
   checks:
