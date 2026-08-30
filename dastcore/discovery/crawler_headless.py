@@ -19,6 +19,7 @@ from urllib.parse import parse_qsl, urlsplit
 from dastcore.config import ScopeConfig
 from dastcore.core.models import Finding, HttpRequest
 from dastcore.core.scope import ScopeChecker
+from dastcore.detectors.csti import probe_csti
 from dastcore.detectors.dom_xss import probe_dom_xss
 from dastcore.discovery.crawler_http import _is_logout
 
@@ -284,6 +285,26 @@ class HeadlessEngine:
             finding = await probe_dom_xss(self._context, base)
             if finding is not None:
                 findings.append(finding)
+        return findings
+
+    # --- CSTI (client-side template injection) ----------------------------------------
+
+    async def scan_csti(self, requests: list[HttpRequest], *, max_points: int = 40) -> list[Finding]:
+        """Probe reflected query parameters for AngularJS/Vue client-side template injection."""
+        findings: list[Finding] = []
+        seen: set[str] = set()
+        probed = 0
+        for req in requests:
+            if req.method != "GET" or not (req.params or {}) or not self._scope.is_in_scope(req.url):
+                continue
+            key = urlsplit(req.url).path + "?" + ",".join(sorted(req.params))
+            if key in seen:
+                continue
+            seen.add(key)
+            if probed >= max_points:
+                break
+            probed += 1
+            findings.extend(await probe_csti(self._context, req))
         return findings
 
     # --- helpers ----------------------------------------------------------------------

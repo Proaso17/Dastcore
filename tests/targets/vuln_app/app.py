@@ -450,6 +450,26 @@ document.addEventListener('DOMContentLoaded', function(){
         item_id = request.args.get("id", "")
         return Response(f"<h1>Item {item_id}</h1>", mimetype="text/html")
 
+    @app.get("/csti")
+    def csti() -> Response:
+        # Client-Side Template Injection: the raw HTML reflects the input *literally* (no server-side
+        # evaluation), then a tiny in-page {{ }} engine evaluates it in the browser — standing in for
+        # AngularJS/Vue, which can't be loaded offline. Only the rendered DOM shows the computed value.
+        name = request.args.get("name", "")
+        head = ('<!doctype html><html><head><title>csti</title></head><body>'
+                '<div id="tpl">Hello ' + name + '</div>')
+        script = (
+            "\n<script>\n"
+            "document.addEventListener('DOMContentLoaded', function(){\n"
+            "  var el = document.getElementById('tpl');\n"
+            "  el.textContent = el.textContent.replace(/\\{\\{(.+?)\\}\\}/g, function(m, expr){\n"
+            "    try { return Function('return ('+expr+')')(); } catch(e){ return m; }\n"
+            "  });\n"
+            "});\n"
+            "</script></body></html>"
+        )
+        return Response(head + script, mimetype="text/html")
+
     # --- Phase 6: blind SSRF (OAST) -------------------------------------------------
     @app.get("/fetch")
     def fetch_url() -> Response:

@@ -1383,6 +1383,8 @@ async def _run_headless(
         discovered = await engine.crawl(target)
         page_urls = [req.url for req in discovered if req.method == "GET"]
         dom_findings = await engine.scan_dom_xss([target, *page_urls])
+        # CSTI (AngularJS/Vue) rides the same headless render over reflected query params.
+        dom_findings += await engine.scan_csti(discovered)
         return discovered, dom_findings
 
 

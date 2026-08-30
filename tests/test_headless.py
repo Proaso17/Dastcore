@@ -16,6 +16,7 @@ pytest.importorskip("playwright.async_api")
 
 from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
+from dastcore.core.models import HttpRequest
 from dastcore.discovery.crawler_headless import HeadlessEngine, HeadlessUnavailableError
 from dastcore.discovery.crawler_http import HttpCrawler
 from dastcore.engine.rule_engine import load_rules
@@ -72,6 +73,28 @@ async def test_headless_no_dom_xss_false_positive_on_clean_page(vuln_app_url: st
     """/greet reflects a query param server-side but has no client-side fragment sink."""
     async with headless_engine() as engine:
         findings = await engine.scan_dom_xss([f"{vuln_app_url}/greet", f"{vuln_app_url}/health"])
+    assert findings == []
+
+
+async def test_headless_detects_client_side_template_injection(vuln_app_url: str) -> None:
+    """/csti reflects input into a client-side {{ }} template engine — the product only appears
+    after JS renders, never in the raw response, so it's CSTI (not SSTI)."""
+    req = HttpRequest(method="GET", url=f"{vuln_app_url}/csti", params={"name": "seed"})
+    async with headless_engine() as engine:
+        findings = await engine.scan_csti([req])
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "csti"
+    assert f.severity == "high"
+    assert f.injection_point.name == "name"
+    assert f.evidence[0].type == "dom_execution"
+
+
+async def test_headless_no_csti_false_positive_on_server_side_reflection(vuln_app_url: str) -> None:
+    """/greet reflects the param server-side but never evaluates {{ }} in the browser — no CSTI."""
+    req = HttpRequest(method="GET", url=f"{vuln_app_url}/greet", params={"name": "seed"})
+    async with headless_engine() as engine:
+        findings = await engine.scan_csti([req])
     assert findings == []
 
 
