@@ -77,6 +77,8 @@ def _program_from_form(
     proxy: str = "",
     user_agent: str = "",
     cookies: str = "",
+    bug_bounty_mode: bool = False,
+    required_headers: str = "",
 ) -> Program:
     """Build a Program from the friendly dashboard form (seeds derived from the in-scope hosts).
 
@@ -99,8 +101,24 @@ def _program_from_form(
         proxy=proxy.strip(),
         user_agent=user_agent.strip(),
         cookies=_parse_cookies(cookies),
+        bug_bounty_mode=bug_bounty_mode,
+        required_headers=_parse_headers(required_headers),
         seeds=seeds,
     )
+
+
+def _parse_headers(raw: str) -> dict[str, str]:
+    """Parse required/attribution headers, one ``Name: value`` (or ``Name=value``) per line."""
+    out: dict[str, str] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        sep = ":" if (":" in line and (line.find(":") < line.find("=") or "=" not in line)) else "="
+        if sep in line:
+            name, _, value = line.partition(sep)
+            name = name.strip()
+            if name:
+                out[name] = value.strip()
+    return out
 
 
 def _parse_cookies(raw: str) -> dict[str, str]:
@@ -627,10 +645,13 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         proxy: str = Form(""),
         user_agent: str = Form(""),
         cookies: str = Form(""),
+        bug_bounty_mode: str = Form(""),
+        required_headers: str = Form(""),
     ) -> Response:
         program = _program_from_form(
             handle, platform, in_scope, out_of_scope, allow_active == "on",
             rps=rps, concurrency=concurrency, proxy=proxy, user_agent=user_agent, cookies=cookies,
+            bug_bounty_mode=bug_bounty_mode == "on", required_headers=required_headers,
         )
         if not program.scope.allow_patterns():
             return render(

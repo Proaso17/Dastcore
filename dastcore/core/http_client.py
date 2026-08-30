@@ -117,6 +117,7 @@ class HttpClient:
         auth_urls: list[str] | None = None,
         host_overrides: dict[str, str] | None = None,
         user_agent: str | None = None,
+        attribution: dict[str, str] | None = None,
     ) -> None:
         # Auth/IdP endpoints (from the auth config) are reachable for (re)login even off the attack scope.
         self._scope_checker = ScopeChecker(scope, auth_urls=auth_urls)
@@ -142,6 +143,11 @@ class HttpClient:
         default_headers = dict(_BROWSER_HEADERS)
         if user_agent:
             default_headers["User-Agent"] = user_agent
+        # Bug-bounty attribution (e.g. X-Bug-Bounty: HackerOne-<handle>): sent on every request this
+        # client makes — which is only in-scope target traffic (third-party OSINT uses its own client),
+        # so a program can identify the researcher's requests as required by many policies.
+        if attribution:
+            default_headers.update(attribution)
         self._client = httpx.AsyncClient(
             timeout=timeout,
             proxy=proxy,

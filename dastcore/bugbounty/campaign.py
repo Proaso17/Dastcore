@@ -133,6 +133,8 @@ async def run_campaign(
             screenshots=screenshots,
             proxy=program.proxy,  # route via the program's proxy/VPN + UA (past WAF IP-reputation blocks)
             user_agent=program.user_agent,
+            bug_bounty=program.bug_bounty_mode,  # suppress N/A hardening findings for a cleaner report
+            attribution=program.attribution_headers(),  # identify our traffic (X-Bug-Bounty) as required
         )
         checkpoint.mark_done(url, found)
         checkpoint.save()

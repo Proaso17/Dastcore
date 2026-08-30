@@ -173,6 +173,7 @@ class ScanFile(BaseModel):
     fail_on: str | None = None
     proxy: str | None = None       # route all traffic via a proxy/VPN (exit from a trusted IP)
     user_agent: str | None = None  # override the headless/HTTP User-Agent (pair with cf_clearance)
+    bug_bounty: bool | None = None  # suppress bug-bounty-ineligible findings (hardening/disclosure/no-impact)
 
 
 class ScanConfig(BaseModel):

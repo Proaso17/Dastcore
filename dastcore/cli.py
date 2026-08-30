@@ -525,6 +525,7 @@ def _make_client(
     session: SessionManager | None = None,
     user_agent: str = "",
     proxy: str = "",
+    attribution: dict[str, str] | None = None,
 ) -> HttpClient:
     return HttpClient(
         config.scope,
@@ -538,6 +539,7 @@ def _make_client(
         auth_urls=auth_endpoint_urls(config.auth),
         user_agent=user_agent or None,
         proxy=proxy or None,  # route every request via the proxy/VPN so traffic exits a trusted IP
+        attribution=attribution or None,  # e.g. X-Bug-Bounty: identify our traffic as programs require
     )
 
 
@@ -735,6 +737,8 @@ async def _run_scan(
     screenshots_dir: str = "",
     user_agent: str = "",
     proxy: str = "",
+    bug_bounty: bool = False,
+    attribution: dict[str, str] | None = None,
     discover_depth: str = "aggressive",
     content_wordlist: str = "",
     subdomain_wordlist: str = "",
@@ -754,6 +758,16 @@ async def _run_scan(
     target = str(config.target)
     budget = budget or _Budget(None, None)
     progress = progress or _ProgressAdapter(None)
+
+    # Bug-bounty mode also enforces compliance with strict program rules ("no brute force / no DoS / no
+    # shells / no data exfiltration"): hard-disable the checks that would break them, even if a profile or
+    # flag turned them on. Findings-filtering happens later; this gates the *tests we run*.
+    if bug_bounty and (test_weak_creds or test_dos or test_upload or prove_impact):
+        _scan_log.info(
+            "Modo bug bounty: desactivo checks peligrosos (weak-creds/brute-force, DoS, upload, "
+            "prove-impact) para cumplir las reglas del programa."
+        )
+        test_weak_creds = test_dos = test_upload = prove_impact = False
 
     # Defined up front so a budget/time cap (BudgetExceededError) can stop the scan mid-flight and still
     # report everything gathered so far, instead of crashing with no report.
@@ -790,7 +804,9 @@ async def _run_scan(
     if oast is not None:
         await oast.start()
     try:
-        async with _make_client(config, budget, session, user_agent=user_agent, proxy=proxy) as client:
+        async with _make_client(
+            config, budget, session, user_agent=user_agent, proxy=proxy, attribution=attribution
+        ) as client:
             if session is not None and session.can_relogin:
                 if not await session.ensure_logged_in(client, initial=True):
                     raise SessionLoginError("El login inicial falló: revisa credenciales / URL de login.")
@@ -1260,6 +1276,15 @@ async def _run_scan(
     # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
     final_findings = cross_correlate(active_passive + extra_findings + dom_findings + authz_findings)
 
+    # Bug-bounty mode: suppress the hardening/disclosure/no-impact findings that programs (HackerOne
+    # Core et al.) close as N/A, so the report and gate count only the potentially-reportable ones.
+    if bug_bounty:
+        from dastcore.bugbounty.eligibility import mark_ineligible
+
+        n = mark_ineligible(final_findings)
+        if n:
+            _scan_log.info("Modo bug bounty: %d hallazgo(s) marcados como inelegibles (hardening/sin impacto).", n)
+
     # Unified, ranked attack-surface model: fold every host + discovered endpoint + finding into one
     # prioritised view (highest attack-surface interest first) for the surface report/dashboard.
     if surface is not None and (scan_roots or discovered):
@@ -1703,6 +1728,16 @@ def scan(
         "http://127.0.0.1:8080 o socks5://user:pass@host:1080. Úsalo para salir por tu IP de confianza y "
         "esquivar bloqueos de reputación de IP del WAF (túnel a tu casa, VPN, o proxy residencial)."
     ),
+    bug_bounty: bool = typer.Option(
+        False, "--bug-bounty", help="Modo bug bounty: marca como inelegibles los hallazgos de hardening/"
+        "disclosure/sin-impacto que los programas (HackerOne Core…) cierran como N/A, para que el reporte "
+        "destaque solo lo potencialmente reportable. No los borra: quedan como suprimidos, revisables."
+    ),
+    attrib_header: list[str] = typer.Option(
+        [], "--attrib-header", help="Cabecera de atribución 'Nombre=valor' enviada en TODO el tráfico "
+        "al objetivo (repetible), p. ej. 'X-Bug-Bounty=HackerOne-tu_handle'. Muchos programas la exigen "
+        "para identificar tus peticiones."
+    ),
     max_requests: int = typer.Option(
         0, "--max-requests", help="Presupuesto total de peticiones (0 = sin límite). Detiene el escaneo al alcanzarlo."
     ),
@@ -1830,6 +1865,8 @@ def scan(
     fail_on = _pick(ctx, "fail_on", fail_on, scan_file.fail_on).lower()
     proxy = _pick(ctx, "proxy", proxy, scan_file.proxy)
     user_agent = _pick(ctx, "user_agent", user_agent, scan_file.user_agent)
+    if _is_default_source(ctx, "bug_bounty") and scan_file.bug_bounty is not None:
+        bug_bounty = scan_file.bug_bounty
     if _is_default_source(ctx, "allow_domain") and scan_file.allow_domains is not None:
         allow_domain = scan_file.allow_domains
     if _is_default_source(ctx, "deny_domain") and scan_file.deny_domains is not None:
@@ -2023,6 +2060,8 @@ def scan(
                     screenshots_dir=screenshots_dir,
                     user_agent=user_agent,
                     proxy=proxy,
+                    bug_bounty=bug_bounty,
+                    attribution=_parse_kv_list(attrib_header, "--attrib-header") if attrib_header else None,
                     discover_depth=discover_depth,
                     content_wordlist=content_wordlist,
                     subdomain_wordlist=subdomain_wordlist,

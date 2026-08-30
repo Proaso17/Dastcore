@@ -80,6 +80,15 @@
       <textarea id="cookies" name="cookies" rows="3" placeholder="cf_clearance=xxxx&#10;session=yyyy"></textarea>
       <p class="hint" style="margin:5px 0 0"><b>Cómo obtenerlas:</b> abre el objetivo en tu navegador (pasa el challenge/login), pulsa <code>F12</code> → <em>Application</em> (o Almacenamiento) → <em>Cookies</em> → copia <code>cf_clearance</code> (y las de sesión si estás logueado). Pega una por línea <code>nombre=valor</code>, o el string entero <code>a=1; b=2</code>. Úsalas con tu mismo User-Agent y proxy (misma IP).</p>
 
+      <label for="required_headers" style="margin-top:12px">Cabeceras requeridas (opcional, una por línea)</label>
+      <textarea id="required_headers" name="required_headers" rows="2" placeholder="X-Bug-Bounty: HackerOne-tu_handle"></textarea>
+      <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> la policy suele pedir una cabecera de atribución. Si lo dejas vacío y eliges plataforma, se añade <code>X-Bug-Bounty: &lt;plataforma&gt;-&lt;handle&gt;</code> automáticamente en todo el tráfico al objetivo.</p>
+
+      <div class="check" style="align-items:flex-start; margin-top:14px">
+        <input id="bug_bounty_mode" name="bug_bounty_mode" type="checkbox" value="on">
+        <label for="bug_bounty_mode" style="margin:0">Modo bug bounty <span class="muted">(oculta del reporte los hallazgos que los programas cierran como N/A: cabeceras, TLS, tabnabbing, disclosure… — quedan suprimidos, no borrados)</span></label>
+      </div>
+
       <button type="submit" style="margin-top:6px">Guardar objetivo</button>
     </form>
   </div>

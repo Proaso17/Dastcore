@@ -54,12 +54,28 @@ class Program(BaseModel):
     # Session cookies sent on every request — a WAF-clearance token (cf_clearance) and/or a logged-in
     # session, so the hunt reaches the real app behind Cloudflare/auth. Paired with user_agent + proxy.
     cookies: dict[str, str] = Field(default_factory=dict)
+    # Bug-bounty mode: suppress hardening/disclosure/no-impact findings the program would close as N/A,
+    # so the hunt's report shows only the potentially-reportable findings.
+    bug_bounty_mode: bool = False
+    # Attribution / required headers the program asks for on every request (many require an identifying
+    # header). Empty = auto-add ``X-Bug-Bounty: <platform>-<handle>`` for a real-platform program.
+    required_headers: dict[str, str] = Field(default_factory=dict)
     seeds: list[str] = Field(default_factory=list)  # root domains/URLs recon starts from
     payouts: dict[str, float] = Field(default_factory=dict)  # per vuln-class expected payout (Phase 12)
 
     def allows_active_scanning(self) -> bool:
         """False when the program forbids automated scanning — the campaign must stay recon/passive."""
         return not self.limits.no_automated_scanning
+
+    def attribution_headers(self) -> dict[str, str]:
+        """Headers that identify the researcher's traffic, as many programs require. Uses
+        ``required_headers`` if set; otherwise a default ``X-Bug-Bounty: <platform>-<handle>`` for a
+        real-platform program (never for a private ``self`` target)."""
+        if self.required_headers:
+            return dict(self.required_headers)
+        if self.platform != "self" and self.handle:
+            return {"X-Bug-Bounty": f"{self.platform}-{self.handle}"}
+        return {}
 
     def to_scope_config(self) -> ScopeConfig:
         """Flatten the program scope into the engine's allow/deny pattern lists."""
