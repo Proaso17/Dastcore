@@ -47,6 +47,29 @@ def test_sqli_rule_has_expected_shape() -> None:
     assert sqli.remediation
 
 
+def test_sqli_rule_detects_orm_hql_errors_without_false_positives() -> None:
+    # ORM/HQL injection (Hibernate/NHibernate/JPA) surfaces as query-layer exception class names.
+    from dastcore.core.models import HttpResponse
+    from dastcore.validation.oracles import check_response_match
+
+    rules = {rule.id: rule for rule in load_rules()}
+    patterns = [p for check in rules["sqli-injection"].oracle.checks
+                if check.type == "response_match" for p in check.patterns]
+
+    def body(text: str) -> HttpResponse:
+        return HttpResponse(status_code=500, headers={}, text=text, elapsed_ms=5.0, url="http://x/")
+
+    for hql in (
+        "org.hibernate.QueryException: unexpected token near '''",
+        "org.hibernate.hql.internal.ast.QuerySyntaxException: unexpected end of subtree",
+        "NHibernate.Hql.Ast.ANTLR.QuerySyntaxException",
+        "jakarta.persistence.PersistenceException: could not parse query",
+    ):
+        assert check_response_match(body(hql), patterns, part="body") is not None, hql
+    for benign in ("Welcome back!", "Unexpected token < in JSON at position 0", "persistence layer unavailable"):
+        assert check_response_match(body(benign), patterns, part="body") is None, benign
+
+
 def test_applicable_payloads_includes_declared_and_rendered_time_based() -> None:
     rule = Rule(
         id="r",
