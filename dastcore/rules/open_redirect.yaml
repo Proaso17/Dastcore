@@ -15,6 +15,10 @@ payloads:
   - "/\\dastcore-redirect-probe.invalid/" # backslash authority: browsers read \ as /, naive same-origin filters see a path
   - "https://trusted.example@dastcore-redirect-probe.invalid/" # userinfo: real host is the probe; the "trusted" label is only userinfo
   - "https://dastcore-redirect-probe.invalid\\@trusted.example/" # backslash+userinfo: browser navigates to the probe, filter reads trusted.example
+  # IDN / Unicode label-separator bypass: browsers fold these Unicode "full stop" chars to '.', so the
+  # host still resolves to the probe, but a filter validating the host as an ASCII string won't match.
+  - "//dastcore-redirect-probe．invalid/" # U+FF0E FULLWIDTH FULL STOP
+  - "https://dastcore-redirect-probe｡invalid/" # U+FF61 HALFWIDTH IDEOGRAPHIC FULL STOP
 oracle:
   type: any_of
   checks:

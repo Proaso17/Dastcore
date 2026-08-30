@@ -163,13 +163,19 @@ def check_reflected(response: HttpResponse, payload: str) -> Evidence | None:
     return None
 
 
+# Unicode label separators that IDNA / the WHATWG URL host parser fold to "." — the exact set
+# Python's own ``encodings.idna`` splits labels on. Folding them models what a browser really does,
+# so a redirect that only reaches the probe host after this fold is a genuine navigation, not a guess.
+_IDNA_DOTS = str.maketrans({"。": ".", "．": ".", "｡": "."})
+
+
 def _redirect_target_host(value: str) -> str:
     """The host a browser would navigate to for this ``Location``/``Refresh`` value.
 
-    Browsers strip tab/CR/LF inside a URL and treat backslashes as forward slashes,
-    so we normalize the same way before parsing the authority — otherwise ``/\\host``
-    style bypasses would be read as a same-origin path."""
-    cleaned = re.sub(r"[\t\r\n]", "", value.strip()).replace("\\", "/")
+    Browsers strip tab/CR/LF inside a URL, treat backslashes as forward slashes, and fold the
+    Unicode IDNA label separators (``。．｡``) to ``.``, so we normalize the same way before parsing
+    the authority — otherwise ``/\\host`` or unicode-dot bypasses would be read as a same-origin path."""
+    cleaned = re.sub(r"[\t\r\n]", "", value.strip()).replace("\\", "/").translate(_IDNA_DOTS)
     return (urlsplit(cleaned).hostname or "").lower()
 
 

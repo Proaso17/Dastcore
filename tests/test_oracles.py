@@ -86,6 +86,18 @@ def test_open_redirect_confirms_userinfo_parser_confusion_payloads() -> None:
     assert check_open_redirect(_response(headers={"Location": "https://trusted.example/"}), attack) is None
 
 
+def test_open_redirect_confirms_unicode_idn_dot_bypass() -> None:
+    # Browsers fold the Unicode "full stop" characters to '.', so the host still resolves to the
+    # probe while an ASCII-string host filter is bypassed. The oracle models the same fold.
+    for dot in ("．", "｡", "。"):  # FULLWIDTH / HALFWIDTH IDEOGRAPHIC / IDEOGRAPHIC FULL STOP
+        payload = f"//dastcore-redirect-probe{dot}invalid/"
+        resp = _response(status_code=302, headers={"Location": payload})
+        assert check_open_redirect(resp, payload) is not None, repr(dot)
+    # A redirect to a DIFFERENT unicode host must not be mistaken for the probe (no over-fold FP).
+    resp = _response(status_code=302, headers={"Location": "https://evil．example/"})
+    assert check_open_redirect(resp, "//dastcore-redirect-probe．invalid/") is None
+
+
 def test_open_redirect_reads_the_refresh_header_target() -> None:
     resp = _response(headers={"Refresh": f"0; url={_PROBE}"})
     assert check_open_redirect(resp, _PROBE) is not None
