@@ -3067,6 +3067,50 @@ def hunt(
         console.print(f"[green]Reporte escrito en {output_path}[/green]")
 
 
+@app.command("benchmark")
+def benchmark_cmd(
+    output_format: str = typer.Option("text", "--output", "-o", help="text | json | md."),
+    out_path: str = typer.Option("", "--out", help="Escribe el scorecard a un fichero."),
+    compare: str = typer.Option(
+        "", "--compare",
+        help="JSON de hallazgos de OTRA herramienta (Finding[] o [{path,family}]) para puntuarla en el mismo target.",
+    ),
+) -> None:
+    """Ejecuta el benchmark de precisión (target etiquetado, offline) e imprime precision/recall/F1 — para
+    reproducir el cero-FP de forma verificable. Con --compare, puntúa otra herramienta en el mismo ground truth."""
+    try:
+        from dastcore.benchmark.app import EXPECTED
+        from dastcore.benchmark.runner import run_benchmark
+        from dastcore.benchmark.scorer import markdown_table, score_external
+    except ImportError as exc:
+        console.print(f"[red]El benchmark necesita Flask:[/red] pip install 'dastcore[benchmark]' ({exc})")
+        raise typer.Exit(code=1) from exc
+
+    _print_banner()
+    console.print("[cyan]Ejecutando el benchmark de precisión (offline)…[/cyan]")
+    results = [asyncio.run(run_benchmark())]
+    if compare:
+        try:
+            results.append(score_external(compare, EXPECTED))
+        except (OSError, ValueError) as exc:
+            console.print(f"[yellow]No pude leer --compare: {exc}[/yellow]")
+
+    if output_format == "json":
+        body = _json.dumps([r.to_dict() for r in results], ensure_ascii=False, indent=2)
+    elif output_format == "md":
+        body = markdown_table(results)
+    else:
+        body = "\n\n".join(r.scorecard() for r in results)
+
+    if out_path:
+        Path(out_path).write_text(body, encoding="utf-8")
+        console.print(f"[green]Scorecard escrito en {out_path}[/green]")
+    else:
+        console.print(body)
+    if results[0].false_positives:  # a false positive is a regression — signal it for CI
+        raise typer.Exit(code=2)
+
+
 @app.command("triage")
 def triage_cmd(
     input_path: str = typer.Option(..., "--input", "-i", help="JSON de hallazgos (salida de `scan`/`hunt` -f json)."),

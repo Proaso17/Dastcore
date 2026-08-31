@@ -57,6 +57,7 @@ recon = ["dnspython>=2.6.0"]  # DNS record enrichment (CNAME/MX/TXT/NS/SOA); mod
 web = ["fastapi>=0.110.0", "uvicorn>=0.29.0", "python-multipart>=0.0.9"]
 pg = ["psycopg[binary]>=3.1.0"]  # PostgreSQL backend for the cloud control-plane
 pdf = ["fpdf2>=2.7.0"]  # PDF report export (dastcore scan -f pdf)
+benchmark = ["flask>=3.0.0"]  # the labeled accuracy-benchmark target (dastcore benchmark)
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.5",
@@ -144,4 +145,8 @@ disable_error_code = ["union-attr", "arg-type", "assignment", "index", "operator
 
 [[tool.mypy.overrides]]
 module = "tests.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "dastcore.benchmark.app"  # a deliberately-vulnerable Flask fixture, like the test targets
 ignore_errors = true
