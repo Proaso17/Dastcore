@@ -1,0 +1,58 @@
+# Example: delta-gated DAST on pull requests.
+#
+# A PR fails the build ONLY when it introduces a NEW finding versus main's baseline — not because of
+# the pre-existing backlog. Every run still uploads SARIF, so findings show up inline on the PR's
+# "Files changed" tab and in the Security tab.
+#
+# Copy to .github/workflows/dastcore-pr.yml and point TARGET_URL at the environment where your PR /
+# main is deployed (a staging URL, or spin the app up as a service container in a prior step). Only
+# ever scan an environment you are authorized to test.
+name: DASTCore PR delta gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  security-events: write # upload SARIF to code scanning
+  contents: read
+
+jobs:
+  dast:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_URL: https://staging.example.com # <-- your deployed PR / main environment
+    steps:
+      - uses: actions/checkout@v4
+
+      # Restore main's last findings JSON as the baseline. PRs diff against it; on the first run it is
+      # absent, so everything counts as new (the run then establishes the baseline).
+      - name: Restore baseline
+        uses: actions/cache@v4
+        with:
+          path: baseline.json
+          key: dastcore-baseline-${{ github.sha }}
+          restore-keys: dastcore-baseline-
+
+      - name: DASTCore scan (delta-gated on PRs)
+        uses: Proaso17/Dastcore@v1
+        with:
+          target: ${{ env.TARGET_URL }}
+          fail-on: high
+          baseline: baseline.json
+          # Gate on NEW-only for PRs; on main we don't gate (we refresh the baseline below).
+          gate-on-new: ${{ github.event_name == 'pull_request' }}
+          sarif-file: dastcore.sarif
+
+      - name: Upload SARIF (PR annotations + Security tab)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: dastcore.sarif
+
+      # On main, write a fresh findings JSON so the cache post-step saves it as the next baseline.
+      - name: Refresh baseline on main
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: dastcore scan "$TARGET_URL" --i-have-authorization --profile full -f json -o baseline.json --fail-on none

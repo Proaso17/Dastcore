@@ -157,6 +157,23 @@ Si el endpoint responde en **streaming** (SSE/NDJSON, típico de OpenAI/Ollama),
 
 Documentación: **[Manual de uso](docs/manual.html)** (guía visual con capturas: CLI, panel web y cloud) · [RULES.md](RULES.md) (cómo escribir una regla) · [SECURITY.md](SECURITY.md) (uso responsable) · CI/CD: [`examples/github-action.yml`](examples/github-action.yml) (escaneo web) y [`examples/github-action-chatbot.yml`](examples/github-action-chatbot.yml) (chatbot embebido / OWASP LLM, SARIF a code scanning).
 
+### GitHub Action reutilizable + *delta gating*
+
+Hay una **Action reutilizable** ([`action.yml`](action.yml)) para no copiar pasos — añádela a tu workflow y escanea en cada PR, con **SARIF a code scanning** (anotaciones inline en el PR + pestaña Security):
+
+```yaml
+- uses: Proaso17/Dastcore@v1
+  with:
+    target: https://staging.mi-app.com
+    fail-on: high
+    baseline: baseline.json      # findings JSON del último scan de main
+    gate-on-new: ${{ github.event_name == 'pull_request' }}
+- uses: github/codeql-action/upload-sarif@v3
+  with: { sarif_file: dastcore.sarif }
+```
+
+**Delta gating** (`dastcore scan --gate-on-new --baseline main.json`): el gate `--fail-on` cuenta **solo los hallazgos nuevos** respecto a la baseline, así un PR rompe el build únicamente si *introduce* una vulnerabilidad, no por el backlog previo. Ejemplo completo en [`examples/github-action-pr.yml`](examples/github-action-pr.yml).
+
 ## Estado del proyecto
 
 - [x] Fase 0 — Bootstrap (config, scope, CLI con gate legal)

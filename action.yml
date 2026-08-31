@@ -1,0 +1,71 @@
+name: "DASTCore DAST scan"
+description: "Run a DASTCore black-box dynamic security scan, emit SARIF for GitHub code scanning, and optionally delta-gate the build (fail only on findings NEW versus a baseline)."
+author: "DASTCore"
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  target:
+    description: "URL to scan. Must be an environment you are authorized to test (staging, a service container, …)."
+    required: true
+  fail-on:
+    description: "Severity that fails the job: info | low | medium | high | critical | none."
+    required: false
+    default: "high"
+  profile:
+    description: "Scan profile: quick | full | api (empty = engine default)."
+    required: false
+    default: "full"
+  baseline:
+    description: "Path to a previous scan's findings JSON (dastcore -f json), e.g. main's last run — enables delta gating."
+    required: false
+    default: ""
+  gate-on-new:
+    description: "With a baseline, fail the build ONLY on findings NEW versus it (true/false)."
+    required: false
+    default: "false"
+  sarif-file:
+    description: "Where to write the SARIF report (upload it with github/codeql-action/upload-sarif)."
+    required: false
+    default: "dastcore.sarif"
+  install-extras:
+    description: "pip extras to install with DASTCore (headless needs a browser; omit for a faster HTTP-only scan)."
+    required: false
+    default: "headless,oast"
+  extra-args:
+    description: "Extra arguments appended verbatim to `dastcore scan` (e.g. --auth-bearer, --rps)."
+    required: false
+    default: ""
+
+outputs:
+  sarif:
+    description: "Path to the SARIF report produced by the scan."
+    value: ${{ inputs.sarif-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install DASTCore
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install "${{ github.action_path }}[${{ inputs.install-extras }}]"
+        if [[ "${{ inputs.install-extras }}" == *headless* ]]; then
+          python -m playwright install --with-deps chromium
+        fi
+
+    - name: Run DASTCore scan
+      shell: bash
+      run: |
+        args=( "${{ inputs.target }}" --i-have-authorization -f sarif -o "${{ inputs.sarif-file }}" --fail-on "${{ inputs.fail-on }}" )
+        [ -n "${{ inputs.profile }}" ] && args+=( --profile "${{ inputs.profile }}" )
+        [ -n "${{ inputs.baseline }}" ] && args+=( --baseline "${{ inputs.baseline }}" )
+        [ "${{ inputs.gate-on-new }}" = "true" ] && args+=( --gate-on-new )
+        echo "dastcore scan ${args[*]} ${{ inputs.extra-args }}"
+        dastcore scan "${args[@]}" ${{ inputs.extra-args }}

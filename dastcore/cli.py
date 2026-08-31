@@ -1803,7 +1803,11 @@ def scan(
     ),
     baseline: str = typer.Option(
         "", "--baseline",
-        help="JSON de hallazgos previos (salida de un scan anterior -f json) para calcular los NUEVOS que se alertan.",
+        help="JSON de hallazgos previos (salida de un scan anterior -f json): calcula los NUEVOS (alertas / delta gating).",
+    ),
+    gate_on_new: bool = typer.Option(
+        False, "--gate-on-new",
+        help="Delta gating (CI): --fail-on cuenta SOLO los hallazgos nuevos vs --baseline, no todo el backlog.",
     ),
     suppress: str = typer.Option(
         "",
@@ -2141,6 +2145,7 @@ def scan(
         raise typer.Exit(code=1) from exc
 
     _emit_surface(surface, surface_path, quiet=quiet)
+    gate_findings = _delta_gate_findings(findings, baseline, gate_on_new)
     _emit_report_and_gate(
         findings,
         output_format=output_format,
@@ -2153,6 +2158,7 @@ def scan(
         ai_triage=ai_triage,
         ai_triage_key=ai_triage_key or None,
         audience=audience,
+        gate_findings=gate_findings,
     )
     if notify_webhook:
         _notify_delta_cli(
@@ -2240,26 +2246,45 @@ def _print_ai_triage(findings: list[Finding], *, api_key: str | None) -> None:
     )
 
 
+def _load_baseline_findings(path: str) -> list[Finding]:
+    """Load a prior scan's findings JSON (dastcore `-f json`) as a baseline. Empty on any problem
+    (so a missing/broken baseline degrades to 'everything is new')."""
+    if not path:
+        return []
+    try:
+        return [Finding.model_validate(x) for x in _json.loads(Path(path).read_text(encoding="utf-8"))]
+    except (OSError, ValueError) as exc:
+        console.print(f"[yellow]No pude leer --baseline ({exc}); trato todos los hallazgos como nuevos.[/yellow]")
+        return []
+
+
+def _delta_gate_findings(findings: list[Finding], baseline_path: str, gate_on_new: bool) -> list[Finding] | None:
+    """Delta gating: with --gate-on-new, return only the findings NEW vs the baseline (so --fail-on
+    gates on the delta a PR introduces, not the whole backlog). None = gate on everything (default)."""
+    if not gate_on_new:
+        return None
+    from dastcore.web.diff import diff_findings
+
+    new = diff_findings(_load_baseline_findings(baseline_path), findings).new
+    console.print(
+        f"[cyan]Delta gating:[/cyan] {len(new)} hallazgo(s) nuevo(s) vs baseline (de {len(findings)}); "
+        "el gate --fail-on solo cuenta esos."
+    )
+    return new
+
+
 def _notify_delta_cli(
     webhook: str, fmt: str, min_severity: str, baseline_path: str,
     findings: list[Finding], target: str,
 ) -> None:
     """Continuous-monitoring alert for the CLI (cron-friendly): POST the findings that are NEW versus
     ``--baseline`` (a prior scan's JSON) to a Slack/Discord/generic webhook. Best-effort."""
-    import json as _json
-
     from dastcore.notify import filter_by_severity, send_alert
     from dastcore.web.diff import diff_findings
 
     fmt = fmt if fmt in ("slack", "discord", "generic") else "slack"
     min_severity = min_severity if min_severity in ("critical", "high", "medium", "low", "info") else "medium"
-    base: list[Finding] = []
-    if baseline_path:
-        try:
-            base = [Finding.model_validate(x) for x in _json.loads(Path(baseline_path).read_text(encoding="utf-8"))]
-        except (OSError, ValueError) as exc:
-            console.print(f"[yellow]No pude leer --baseline ({exc}); trato todos los hallazgos como nuevos.[/yellow]")
-    new = diff_findings(base, findings).new
+    new = diff_findings(_load_baseline_findings(baseline_path), findings).new
     alertable = filter_by_severity(new, min_severity)
     if not alertable:
         console.print("[dim]Sin hallazgos nuevos por encima del umbral; no se envía alerta.[/dim]")
@@ -2285,17 +2310,23 @@ def _emit_report_and_gate(
     ai_triage: bool = False,
     ai_triage_key: str | None = None,
     audience: str = "developer",
+    gate_findings: list[Finding] | None = None,
 ) -> None:
     """Shared reporting/exit-gate used by `scan` and `ai`.
 
     Suppressed findings (triaged via `.dastcore-ignore`) stay in the machine-readable
     JSON/SARIF as an audit trail but drop out of the human console/HTML views and never
     trip the `--fail-on` gate.
+
+    ``gate_findings`` (delta gating for CI): when given, only these findings can trip the
+    ``--fail-on`` gate — the full report still shows everything, but the build fails only on the
+    subset (e.g. findings NEW versus a baseline). ``None`` keeps the default (gate on all active).
     """
     findings = deduplicate(findings)
     apply_suppressions(findings, suppressions or [])
     active = [f for f in findings if not f.suppressed]
     suppressed = [f for f in findings if f.suppressed]
+    gated = active if gate_findings is None else [f for f in gate_findings if not f.suppressed]
 
     if output_format == "pdf":
         from dastcore.report.pdf import render_pdf
@@ -2316,7 +2347,7 @@ def _emit_report_and_gate(
             if ai_triage:
                 _print_ai_triage(active, api_key=ai_triage_key)
             console.print(f"\n[green]Reporte PDF escrito en {output_path}[/green]")
-        _fail_on_gate(active, fail_on)
+        _fail_on_gate(gated, fail_on)
         return
 
     if output_format == "html":
@@ -2345,7 +2376,7 @@ def _emit_report_and_gate(
             console.print(f"\n[bold]{output_format.upper()}:[/bold]")
         print(report)
 
-    _fail_on_gate(active, fail_on)
+    _fail_on_gate(gated, fail_on)
 
 
 def _fail_on_gate(active: list[Finding], fail_on: str) -> None:
