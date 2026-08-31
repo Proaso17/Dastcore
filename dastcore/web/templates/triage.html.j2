@@ -1,0 +1,68 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · copilot de triaje{% endblock %}
+{% block body %}
+  {% macro cluster_table(clusters) %}
+    <div class="overflow">
+      <table>
+        <thead><tr>
+          <th title="Banda de prioridad de corrección (P1 = primero).">Prio</th>
+          <th>Severidad</th>
+          <th>Issue</th>
+          <th title="Hosts distintos afectados por esta misma clase+punto.">Hosts</th>
+          <th title="Hallazgos crudos que se han agrupado.">Inst.</th>
+          <th title="Score de explotabilidad (0–10).">Exploit</th>
+          <th>Ejemplo</th>
+        </tr></thead>
+        <tbody>
+          {% for c in clusters %}
+          <tr>
+            <td><strong>{{ c.band }}</strong></td>
+            <td><span class="badge sev-{{ c.severity }}">{{ c.severity }}</span></td>
+            <td>{{ c.name }} <span class="muted">({{ c.family }})</span></td>
+            <td title="{{ c.hosts | join(', ') }}">
+              <strong>{{ c.host_count }}</strong>
+              {% if c.hosts %}<br><span class="muted" style="font-size:12px">{{ c.hosts[:3] | join(', ') }}{% if c.host_count > 3 %} …{% endif %}</span>{% endif %}
+            </td>
+            <td>{{ c.count }}</td>
+            <td>{{ '%.1f' | format(c.exploitability) }}</td>
+            <td class="muted" style="font-size:12px; word-break:break-all">{{ c.example }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endmacro %}
+
+  <div class="panel">
+    <h2 style="margin-top:0">Copilot de triaje — <span class="muted">{{ scan.target }}</span></h2>
+    <p class="hint" style="margin:0 0 10px">Los hallazgos agrupados por <strong>clase + punto de inyección</strong> y
+      combinados <strong>entre hosts</strong>, ordenados por urgencia. Los de baja confianza se separan abajo para
+      revisar. Determinista — no cambia ni crea hallazgos, solo reorganiza para decidir qué mirar primero.</p>
+    <div style="display:flex; gap:20px; flex-wrap:wrap; font-size:14px">
+      <div><strong>{{ digest.total_findings }}</strong> hallazgo(s)</div>
+      <div><strong>{{ digest.clusters | length }}</strong> cluster(s)</div>
+      <div><strong>{{ digest.distinct_hosts }}</strong> host(s)</div>
+      {% for sev in ['critical','high','medium','low','info'] %}
+        {% if digest.severity_counts.get(sev) %}<div><span class="badge sev-{{ sev }}">{{ sev }}</span> {{ digest.severity_counts[sev] }}</div>{% endif %}
+      {% endfor %}
+    </div>
+    <p style="margin:12px 0 0"><a href="/scans/{{ scan.id }}">← Volver al escaneo</a></p>
+  </div>
+
+  <div class="panel">
+    <h2>Prioritarios ({{ digest.priority | length }})</h2>
+    {% if digest.priority %}
+      {{ cluster_table(digest.priority) }}
+    {% else %}
+      <div class="empty">Sin clusters prioritarios por encima de la barra de confianza.</div>
+    {% endif %}
+  </div>
+
+  {% if digest.review %}
+  <div class="panel" style="border-left:3px solid #d80">
+    <h2 style="margin-top:0">Revisar — posible falso positivo ({{ digest.review | length }})</h2>
+    <p class="hint" style="margin:0 0 10px">Confianza del motor por debajo del umbral: verifica manualmente antes de reportar.</p>
+    {{ cluster_table(digest.review) }}
+  </div>
+  {% endif %}
+{% endblock %}

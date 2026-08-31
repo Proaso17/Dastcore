@@ -20,6 +20,7 @@ from dastcore.triage.ai import (
     build_triage_input,
     triage_findings,
 )
+from dastcore.triage.digest import TriageCluster, TriageDigest, build_digest
 from dastcore.triage.scoring import (
     TriagedFinding,
     exploitability_score,
@@ -32,7 +33,10 @@ __all__ = [
     "AiTriageResult",
     "BusinessSeverity",
     "RootCauseGroup",
+    "TriageCluster",
+    "TriageDigest",
     "TriagedFinding",
+    "build_digest",
     "build_triage_input",
     "exploitability_score",
     "family_weight",

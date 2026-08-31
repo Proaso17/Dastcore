@@ -33,6 +33,35 @@ async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float =
     raise AssertionError("scan did not finish in time")
 
 
+async def test_triage_copilot_view_clusters_findings(tmp_path) -> None:
+    from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+
+    def mk(host: str, *, rule: str = "sqli-injection", family: str = "sqli", conf: str = "high",
+           param: str = "q") -> Finding:
+        req = HttpRequest(method="GET", url=f"http://{host}/s", params={param: "1"})
+        pt = InjectionPoint(location="query", name=param, base_value="1", request_template=req)
+        return Finding(id=f"{rule}:{host}:{param}", rule_id=rule, name="SQL Injection", severity="high",
+                       cwe="CWE-89", owasp="", family=family, injection_point=pt,
+                       evidence=[Evidence(type="differential", data="x", confidence=conf)],
+                       request=req, response=HttpResponse(status_code=500), remediation="x")
+
+    db = tmp_path / "db.sqlite"
+    seed = Store(db_path=db)  # same DB file the app opens — sqlite makes the committed rows visible
+    seed.insert_running("s1", "http://t.test", "http", None, 1.0)
+    seed.mark_done("s1", 2.0, 1.0, [
+        mk("a.test"), mk("b.test"),  # one high-confidence cluster across 2 hosts -> priority
+        mk("c.test", rule="reflected-xss", family="xss", conf="low", param="s"),  # -> review bucket
+    ])
+
+    app = create_app(db_path=db)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/scans/s1/triage")
+    assert resp.status_code == 200
+    assert "Copilot de triaje" in resp.text
+    assert "Prioritarios" in resp.text and "posible falso positivo" in resp.text
+
+
 async def test_alerts_config_saves_and_shows_on_schedules_page(client: httpx.AsyncClient) -> None:
     async with client:
         saved = await client.post(

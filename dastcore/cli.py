@@ -148,6 +148,7 @@ from dastcore.retest import (
 from dastcore.severity import meets_threshold
 from dastcore.suppressions import Suppression, apply_suppressions, resolve_suppressions
 from dastcore.triage import triage_findings
+from dastcore.triage.digest import TriageDigest, build_digest
 from dastcore.web.diff import diff_findings
 
 # Distinct from operational-error exit code 1: findings met the --fail-on bar.
@@ -1443,6 +1444,40 @@ def _print_findings_table(findings: list[Finding]) -> None:
             locations,
         )
     console.print(table)
+
+
+def _print_triage_digest(digest: TriageDigest, *, top: int = 0) -> None:
+    """Copilot summary: clusters (class+injection point rolled up across hosts), ranked, with a
+    separate 'review / possible FP' bucket — so you see what to handle first."""
+    order = ("critical", "high", "medium", "low", "info")
+    sev_line = " · ".join(f"{s}: {digest.severity_counts[s]}" for s in order if digest.severity_counts.get(s))
+    console.print(
+        f"\n[bold]Copilot de triaje[/bold] — {digest.total_findings} hallazgo(s) · "
+        f"{len(digest.clusters)} cluster(s) · {digest.distinct_hosts} host(s)"
+        + (f"\n[dim]{sev_line}[/dim]" if sev_line else "")
+    )
+
+    def _table(title: str, clusters: list) -> None:
+        table = Table(title=title)
+        for col, kw in (("Prio", {}), ("Severidad", {}), ("Issue", {}), ("Hosts", {"justify": "right"}),
+                        ("Inst.", {"justify": "right"}), ("Exploit", {"justify": "right"}), ("Ejemplo", {})):
+            table.add_column(col, **kw)
+        for c in clusters:
+            style = _SEVERITY_STYLE.get(c.severity, "")
+            hostlbl = str(c.host_count)
+            if c.hosts:
+                hostlbl += " · " + ", ".join(c.hosts[:2]) + ("…" if c.host_count > 2 else "")
+            table.add_row(c.band, f"[{style}]{c.severity}[/{style}]", c.name, hostlbl,
+                          str(c.count), f"{c.exploitability:.1f}", c.example)
+        console.print(table)
+
+    prio = digest.priority[:top] if top > 0 else digest.priority
+    if prio:
+        _table(f"Prioritarios ({len(digest.priority)})", prio)
+    else:
+        console.print("[dim]Sin clusters prioritarios por encima de la barra de confianza.[/dim]")
+    if digest.review:
+        _table(f"Revisar — posible falso positivo ({len(digest.review)})", digest.review)
 
 
 _RETEST_STATUS_STYLE = {"open": "bold red", "unverified": "yellow", "fixed": "green"}
@@ -3030,6 +3065,27 @@ def hunt(
         )
         Path(output_path).write_text(body, encoding="utf-8")
         console.print(f"[green]Reporte escrito en {output_path}[/green]")
+
+
+@app.command("triage")
+def triage_cmd(
+    input_path: str = typer.Option(..., "--input", "-i", help="JSON de hallazgos (salida de `scan`/`hunt` -f json)."),
+    output_format: str = typer.Option("text", "--output", "-o", help="text | json."),
+    top: int = typer.Option(0, "--top", help="Muestra solo los N clusters prioritarios (0 = todos)."),
+) -> None:
+    """Copilot de triaje: agrupa los hallazgos por clase+punto de inyección *entre hosts*, los prioriza y
+    separa los de posible falso positivo — para saber qué mirar primero. Determinista, sin IA."""
+    try:
+        data = _json.loads(Path(input_path).read_text(encoding="utf-8"))
+        findings = [Finding.model_validate(item) for item in data]
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]No se pudo leer '{input_path}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    digest = build_digest(findings)
+    if output_format == "json":
+        console.print_json(_json.dumps(digest.to_dict(), ensure_ascii=False))
+        return
+    _print_triage_digest(digest, top=top)
 
 
 @app.command("import-program")

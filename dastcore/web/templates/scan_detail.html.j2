@@ -16,6 +16,15 @@
     <div id="result">{% include "_panel.html.j2" %}</div>
   </div>
 
+  {% if done and scan.num_findings > 0 %}
+  <div class="panel">
+    <h2 style="margin-top:0">Copilot de triaje</h2>
+    <p class="hint" style="margin:0 0 10px">¿Muchos hallazgos? Agrúpalos por clase entre hosts, priorízalos y separa
+      los de posible falso positivo — para saber qué mirar primero.</p>
+    <a href="/scans/{{ scan.id }}/triage"><button type="button">Abrir copilot de triaje →</button></a>
+  </div>
+  {% endif %}
+
   {% if done and scan.kind == 'scan' and others %}
   <div class="panel">
     <h2>Comparar</h2>

@@ -34,6 +34,7 @@ from dastcore.report.correlation import correlate
 from dastcore.report.remediation import guide_for
 from dastcore.severity import severity_rank
 from dastcore.suppressions import apply_suppressions
+from dastcore.triage.digest import build_digest
 from dastcore.web.diff import diff_findings, location_label
 from dastcore.web.jobs import ScanManager, ScanRequest
 from dastcore.web.scheduler import Scheduler
@@ -430,6 +431,16 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
             if s.id != scan.id and s.kind == "scan" and s.status == "done" and s.target == scan.target
         ]
         return render("scan_detail.html.j2", done=done, others=others, **ctx)
+
+    @app.get("/scans/{scan_id}/triage", response_class=HTMLResponse)
+    def scan_triage(scan_id: str) -> Response:
+        """Triage copilot: findings clustered across hosts, ranked, with a possible-FP bucket."""
+        scan = store.get_scan(scan_id)
+        if scan is None:
+            return HTMLResponse("<h1>404</h1><p>Escaneo no encontrado.</p>", status_code=404)
+        findings = store.get_findings(scan_id)
+        apply_suppressions(findings, store.build_suppressions())
+        return render("triage.html.j2", scan=scan, digest=build_digest(findings))
 
     @app.get("/scans/{scan_id}/panel", response_class=HTMLResponse)
     def scan_panel(scan_id: str) -> Response:
