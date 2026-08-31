@@ -12,6 +12,7 @@ from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.cli import app
 from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
+from dastcore.core.models import HttpRequest, HttpResponse
 
 runner = CliRunner()
 _SCOPE = ScopeConfig(allow_domains=["127.0.0.1"])
@@ -50,6 +51,7 @@ def test_ai_rules_load() -> None:
         "llm-data-exfiltration",
         "llm-harmful-content",
         "llm-chained-prompt-leak",
+        "llm-tool-definition-leak",
     }
 
 
@@ -84,6 +86,32 @@ def test_pii_and_luhn_helpers() -> None:
     assert (_find_pii("call +1-202-555-0173 today") or "").startswith("phone")
     assert _find_pii("your order number is 1234567890") is None
     assert _find_pii("transaction 1699999999 processed") is None
+
+
+class _FixedChat:
+    """A minimal chat endpoint that always answers the same string — for oracle unit tests."""
+
+    def __init__(self, answer: str) -> None:
+        self._answer = answer
+
+    async def ask(self, prompt: str):
+        req = HttpRequest(method="POST", url="http://bot.test/chat", json_body={"message": prompt})
+        return self._answer, req, HttpResponse(status_code=200, text=self._answer)
+
+
+async def test_tool_definition_leak_detected_when_the_bot_dumps_its_tool_schema() -> None:
+    rules = [r for r in load_ai_rules() if r.id == "llm-tool-definition-leak"]
+    leak = ('{"tools":[{"type":"function","function":{"name":"delete_user",'
+            '"description":"Delete a user","parameters":{"type":"object","properties":{"id":{"type":"string"}}}}}]}')
+    findings = await AiScanner(_FixedChat(leak), rules).scan()  # type: ignore[arg-type]
+    assert len(findings) == 1 and findings[0].rule_id == "llm-tool-definition-leak"
+
+
+async def test_tool_definition_leak_not_flagged_on_a_refusal() -> None:
+    rules = [r for r in load_ai_rules() if r.id == "llm-tool-definition-leak"]
+    chat = _FixedChat("I can't share my internal tools or their parameters.")
+    findings = await AiScanner(chat, rules).scan()  # type: ignore[arg-type]
+    assert findings == []
 
 
 # --- detection against the vulnerable bot ----------------------------------------------
