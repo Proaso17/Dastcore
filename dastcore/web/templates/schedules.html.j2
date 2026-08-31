@@ -71,6 +71,47 @@
   </div>
 
   <div class="panel">
+    {% set al = alerts %}
+    {% set curfmt = al.fmt if al else 'slack' %}
+    {% set cursev = al.min_severity if al else 'medium' %}
+    <h2>Alertas — avísame solo cuando aparezca algo nuevo</h2>
+    {% if saved %}<div class="panel" style="margin:0 0 12px;border-left:3px solid #2d7">Configuración de alertas guardada.</div>{% endif %}
+    <p class="hint" style="margin:0 0 10px">Tras cada escaneo (programado o manual), dastcore compara con el escaneo
+      anterior del mismo objetivo y, si hay hallazgos <strong>nuevos</strong> por encima del umbral, envía un aviso a tu
+      webhook. Ideal para vigilancia continua: prográmalo arriba y entérate solo cuando cambie algo.</p>
+    <form method="post" action="/alerts">
+      <label for="webhook_url">Webhook</label>
+      <input id="webhook_url" name="webhook_url" placeholder="https://hooks.slack.com/services/…  ·  https://discord.com/api/webhooks/…"
+             value="{{ al.webhook_url if al else '' }}">
+      <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> <em>Slack</em> → app "Incoming Webhooks" → Add to Slack → copia la URL.
+        <em>Discord</em> → Editar canal → Integraciones → Webhooks → Nuevo webhook → Copiar URL. O cualquier endpoint propio (formato «genérico», JSON).</p>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label for="fmt">Formato</label>
+          <select id="fmt" name="fmt">
+            <option value="slack" {% if curfmt == 'slack' %}selected{% endif %}>Slack</option>
+            <option value="discord" {% if curfmt == 'discord' %}selected{% endif %}>Discord</option>
+            <option value="generic" {% if curfmt == 'generic' %}selected{% endif %}>Genérico (JSON)</option>
+          </select>
+        </div>
+        <div>
+          <label for="min_severity">Umbral mínimo</label>
+          <select id="min_severity" name="min_severity">
+            {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
+            <option value="{{ sev }}" {% if cursev == sev %}selected{% endif %}>{{ sev }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="check" style="margin-top:12px">
+        <input id="alerts_enabled" name="enabled" type="checkbox" value="on" {% if al and al.enabled %}checked{% endif %}>
+        <label for="alerts_enabled" style="margin:0">Activar alertas de hallazgos nuevos</label>
+      </div>
+      <button type="submit" style="margin-top:6px">Guardar alertas</button>
+    </form>
+  </div>
+
+  <div class="panel">
     <h2>Nuevo programado</h2>
     {% if error %}<div class="panel err" style="margin:0 0 14px">{{ error }}</div>{% endif %}
     <form method="post" action="/schedules">

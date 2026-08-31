@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS programs (
     program_json TEXT NOT NULL,
     created_at   REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS alert_settings (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),  -- single-row config
+    webhook_url  TEXT NOT NULL DEFAULT '',
+    fmt          TEXT NOT NULL DEFAULT 'slack',       -- slack | discord | generic
+    min_severity TEXT NOT NULL DEFAULT 'medium',
+    enabled      INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # Columns added after the initial release; applied to pre-existing DBs on open.
@@ -122,6 +130,16 @@ class ScheduleRow:
     created_at: float
     last_run_at: float | None
     next_run_at: float
+
+
+@dataclass
+class AlertSettings:
+    """Delta-alert config for the self-hosted path (single row). ``enabled`` + a webhook_url gate it."""
+
+    webhook_url: str = ""
+    fmt: str = "slack"  # slack | discord | generic
+    min_severity: str = "medium"
+    enabled: bool = False
 
 
 @dataclass
@@ -415,6 +433,39 @@ class Store:
     def delete_schedule(self, schedule_id: int) -> None:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM schedules WHERE id=?", (schedule_id,))
+
+    # --- delta alerts (continuous monitoring) ------------------------------------------------
+
+    def get_alert_settings(self) -> AlertSettings:
+        """The single-row delta-alert config (defaults when unset)."""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM alert_settings WHERE id=1").fetchone()
+        if not row:
+            return AlertSettings()
+        return AlertSettings(
+            webhook_url=row["webhook_url"], fmt=row["fmt"],
+            min_severity=row["min_severity"], enabled=bool(row["enabled"]),
+        )
+
+    def set_alert_settings(self, webhook_url: str, fmt: str, min_severity: str, enabled: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO alert_settings (id, webhook_url, fmt, min_severity, enabled) VALUES (1, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET webhook_url=excluded.webhook_url, fmt=excluded.fmt, "
+                "min_severity=excluded.min_severity, enabled=excluded.enabled",
+                (webhook_url.strip(), fmt, min_severity, 1 if enabled else 0),
+            )
+
+    def previous_findings_for_target(self, target: str, exclude_scan_id: str) -> list[Finding]:
+        """Findings of the most recent *finished* scan of the same target (excluding ``exclude_scan_id``)
+        — the baseline a delta alert diffs against. Empty if this is the first scan of the target."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM scans WHERE target=? AND status='done' AND id!=? AND kind='scan' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (target, exclude_scan_id),
+            ).fetchone()
+        return self.get_findings(row["id"]) if row else []
 
     def build_suppressions(self) -> list[Suppression]:
         """Domain `Suppression` objects for applying/exporting (skips malformed rows)."""

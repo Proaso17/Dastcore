@@ -10,6 +10,7 @@ a progress sink that updates the in-memory job instead of a rich progress bar.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -26,8 +27,12 @@ from dastcore.cli import (
 from dastcore.config import OutputConfig, RateLimitConfig, ScanConfig, ScopeConfig
 from dastcore.core.models import Finding
 from dastcore.engine.rule_engine import load_rules
+from dastcore.notify import filter_by_severity, send_alert
 from dastcore.retest import classify, open_findings, summarize
+from dastcore.web.diff import diff_findings
 from dastcore.web.store import Store
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -210,6 +215,7 @@ class ScanManager:
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, result.findings)
+            await self._notify_delta(job.id, job.target, result.findings)
             job.status = "done"
             job.phase = f"Completado · {len(result.assets)} activos, {len(result.findings)} hallazgos"
         except Exception as exc:  # noqa: BLE001 — surface any error to the UI, don't crash the server
@@ -260,12 +266,28 @@ class ScanManager:
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)
+            await self._notify_delta(job.id, job.target, findings)
             job.status = "done"
             job.phase = "Completado"
         except SessionLoginError as exc:
             self._fail(job, started, f"Error de autenticación: {exc}")
         except Exception as exc:  # noqa: BLE001 — surface any engine error to the UI, don't crash the server
             self._fail(job, started, f"{type(exc).__name__}: {exc}")
+
+    async def _notify_delta(self, scan_id: str, target: str, findings: list[Finding]) -> None:
+        """Continuous-monitoring alert: if configured, POST the NEW-since-last findings to the webhook.
+        Best-effort — a webhook problem must never affect the scan that just finished."""
+        try:
+            settings = self._store.get_alert_settings()
+            if not settings.enabled or not settings.webhook_url:
+                return
+            previous = self._store.previous_findings_for_target(target, scan_id)
+            new = diff_findings(previous, findings).new
+            alertable = filter_by_severity(new, settings.min_severity)
+            if alertable:
+                await send_alert(settings.webhook_url, settings.fmt, target, alertable)
+        except Exception:  # noqa: BLE001 — alerting must never break the scan
+            _log.warning("delta alert failed for %s", target, exc_info=True)
 
     # --- embedded chatbot (ai --discover) ----------------------------------------------
 
@@ -310,6 +332,7 @@ class ScanManager:
                 config, str(config.target), headers, "", max_pages, victim_headers, victim_refs
             )
             self._store.mark_done(job.id, time.time(), time.monotonic() - started, findings)
+            await self._notify_delta(job.id, job.target, findings)
             job.status = "done"
             job.phase = "Completado" if profile is not None else "Completado — no se detectó ningún chatbot embebido"
         except SessionLoginError as exc:

@@ -525,8 +525,22 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         )
 
     @app.get("/schedules", response_class=HTMLResponse)
-    def schedules_page(error: str = "") -> HTMLResponse:
-        return render("schedules.html.j2", schedules=store.list_schedules(), intervals=_INTERVALS, error=error)
+    def schedules_page(error: str = "", saved: str = "") -> HTMLResponse:
+        return render("schedules.html.j2", schedules=store.list_schedules(), intervals=_INTERVALS,
+                      alerts=store.get_alert_settings(), error=error, saved=saved)
+
+    @app.post("/alerts")
+    def save_alerts(
+        webhook_url: str = Form(""),
+        fmt: str = Form("slack"),
+        min_severity: str = Form("medium"),
+        enabled: str = Form(""),
+    ) -> Response:
+        """Save the delta-alert config: 'ping me only when a NEW finding appears' (Slack/Discord/webhook)."""
+        fmt = fmt if fmt in ("slack", "discord", "generic") else "slack"
+        min_severity = min_severity if min_severity in ("critical", "high", "medium", "low", "info") else "medium"
+        store.set_alert_settings(webhook_url, fmt, min_severity, enabled == "on")
+        return RedirectResponse("/schedules?saved=1", status_code=303)
 
     @app.post("/schedules")
     def add_schedule(

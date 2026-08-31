@@ -33,6 +33,21 @@ async def _wait_done(client: httpx.AsyncClient, scan_id: str, timeout_s: float =
     raise AssertionError("scan did not finish in time")
 
 
+async def test_alerts_config_saves_and_shows_on_schedules_page(client: httpx.AsyncClient) -> None:
+    async with client:
+        saved = await client.post(
+            "/alerts",
+            data={"webhook_url": "https://hooks.slack.com/services/T/B/xyz", "fmt": "discord",
+                  "min_severity": "high", "enabled": "on"},
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+        page = await client.get("/schedules")
+    assert "avísame solo cuando aparezca algo nuevo" in page.text  # the alerts panel renders
+    assert "https://hooks.slack.com/services/T/B/xyz" in page.text  # webhook pre-filled
+    assert 'value="discord" selected' in page.text  # format persisted
+
+
 async def test_dashboard_loads_empty(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.get("/")

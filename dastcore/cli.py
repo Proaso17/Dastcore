@@ -1756,6 +1756,20 @@ def scan(
         help="Umbral de severidad que hace fallar el proceso (exit 2) para CI/CD: "
         "info | low | medium | high | critical | none.",
     ),
+    notify_webhook: str = typer.Option(
+        "", "--notify-webhook",
+        help="Vigilancia continua: envía a este webhook los hallazgos NUEVOS respecto a --baseline (Slack/Discord/genérico).",
+    ),
+    notify_format: str = typer.Option(
+        "slack", "--notify-format", help="Formato del webhook: slack | discord | generic."
+    ),
+    notify_min_severity: str = typer.Option(
+        "medium", "--notify-min-severity", help="Umbral mínimo para alertar por el webhook."
+    ),
+    baseline: str = typer.Option(
+        "", "--baseline",
+        help="JSON de hallazgos previos (salida de un scan anterior -f json) para calcular los NUEVOS que se alertan.",
+    ),
     suppress: str = typer.Option(
         "",
         "--suppress",
@@ -2105,6 +2119,10 @@ def scan(
         ai_triage_key=ai_triage_key or None,
         audience=audience,
     )
+    if notify_webhook:
+        _notify_delta_cli(
+            notify_webhook, notify_format, notify_min_severity, baseline, findings, str(config.target)
+        )
 
 
 def _emit_surface(surface: dict[str, Any], path: str, *, quiet: bool) -> None:
@@ -2185,6 +2203,36 @@ def _print_ai_triage(findings: list[Finding], *, api_key: str | None) -> None:
         "[dim]La IA solo clasifica y redacta a partir de evidencia ya confirmada por el oráculo; "
         "no confirma ni crea hallazgos.[/dim]"
     )
+
+
+def _notify_delta_cli(
+    webhook: str, fmt: str, min_severity: str, baseline_path: str,
+    findings: list[Finding], target: str,
+) -> None:
+    """Continuous-monitoring alert for the CLI (cron-friendly): POST the findings that are NEW versus
+    ``--baseline`` (a prior scan's JSON) to a Slack/Discord/generic webhook. Best-effort."""
+    import json as _json
+
+    from dastcore.notify import filter_by_severity, send_alert
+    from dastcore.web.diff import diff_findings
+
+    fmt = fmt if fmt in ("slack", "discord", "generic") else "slack"
+    min_severity = min_severity if min_severity in ("critical", "high", "medium", "low", "info") else "medium"
+    base: list[Finding] = []
+    if baseline_path:
+        try:
+            base = [Finding.model_validate(x) for x in _json.loads(Path(baseline_path).read_text(encoding="utf-8"))]
+        except (OSError, ValueError) as exc:
+            console.print(f"[yellow]No pude leer --baseline ({exc}); trato todos los hallazgos como nuevos.[/yellow]")
+    new = diff_findings(base, findings).new
+    alertable = filter_by_severity(new, min_severity)
+    if not alertable:
+        console.print("[dim]Sin hallazgos nuevos por encima del umbral; no se envía alerta.[/dim]")
+        return
+    if asyncio.run(send_alert(webhook, fmt, target, alertable)):
+        console.print(f"[green]Alerta enviada:[/green] {len(alertable)} hallazgo(s) nuevo(s) → webhook.")
+    else:
+        console.print("[yellow]No se pudo entregar la alerta al webhook (best-effort).[/yellow]")
 
 
 def _emit_report_and_gate(
