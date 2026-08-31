@@ -42,6 +42,31 @@ async def test_bug_bounty_nav_and_empty_state(app_client) -> None:
     assert 'href="/programs"' in home.text  # nav links the bug-bounty area
 
 
+async def test_import_program_prefills_the_form_for_review(app_client) -> None:
+    _, client = app_client
+    policy = (
+        "hackerone.com/acme\nIn scope\n*.acme.com  Wildcard  Eligible\napi.acme.io  Domain\n"
+        "Acme Android  com.acme.app  Android\nOut of scope\nstatus.acme.com\n"
+        "Rules: 2 requests per second. Send X-Bug-Bounty: acme-migon.\n"
+    )
+    async with client:
+        resp = await client.post("/programs/import", data={"policy": policy, "platform": "hackerone"})
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Revisión de la importación" in body  # the notes panel is shown
+    assert "*.acme.com" in body and "api.acme.io" in body  # scope pre-filled into the form
+    assert "status.acme.com" in body  # out-of-scope pre-filled
+    assert "X-Bug-Bounty: acme-migon" in body  # attribution header captured into the form
+    assert "no-web" in body  # the Android asset was filtered, with a note
+
+
+async def test_import_program_with_no_hosts_shows_a_warning(app_client) -> None:
+    _, client = app_client
+    async with client:
+        resp = await client.post("/programs/import", data={"policy": "just some rules, no hosts", "platform": "hackerone"})
+    assert resp.status_code == 200 and "No se detectó ningún host" in resp.text
+
+
 async def test_create_list_and_delete_program(app_client) -> None:
     app, client = app_client
     async with client:

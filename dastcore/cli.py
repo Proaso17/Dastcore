@@ -2984,6 +2984,58 @@ def hunt(
         console.print(f"[green]Reporte escrito en {output_path}[/green]")
 
 
+@app.command("import-program")
+def import_program_cmd(
+    policy_file: str = typer.Argument(..., help="Fichero de texto con la política/scope pegada del programa."),
+    out_path: str = typer.Option("program.yaml", "--out", "-o", help="Fichero program.yaml a escribir (para `hunt`)."),
+    platform: str = typer.Option("hackerone", "--platform", help="hackerone | bugcrowd | intigriti | immunefi | self."),
+    handle: str = typer.Option("", "--handle", help="Handle del programa (si no, se deduce del enlace pegado)."),
+) -> None:
+    """Importa un programa (Modo A): parsea la política pegada → program.yaml listo para revisar y usar con `hunt`."""
+    import yaml as _yaml
+
+    from dastcore.bugbounty import parse_program_policy
+
+    _print_banner()
+    try:
+        text = Path(policy_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]No se pudo leer '{policy_file}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    result = parse_program_policy(text, platform=platform, handle=handle)
+    program = result.program
+
+    console.print(f"\n[bold cyan]Programa importado[/bold cyan]: {program.handle} ({program.platform})")
+    console.print(f"  En alcance : {', '.join(program.scope.allow_patterns()) or '[yellow]ninguno[/yellow]'}")
+    if program.scope.out_of_scope:
+        console.print(f"  Fuera      : {', '.join(program.scope.out_of_scope)}")
+    console.print(f"  Límites    : {program.limits.requests_per_second} req/s · concurrencia "
+                  f"{program.limits.max_concurrency}"
+                  + ("" if program.allows_active_scanning() else " · [yellow]solo recon[/yellow]"))
+    if program.required_headers:
+        console.print(f"  Cabeceras  : {program.required_headers}")
+    console.print(f"  Bug-bounty : {'sí' if program.bug_bounty_mode else 'no'}")
+    if result.filtered:
+        console.print(f"  [dim]Descartados (no-web): {', '.join(result.filtered[:6])}"
+                      f"{'…' if len(result.filtered) > 6 else ''}[/dim]")
+    if result.notes:
+        console.print("\n[bold]Notas para revisar:[/bold]")
+        for note in result.notes:
+            console.print(f"  • {note}")
+
+    if not program.scope.allow_patterns():
+        console.print("\n[red]No se detectó ningún host en alcance — revisa el texto pegado.[/red]")
+        raise typer.Exit(code=1)
+
+    Path(out_path).write_text(
+        _yaml.safe_dump(program.model_dump(exclude_defaults=True), sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    console.print(f"\n[green]Escrito {out_path}[/green]. Revísalo y lanza el hunt:")
+    console.print(f"  [cyan]dastcore hunt {out_path} --i-have-authorization[/cyan]")
+
+
 @app.command("report")
 def report_cmd(
     input_path: str = typer.Option(..., "--input", help="JSON de hallazgos (salida de `scan`/`hunt` -f json)."),

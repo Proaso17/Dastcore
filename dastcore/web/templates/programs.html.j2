@@ -1,10 +1,49 @@
 {% extends "base.html.j2" %}
 {% block title %}dastcore · bug bounty{% endblock %}
 {% block body %}
+  {% set d = draft or {} %}
   <div class="panel legal">
     Analiza <strong>solo</strong> objetivos para los que tienes autorización (tu propia web o un programa de bug
     bounty donde participas). El análisis no arranca sin marcar la casilla de autorización.
   </div>
+
+  <div class="panel">
+    <h2>Importar desde la política del programa</h2>
+    <p class="hint" style="margin:0 0 10px">Pega la página del programa (tabla de <em>Scope</em>, reglas, safe harbor…)
+      y dastcore extrae el alcance, el rate limit, la cabecera de atribución y más. Luego lo revisas abajo antes de guardar.
+      <br><b>De dónde sacarlo:</b> abre el programa (HackerOne / Bugcrowd…), selecciona la política + la tabla de scope y cópiala aquí.</p>
+    <form method="post" action="/programs/import">
+      <div class="row">
+        <div>
+          <label for="imp_platform">Plataforma</label>
+          <select id="imp_platform" name="platform">
+            <option value="hackerone">HackerOne</option>
+            <option value="bugcrowd">Bugcrowd</option>
+            <option value="intigriti">Intigriti</option>
+            <option value="immunefi">Immunefi</option>
+            <option value="self">Uso propio</option>
+          </select>
+        </div>
+        <div>
+          <label for="imp_handle">Handle (opcional)</label>
+          <input id="imp_handle" name="handle" placeholder="se deduce del enlace si lo pegas">
+        </div>
+      </div>
+      <label for="policy" style="margin-top:10px">Política / scope del programa</label>
+      <textarea id="policy" name="policy" rows="7" placeholder="*.ejemplo.com   Wildcard   Eligible&#10;api.ejemplo.com   Domain&#10;Out of scope&#10;blog.ejemplo.com&#10;Rules: 3 requests per second. Identify traffic with X-Bug-Bounty: tu_handle."></textarea>
+      <button type="submit" style="margin-top:6px">Analizar política →</button>
+    </form>
+  </div>
+
+  {% if import_notes %}
+  <div class="panel" style="border-left:3px solid #2d7">
+    <h2 style="margin-top:0">Revisión de la importación</h2>
+    <p class="hint" style="margin:0 0 8px">Esto es lo que se detectó. <strong>Revisa el formulario de abajo</strong> (ya pre-rellenado) y ajusta lo que haga falta antes de <em>Guardar objetivo</em>.</p>
+    <ul style="margin:0; padding-left:18px">
+      {% for n in import_notes %}<li style="margin:3px 0">{{ n }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
 
   <div class="panel">
     <h2>Nuevo objetivo</h2>
@@ -29,29 +68,30 @@
 
     <form method="post" action="/programs">
       <label for="handle">Nombre del objetivo</label>
-      <input id="handle" name="handle" placeholder="Mi web / Programa Acme" value="{{ handle or '' }}" required>
+      <input id="handle" name="handle" placeholder="Mi web / Programa Acme" value="{{ d.get('handle', handle or '') }}" required>
 
       <label for="in_scope">Dominios en alcance (uno por línea)</label>
-      <textarea id="in_scope" name="in_scope" rows="4" placeholder="ejemplo.com&#10;*.ejemplo.com" required></textarea>
+      <textarea id="in_scope" name="in_scope" rows="4" placeholder="ejemplo.com&#10;*.ejemplo.com" required>{{ d.get('in_scope', '') }}</textarea>
       <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> la tabla <em>Scope</em> del programa (HackerOne: pestaña <em>Scope</em> → assets marcados <em>Eligible / In scope</em>). Admite dominios, <code>*.dominio</code> (subdominios) y rangos <code>x.x.x.x/24</code>.</p>
 
       <label for="out_of_scope" style="margin-top:12px">Fuera de alcance (opcional, uno por línea)</label>
-      <textarea id="out_of_scope" name="out_of_scope" rows="2" placeholder="blog.ejemplo.com"></textarea>
+      <textarea id="out_of_scope" name="out_of_scope" rows="2" placeholder="blog.ejemplo.com">{{ d.get('out_of_scope', '') }}</textarea>
       <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> los assets marcados <em>Out of scope</em> del programa + subdominios alojados en terceros (CNAME a proveedores externos — el recon los marca). Estos <em>no</em> los cubre el safe harbor.</p>
 
       <div class="row" style="margin-top:12px">
         <div>
           <label for="platform">Plataforma (opcional)</label>
           <select id="platform" name="platform">
-            <option value="self">Uso propio</option>
-            <option value="hackerone">HackerOne</option>
-            <option value="bugcrowd">Bugcrowd</option>
-            <option value="intigriti">Intigriti</option>
-            <option value="immunefi">Immunefi</option>
+            {% set pf = d.get('platform', 'self') %}
+            <option value="self" {% if pf == 'self' %}selected{% endif %}>Uso propio</option>
+            <option value="hackerone" {% if pf == 'hackerone' %}selected{% endif %}>HackerOne</option>
+            <option value="bugcrowd" {% if pf == 'bugcrowd' %}selected{% endif %}>Bugcrowd</option>
+            <option value="intigriti" {% if pf == 'intigriti' %}selected{% endif %}>Intigriti</option>
+            <option value="immunefi" {% if pf == 'immunefi' %}selected{% endif %}>Immunefi</option>
           </select>
         </div>
         <div class="check" style="align-items:flex-start; margin-top:26px">
-          <input id="allow_active" name="allow_active" type="checkbox" value="on" checked>
+          <input id="allow_active" name="allow_active" type="checkbox" value="on" {% if d.get('allow_active', True) %}checked{% endif %}>
           <label for="allow_active" style="margin:0">Permitir análisis automático <span class="muted">(recomendado; si lo desmarcas, solo se descubre la superficie sin analizarla)</span></label>
         </div>
       </div>
@@ -59,11 +99,11 @@
       <div class="row" style="margin-top:12px">
         <div>
           <label for="rps">Peticiones/segundo</label>
-          <input id="rps" name="rps" type="number" step="0.5" min="0.5" value="5" style="max-width:120px">
+          <input id="rps" name="rps" type="number" step="0.5" min="0.5" value="{{ d.get('rps', 5) }}" style="max-width:120px">
         </div>
         <div>
           <label for="concurrency">Concurrencia</label>
-          <input id="concurrency" name="concurrency" type="number" step="1" min="1" value="5" style="max-width:120px">
+          <input id="concurrency" name="concurrency" type="number" step="1" min="1" value="{{ d.get('concurrency', 5) }}" style="max-width:120px">
         </div>
       </div>
       <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> la <em>policy</em> del programa (busca "rate limit" / "requests per second"). Si no lo indica, sé conservador — banca: <code>2 / 2</code> ("avoid harm" del safe harbor).</p>
@@ -81,11 +121,11 @@
       <p class="hint" style="margin:5px 0 0"><b>Cómo obtenerlas:</b> abre el objetivo en tu navegador (pasa el challenge/login), pulsa <code>F12</code> → <em>Application</em> (o Almacenamiento) → <em>Cookies</em> → copia <code>cf_clearance</code> (y las de sesión si estás logueado). Pega una por línea <code>nombre=valor</code>, o el string entero <code>a=1; b=2</code>. Úsalas con tu mismo User-Agent y proxy (misma IP).</p>
 
       <label for="required_headers" style="margin-top:12px">Cabeceras requeridas (opcional, una por línea)</label>
-      <textarea id="required_headers" name="required_headers" rows="2" placeholder="X-Bug-Bounty: HackerOne-tu_handle"></textarea>
+      <textarea id="required_headers" name="required_headers" rows="2" placeholder="X-Bug-Bounty: HackerOne-tu_handle">{{ d.get('required_headers', '') }}</textarea>
       <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> la policy suele pedir una cabecera de atribución. Si lo dejas vacío y eliges plataforma, se añade <code>X-Bug-Bounty: &lt;plataforma&gt;-&lt;handle&gt;</code> automáticamente en todo el tráfico al objetivo.</p>
 
       <div class="check" style="align-items:flex-start; margin-top:14px">
-        <input id="bug_bounty_mode" name="bug_bounty_mode" type="checkbox" value="on">
+        <input id="bug_bounty_mode" name="bug_bounty_mode" type="checkbox" value="on" {% if d.get('bug_bounty_mode') %}checked{% endif %}>
         <label for="bug_bounty_mode" style="margin:0">Modo bug bounty <span class="muted">(oculta del reporte los hallazgos que los programas cierran como N/A: cabeceras, TLS, tabnabbing, disclosure… — quedan suprimidos, no borrados)</span></label>
       </div>
 

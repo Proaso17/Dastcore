@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from dastcore.analysis import correlate_chains
 from dastcore.bugbounty import triage_for_bounty
+from dastcore.bugbounty.importer import parse_program_policy
 from dastcore.bugbounty.program import Program, ProgramLimits, ProgramScope
 from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
 from dastcore.core.models import Finding
@@ -105,6 +106,22 @@ def _program_from_form(
         required_headers=_parse_headers(required_headers),
         seeds=seeds,
     )
+
+
+def _draft_from_program(program: Program) -> dict[str, object]:
+    """Serialize a Program back into the friendly form's field values, so an imported program pre-fills
+    the 'Nuevo objetivo' form for the user to review and save (the authorization gate still applies)."""
+    return {
+        "handle": program.handle,
+        "platform": program.platform,
+        "in_scope": "\n".join(program.scope.allow_patterns()),
+        "out_of_scope": "\n".join(program.scope.out_of_scope),
+        "rps": program.limits.requests_per_second,
+        "concurrency": program.limits.max_concurrency,
+        "allow_active": program.allows_active_scanning(),
+        "bug_bounty_mode": program.bug_bounty_mode,
+        "required_headers": "\n".join(f"{k}: {v}" for k, v in program.required_headers.items()),
+    }
 
 
 def _parse_headers(raw: str) -> dict[str, str]:
@@ -632,6 +649,16 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
     @app.get("/programs", response_class=HTMLResponse)
     def programs_page(error: str = "") -> HTMLResponse:
         return render("programs.html.j2", programs=store.list_programs(), error=error)
+
+    @app.post("/programs/import", response_class=HTMLResponse)
+    def import_program(policy: str = Form(""), platform: str = Form("hackerone"), handle: str = Form("")) -> HTMLResponse:
+        """Mode A: parse pasted program-policy text into a draft that pre-fills the form for review."""
+        if not policy.strip():
+            return render("programs.html.j2", programs=store.list_programs(),
+                          error="Pega la política / tabla de scope del programa para importarla.")
+        result = parse_program_policy(policy, platform=platform, handle=handle)
+        return render("programs.html.j2", programs=store.list_programs(),
+                      draft=_draft_from_program(result.program), import_notes=result.notes)
 
     @app.post("/programs")
     def create_program(
