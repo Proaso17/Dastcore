@@ -20,6 +20,7 @@ from dastcore.cli import _Budget, _run_scan
 from dastcore.core.models import Finding
 from dastcore.core.scope import ScopeChecker
 from dastcore.recon import Asset, AssetStore, ReconOptions, run_recon
+from dastcore.recon.tiering import by_tier, tier_counts
 
 
 class CampaignCheckpoint:
@@ -107,8 +108,11 @@ async def run_campaign(
         status(f"{len(assets)} activos descubiertos (solo recon; el programa prohíbe escaneo automático).")
         return CampaignResult(assets=assets, findings=[], scanned=[])
 
-    live = asset_store.live()
-    status(f"{len(assets)} activos descubiertos · {len(live)} vivos. Analizando…")
+    # Tier the live surface and scan the highest-value assets first (admin/API/internal → main app).
+    live = by_tier(asset_store.live())
+    tc = tier_counts(live)
+    status(f"{len(assets)} activos descubiertos · {len(live)} vivos "
+           f"(Tier 1: {tc[1]} · Tier 2: {tc[2]} · Tier 3: {tc[3]}). Analizando por prioridad…")
     checkpoint = CampaignCheckpoint(checkpoint_path)
     budget = _Budget(None, None)
     scanned: list[str] = []

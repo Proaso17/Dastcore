@@ -18,6 +18,7 @@ class Asset(BaseModel):
     tech: list[str] = Field(default_factory=list)
     status_code: int | None = None
     title: str | None = None
+    tier: int = 3  # attack-surface priority (1 = scan first … 3 = main app); set by recon.tiering
 
     def dedupe_key(self) -> str:
         """Stable identity for the asset store: a live URL if we have one, else the host(:port)."""

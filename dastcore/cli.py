@@ -2984,12 +2984,18 @@ def recon(
     )
     asyncio.run(run_recon(program.seeds, opts, store, checker, allow_active=program.allows_active_scanning()))
 
-    assets = store.all()
-    table = Table(title=f"Assets in-scope ({len(assets)})")
-    for column in ("host", "url", "status", "tech", "source"):
+    from dastcore.recon.tiering import by_tier, tier_counts
+
+    assets = by_tier(store.all())  # highest-priority surface first (Tier 1 admin/API/internal → 3)
+    tc = tier_counts(assets)
+    table = Table(title=f"Assets in-scope ({len(assets)}) · Tier 1: {tc[1]} · Tier 2: {tc[2]} · Tier 3: {tc[3]}")
+    for column in ("tier", "host", "url", "status", "tech", "source"):
         table.add_column(column)
     for asset in assets:
-        table.add_row(asset.host, asset.url or "", str(asset.status_code or ""), ",".join(asset.tech), asset.source)
+        style = {1: "bold red", 2: "yellow", 3: ""}.get(asset.tier, "")
+        table.add_row(f"[{style}]T{asset.tier}[/{style}]" if style else f"T{asset.tier}",
+                      asset.host, asset.url or "", str(asset.status_code or ""),
+                      ",".join(asset.tech), asset.source)
     console.print(table)
 
     # Safe-harbor hygiene: resolve CNAMEs (passive — hits a resolver, not the target) and flag hosts
