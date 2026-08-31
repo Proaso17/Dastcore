@@ -40,6 +40,7 @@ class ProgramLimits(BaseModel):
     # Per-host / per-endpoint RoE caps (None = off), enforced by the RateGovernor on every request:
     per_host_rps: float | None = None  # no single host is hit faster than this
     per_endpoint_daily_cap: int | None = None  # max requests/day/endpoint, persisted across runs
+    jitter_ms: int = 0  # low-and-slow: random pause up to this many ms before each request
 
 
 class Program(BaseModel):
@@ -103,6 +104,7 @@ class Program(BaseModel):
                 max_concurrency=self.limits.max_concurrency,
                 per_host_rps=self.limits.per_host_rps,
                 per_endpoint_daily_cap=self.limits.per_endpoint_daily_cap,
+                jitter_ms=self.limits.jitter_ms,
             ),
             i_have_authorization=authorized,
         )

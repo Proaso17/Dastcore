@@ -83,6 +83,7 @@ def _program_from_form(
     required_headers: str = "",
     per_host_rps: float | None = None,
     per_endpoint_daily_cap: int | None = None,
+    jitter_ms: int | None = None,
 ) -> Program:
     """Build a Program from the friendly dashboard form (seeds derived from the in-scope hosts).
 
@@ -105,6 +106,7 @@ def _program_from_form(
             per_endpoint_daily_cap=(
                 per_endpoint_daily_cap if (per_endpoint_daily_cap and per_endpoint_daily_cap > 0) else None
             ),
+            jitter_ms=jitter_ms if (jitter_ms and jitter_ms > 0) else 0,
         ),
         proxy=proxy.strip(),
         user_agent=user_agent.strip(),
@@ -141,6 +143,7 @@ def _draft_from_program(program: Program) -> dict[str, object]:
         "concurrency": program.limits.max_concurrency,
         "per_host_rps": program.limits.per_host_rps or "",
         "per_endpoint_daily_cap": program.limits.per_endpoint_daily_cap or "",
+        "jitter_ms": program.limits.jitter_ms or "",
         "allow_active": program.allows_active_scanning(),
         "bug_bounty_mode": program.bug_bounty_mode,
         "required_headers": "\n".join(f"{k}: {v}" for k, v in program.required_headers.items()),
@@ -723,12 +726,14 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         required_headers: str = Form(""),
         per_host_rps: str = Form(""),
         per_endpoint_daily_cap: str = Form(""),
+        jitter_ms: str = Form(""),
     ) -> Response:
         program = _program_from_form(
             handle, platform, in_scope, out_of_scope, allow_active == "on",
             rps=rps, concurrency=concurrency, proxy=proxy, user_agent=user_agent, cookies=cookies,
             bug_bounty_mode=bug_bounty_mode == "on", required_headers=required_headers,
             per_host_rps=_to_float(per_host_rps), per_endpoint_daily_cap=_to_int(per_endpoint_daily_cap),
+            jitter_ms=_to_int(jitter_ms),
         )
         if not program.scope.allow_patterns():
             return render(

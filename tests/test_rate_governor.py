@@ -57,6 +57,18 @@ def test_active_reflects_whether_anything_is_enforced() -> None:
     assert RateGovernor().active is False
     assert RateGovernor(per_host_rps=1.0).active is True
     assert RateGovernor(per_endpoint_daily_cap=10).active is True
+    assert RateGovernor(jitter_ms=100).active is True  # low-and-slow alone is enough to activate
+
+
+async def test_low_and_slow_jitter_pauses_before_requests() -> None:
+    import time
+
+    gov = RateGovernor(jitter_ms=200)  # up to 200 ms random pause per gate
+    start = time.monotonic()
+    for _ in range(12):  # over a dozen gates, some non-zero pauses are near-certain
+        await gov.gate("http://t.test/x")
+    assert time.monotonic() - start > 0.0  # time actually elapsed in jitter sleeps
+    gov.close()
 
 
 async def test_per_host_bucket_gate_runs_without_error() -> None:

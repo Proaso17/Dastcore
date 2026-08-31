@@ -18,6 +18,7 @@ Wired as one optional ``HttpClient(governor=…)`` param — absent means identi
 from __future__ import annotations
 
 import asyncio
+import secrets
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,9 +47,11 @@ class RateGovernor:
         *,
         per_host_rps: float | None = None,
         per_endpoint_daily_cap: int | None = None,
+        jitter_ms: int = 0,
         daily_cap_db: str | None = None,
     ) -> None:
         self._per_host_rps = per_host_rps if (per_host_rps and per_host_rps > 0) else None
+        self._jitter_s = max(0, jitter_ms) / 1000.0  # low-and-slow: random pause before each request
         self._host_buckets: dict[str, TokenBucket] = {}
         self._cap = per_endpoint_daily_cap if (per_endpoint_daily_cap and per_endpoint_daily_cap > 0) else None
         self._db: sqlite3.Connection | None = None
@@ -67,7 +70,7 @@ class RateGovernor:
     @property
     def active(self) -> bool:
         """True if the governor actually enforces anything (else it's a no-op)."""
-        return self._per_host_rps is not None or self._cap is not None
+        return self._per_host_rps is not None or self._cap is not None or self._jitter_s > 0
 
     async def gate(self, url: str) -> None:
         """Pace this request per-host and charge it against the endpoint's daily quota.
@@ -79,6 +82,8 @@ class RateGovernor:
             async with self._db_lock:
                 if not self._charge_endpoint(url):
                     raise EndpointCapReachedError(f"Per-endpoint daily cap reached ({self._cap}): {url}")
+        if self._jitter_s > 0:  # low-and-slow: a random sub-second pause so the traffic isn't a steady drum
+            await asyncio.sleep(secrets.randbelow(int(self._jitter_s * 1000) + 1) / 1000.0)
         if self._per_host_rps is not None:
             host = (urlsplit(url).hostname or "").lower()
             bucket = self._host_buckets.get(host)

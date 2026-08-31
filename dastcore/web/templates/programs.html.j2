@@ -117,6 +117,10 @@
           <label for="per_endpoint_daily_cap">Tope diario por endpoint <span class="muted">(opcional)</span></label>
           <input id="per_endpoint_daily_cap" name="per_endpoint_daily_cap" type="number" step="1" min="0" value="{{ d.get('per_endpoint_daily_cap', '') }}" placeholder="p. ej. 1000" style="max-width:160px">
         </div>
+        <div>
+          <label for="jitter_ms">Jitter low-and-slow (ms) <span class="muted">(opcional)</span></label>
+          <input id="jitter_ms" name="jitter_ms" type="number" step="50" min="0" value="{{ d.get('jitter_ms', '') }}" placeholder="p. ej. 300" style="max-width:150px">
+        </div>
       </div>
       <p class="hint" style="margin:5px 0 0"><b>Cumplimiento (RoE):</b> límites por host y un <b>tope de peticiones/día por endpoint</b> que <b>persiste entre ejecuciones</b> (p. ej. Clever: ~1000/día/endpoint). Se aplican encima del rate limit global; déjalos vacíos si el programa no los exige.</p>
 

@@ -530,12 +530,13 @@ def _make_client(
 ) -> HttpClient:
     rl = config.rate_limit
     governor = None
-    if rl.per_host_rps or rl.per_endpoint_daily_cap:
+    if rl.per_host_rps or rl.per_endpoint_daily_cap or rl.jitter_ms:
         from dastcore.core.rate_governor import RateGovernor
 
         governor = RateGovernor(
             per_host_rps=rl.per_host_rps,
             per_endpoint_daily_cap=rl.per_endpoint_daily_cap,
+            jitter_ms=rl.jitter_ms,
             daily_cap_db=rl.daily_cap_db or None,
         )
     return HttpClient(

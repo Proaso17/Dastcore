@@ -132,6 +132,7 @@ class RateLimitConfig(BaseModel):
     # Bug-bounty RoE governance (layered over the global rate limit; None/0 = off):
     per_host_rps: float | None = None  # cap requests/second per host, so no single host is hit too fast
     per_endpoint_daily_cap: int | None = None  # max requests/day per endpoint, persisted across runs
+    jitter_ms: int = 0  # low-and-slow: a random pause up to this many ms before each request
     daily_cap_db: str = ""  # path for the persistent per-endpoint daily-cap store (default: cwd)
 
 
