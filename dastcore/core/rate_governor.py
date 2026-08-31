@@ -72,16 +72,19 @@ class RateGovernor:
         """True if the governor actually enforces anything (else it's a no-op)."""
         return self._per_host_rps is not None or self._cap is not None or self._jitter_s > 0
 
-    async def gate(self, url: str) -> None:
-        """Pace this request per-host and charge it against the endpoint's daily quota.
-
-        Raises ``EndpointCapReachedError`` (skip) when the endpoint is out of quota — checked and
-        charged *before* the per-host wait, so a capped endpoint doesn't hold a host-bucket slot."""
+    async def charge(self, url: str) -> None:
+        """Charge one *logical* request against the endpoint's daily quota (called once per request, not
+        per retry, so a flapping endpoint doesn't burn its quota faster). Raises ``EndpointCapReachedError``
+        (a skip) when the endpoint is out of quota for the day."""
         if self._cap is not None:
             assert self._db is not None and self._db_lock is not None
             async with self._db_lock:
                 if not self._charge_endpoint(url):
                     raise EndpointCapReachedError(f"Per-endpoint daily cap reached ({self._cap}): {url}")
+
+    async def pace(self, url: str) -> None:
+        """Pace one *network* attempt: the low-and-slow jitter and the per-host bucket. Called before
+        every attempt (including retries) so the per-host rate holds even under retries."""
         if self._jitter_s > 0:  # low-and-slow: a random sub-second pause so the traffic isn't a steady drum
             await asyncio.sleep(secrets.randbelow(int(self._jitter_s * 1000) + 1) / 1000.0)
         if self._per_host_rps is not None:

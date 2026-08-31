@@ -137,6 +137,10 @@ class HttpClient:
         self._max_requests = max_requests
         self._time_budget_s = time_budget_s
         self._request_count = 0
+        # Effective-rate telemetry: actual network attempts sent (retries included) and when the first
+        # went out — so the operator can *verify* the configured RPS ceiling held (RoE compliance).
+        self._sent_count = 0
+        self._first_send_at: float | None = None
         # WAF-block telemetry: how many responses came back as a block (403/429/503). A high ratio means
         # the target's WAF is refusing the scan, so its findings are unreliable — the CLI surfaces that.
         self._response_count = 0
@@ -218,6 +222,16 @@ class HttpClient:
         """Fraction of responses that came back as a WAF block (403/429/503). 0.0 if nothing was sent."""
         return self._blocked_count / self._response_count if self._response_count else 0.0
 
+    def effective_rps(self) -> float:
+        """Measured request rate over the whole run: actual network attempts (retries included) per
+        elapsed second. Informational — lets a bug-bounty operator verify the RoE rate held. (A short
+        burst can read above the steady rate because the token bucket permits a burst up to its capacity;
+        it's the *steady-state* rate, enforced per-attempt by the bucket, that stays within the ceiling.)"""
+        if self._first_send_at is None or self._sent_count == 0:
+            return 0.0
+        elapsed = time.monotonic() - self._first_send_at
+        return self._sent_count / elapsed if elapsed > 0 else 0.0
+
     def budget_exceeded(self) -> bool:
         """True once the request count or the time budget has been reached."""
         if self._max_requests is not None and self._request_count >= self._max_requests:
@@ -274,10 +288,10 @@ class HttpClient:
         if not self._scope_checker.is_in_scope(url):
             raise OutOfScopeError(f"Refusing to request out-of-scope URL: {url}")
 
-        # Per-host pacing + per-endpoint daily cap (RoE). Raises EndpointCapReachedError (a skip, like
-        # out-of-scope) when the endpoint is out of daily quota — checked before spending budget.
+        # Per-endpoint daily cap (RoE), charged once per logical request (not per retry). Raises
+        # EndpointCapReachedError (a skip, like out-of-scope) when the endpoint is out of daily quota.
         if self._governor is not None:
-            await self._governor.gate(url)
+            await self._governor.charge(url)
 
         # Enforce the scan budget before spending a request (raises BudgetExceededError).
         self._account_for_budget()
@@ -295,10 +309,18 @@ class HttpClient:
         send_url, send_headers, extensions = self._apply_host_override(url, headers)
         if extensions is not None:
             extra["extensions"] = extensions
-        await self._bucket.acquire()
         async with self._semaphore:
             attempt = 0
             while True:
+                # Take a rate-limit token before EVERY attempt (not just the first), so retries can't
+                # push the effective request rate above the configured RPS — the RoE ceiling holds even
+                # under a flapping host. Per-host pacing/jitter (the governor) is charged per attempt too.
+                await self._bucket.acquire()
+                if self._governor is not None:
+                    await self._governor.pace(url)
+                self._sent_count += 1
+                if self._first_send_at is None:
+                    self._first_send_at = time.monotonic()
                 try:
                     start = time.monotonic()
                     response = await self._client.request(

@@ -19,19 +19,19 @@ async def test_daily_cap_allows_up_to_the_cap_then_skips(tmp_path) -> None:
     db = str(tmp_path / "caps.sqlite")
     gov = RateGovernor(per_endpoint_daily_cap=2, daily_cap_db=db)
     url = "http://t.test/api/thing"
-    await gov.gate(url)
-    await gov.gate(url)  # 2 allowed
+    await gov.charge(url)
+    await gov.charge(url)  # 2 allowed
     with pytest.raises(EndpointCapReachedError):
-        await gov.gate(url)  # 3rd over the cap
+        await gov.charge(url)  # 3rd over the cap
     gov.close()
 
 
 async def test_daily_cap_is_per_endpoint(tmp_path) -> None:
     gov = RateGovernor(per_endpoint_daily_cap=1, daily_cap_db=str(tmp_path / "c.sqlite"))
-    await gov.gate("http://t.test/a")
-    await gov.gate("http://t.test/b")  # a different endpoint has its own quota
+    await gov.charge("http://t.test/a")
+    await gov.charge("http://t.test/b")  # a different endpoint has its own quota
     with pytest.raises(EndpointCapReachedError):
-        await gov.gate("http://t.test/a")
+        await gov.charge("http://t.test/a")
     gov.close()
 
 
@@ -39,12 +39,12 @@ async def test_daily_cap_persists_across_governor_instances(tmp_path) -> None:
     db = str(tmp_path / "persist.sqlite")
     url = "http://t.test/x"
     first = RateGovernor(per_endpoint_daily_cap=1, daily_cap_db=db)
-    await first.gate(url)  # spends the single daily slot
+    await first.charge(url)  # spends the single daily slot
     first.close()
     # A fresh run (new governor, same DB) must see the endpoint already at its cap.
     second = RateGovernor(per_endpoint_daily_cap=1, daily_cap_db=db)
     with pytest.raises(EndpointCapReachedError):
-        await second.gate(url)
+        await second.charge(url)
     second.close()
 
 
@@ -66,15 +66,15 @@ async def test_low_and_slow_jitter_pauses_before_requests() -> None:
     gov = RateGovernor(jitter_ms=200)  # up to 200 ms random pause per gate
     start = time.monotonic()
     for _ in range(12):  # over a dozen gates, some non-zero pauses are near-certain
-        await gov.gate("http://t.test/x")
+        await gov.pace("http://t.test/x")
     assert time.monotonic() - start > 0.0  # time actually elapsed in jitter sleeps
     gov.close()
 
 
 async def test_per_host_bucket_gate_runs_without_error() -> None:
     gov = RateGovernor(per_host_rps=100.0)
-    await gov.gate("http://a.test/x")
-    await gov.gate("http://b.test/y")  # a second host gets its own bucket
+    await gov.pace("http://a.test/x")
+    await gov.pace("http://b.test/y")  # a second host gets its own bucket
     gov.close()
 
 
@@ -96,6 +96,45 @@ def echo_server() -> Iterator[str]:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{port}"
     server.shutdown()
+
+
+async def test_effective_rps_telemetry(echo_server: str) -> None:
+    async with HttpClient(ScopeConfig(allow_domains=["127.0.0.1"])) as client:
+        assert client.effective_rps() == 0.0  # nothing sent yet
+        for _ in range(6):
+            await client.get(f"{echo_server}/x")
+        assert client.effective_rps() > 0  # network attempts are counted for compliance verification
+
+
+async def test_retries_go_through_the_rate_limited_path() -> None:
+    # A server that 429s once, then 200s. With a retry the client makes TWO network attempts — and each
+    # now takes a rate-limit token (the fix), so retries can't push the effective RPS past the ceiling.
+    from flask import Flask, Response
+
+    from dastcore.config import RateLimitConfig
+
+    hits = {"n": 0}
+    app = Flask(__name__)
+
+    @app.route("/x")
+    def x() -> Response:
+        hits["n"] += 1
+        return Response("later", status=429) if hits["n"] == 1 else Response("ok", status=200)
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = make_server("127.0.0.1", port, app, threaded=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        async with HttpClient(ScopeConfig(allow_domains=["127.0.0.1"]),
+                              rate_limit=RateLimitConfig(requests_per_second=50), max_retries=1) as client:
+            resp = await client.get(f"http://127.0.0.1:{port}/x")
+        assert resp.status_code == 200
+        assert hits["n"] == 2  # the retry happened -> both attempts went through the token path
+        assert client.effective_rps() > 0  # telemetry counted both network attempts
+    finally:
+        server.shutdown()
 
 
 async def test_httpclient_enforces_the_daily_cap_end_to_end(echo_server: str, tmp_path) -> None:
