@@ -8,10 +8,24 @@ suggestion — a request outside scope must never leave the process.
 
 from __future__ import annotations
 
+import fnmatch
 import ipaddress
 from urllib.parse import urlsplit
 
 from dastcore.config import ScopeConfig
+
+
+def _path_matches(path: str, pattern: str) -> bool:
+    """True if the URL ``path`` matches a scope path ``pattern`` — a glob (``/admin/*``, ``*.bak``) or a
+    plain prefix (``/admin`` matches ``/admin`` and ``/admin/...``)."""
+    path = path or "/"
+    pattern = pattern.strip()
+    if not pattern:
+        return False
+    if fnmatch.fnmatch(path, pattern):
+        return True
+    prefix = pattern.rstrip("/*")
+    return bool(prefix) and (path == prefix or path.startswith(prefix + "/"))
 
 
 def _cidr_matches(host: str, pattern: str) -> bool:
@@ -87,11 +101,20 @@ class ScopeChecker:
         if self._scope.allowed_ports is not None and port not in self._scope.allowed_ports:
             return False
 
-        for pattern in self._scope.allow_domains:
-            if _domain_matches(host, pattern, self._scope.allow_subdomains):
-                return True
+        host_allowed = any(
+            _domain_matches(host, pattern, self._scope.allow_subdomains) for pattern in self._scope.allow_domains
+        )
+        if not host_allowed:
+            return False
 
-        return False
+        # Path-level scope (bug-bounty: programs often exclude specific routes, or scope only a prefix).
+        # Deny paths win; if allow_paths is set, the path must match one. Applied only to in-scope hosts.
+        path = parts.path or "/"
+        if any(_path_matches(path, pattern) for pattern in self._scope.deny_paths):
+            return False
+        if self._scope.allow_paths and not any(_path_matches(path, pattern) for pattern in self._scope.allow_paths):
+            return False
+        return True
 
     def is_asset_in_scope(self, host_or_ip: str) -> bool:
         """Scope check for a bare host or IP (recon assets, which have no URL/port yet).

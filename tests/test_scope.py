@@ -86,3 +86,33 @@ def test_malformed_url_is_not_in_scope() -> None:
     scope = ScopeConfig(allow_domains=["example.com"])
     assert is_in_scope("not a url", scope) is False
     assert is_in_scope("http://", scope) is False
+
+
+# --- path-level scope (bug-bounty route exclusions / prefix scoping) ----------------------------
+
+
+def test_deny_paths_excludes_a_route_on_an_in_scope_host() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], deny_paths=["/admin/*", "/internal"])
+    assert is_in_scope("http://example.com/public", scope) is True
+    assert is_in_scope("http://example.com/admin/users", scope) is False  # glob excluded
+    assert is_in_scope("http://example.com/internal", scope) is False  # prefix excluded
+    assert is_in_scope("http://example.com/internal/x", scope) is False
+    assert is_in_scope("http://example.com/internalize", scope) is True  # prefix is label-bounded
+
+
+def test_deny_paths_glob_on_extension() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], deny_paths=["*.bak"])
+    assert is_in_scope("http://example.com/db.bak", scope) is False
+    assert is_in_scope("http://example.com/db.sql", scope) is True
+
+
+def test_allow_paths_gates_to_a_prefix_only() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], allow_paths=["/api/*"])
+    assert is_in_scope("http://example.com/api/v1/orders", scope) is True
+    assert is_in_scope("http://example.com/", scope) is False  # not under the allowed prefix
+    assert is_in_scope("http://example.com/app", scope) is False
+
+
+def test_path_scope_does_not_affect_out_of_scope_hosts() -> None:
+    scope = ScopeConfig(allow_domains=["example.com"], deny_paths=["/admin/*"])
+    assert is_in_scope("http://evil.test/public", scope) is False  # host still decides first

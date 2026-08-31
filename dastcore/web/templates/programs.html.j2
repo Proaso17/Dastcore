@@ -76,7 +76,7 @@
 
       <label for="out_of_scope" style="margin-top:12px">Fuera de alcance (opcional, uno por línea)</label>
       <textarea id="out_of_scope" name="out_of_scope" rows="2" placeholder="blog.ejemplo.com">{{ d.get('out_of_scope', '') }}</textarea>
-      <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> los assets marcados <em>Out of scope</em> del programa + subdominios alojados en terceros (CNAME a proveedores externos — el recon los marca). Estos <em>no</em> los cubre el safe harbor.</p>
+      <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> los assets marcados <em>Out of scope</em> del programa + subdominios alojados en terceros (CNAME a proveedores externos — el recon los marca). Estos <em>no</em> los cubre el safe harbor. <b>Rutas excluidas:</b> una línea que empiece por <code>/</code> excluye esa ruta (glob o prefijo: <code>/admin/*</code>, <code>/internal</code>).</p>
 
       <div class="row" style="margin-top:12px">
         <div>

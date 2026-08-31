@@ -118,6 +118,7 @@ def parse_program_policy(text: str, platform: str = "hackerone", handle: str = "
     in_wildcards: list[str] = []
     in_cidrs: list[str] = []
     out_hosts: list[str] = []
+    deny_paths: list[str] = []
 
     mode = "in"
     for raw in text.splitlines():
@@ -134,6 +135,10 @@ def parse_program_policy(text: str, platform: str = "hackerone", handle: str = "
             hit = _WILDCARD.findall(line) or _hosts_in_line(line)[0] or [line[:60]]
             filtered.extend(hit)
             continue
+        if mode == "out":
+            for token in line.split():  # an out-of-scope route (a bare /path token) becomes a deny-path
+                if token.startswith("/") and len(token) > 1:
+                    deny_paths.append(token)
         domains, wildcards, cidrs = _hosts_in_line(line)
         if mode == "out":
             out_hosts.extend(domains + wildcards + cidrs)
@@ -196,7 +201,8 @@ def parse_program_policy(text: str, platform: str = "hackerone", handle: str = "
     program = Program(
         platform=plat,
         handle=(handle.strip() or "objetivo"),
-        scope=ProgramScope(domains=in_domains, wildcards=in_wildcards, cidrs=in_cidrs, out_of_scope=out_hosts),
+        scope=ProgramScope(domains=in_domains, wildcards=in_wildcards, cidrs=in_cidrs, out_of_scope=out_hosts,
+                           deny_paths=_dedup(deny_paths)),
         limits=limits,
         bug_bounty_mode=plat != "self",  # a real bounty import defaults to hiding N/A-class findings
         required_headers=required_headers,

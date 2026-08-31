@@ -22,6 +22,10 @@ class ScopeConfig(BaseModel):
     deny_domains: list[str] = Field(default_factory=list)
     allow_subdomains: bool = True
     allowed_ports: list[int] | None = None
+    # Path-level scope (bug-bounty programs often exclude routes, or scope only a prefix). Globs
+    # (``/admin/*``, ``*.bak``) or plain prefixes (``/admin``). Deny wins; allow_paths (if set) gates.
+    deny_paths: list[str] = Field(default_factory=list)
+    allow_paths: list[str] = Field(default_factory=list)
 
 
 class FormLoginConfig(BaseModel):

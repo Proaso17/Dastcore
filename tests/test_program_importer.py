@@ -69,6 +69,20 @@ def test_self_platform_does_not_force_bug_bounty_mode() -> None:
     assert r.program.bug_bounty_mode is False and r.program.platform == "self"
 
 
+def test_out_of_scope_route_lines_become_deny_paths() -> None:
+    r = parse_program_policy(
+        "In scope\n*.acme.com\nOut of scope\nblog.acme.com\n/admin/*\n/internal", platform="hackerone"
+    )
+    assert r.program.scope.deny_paths == ["/admin/*", "/internal"]  # /-lines are route exclusions
+    assert "blog.acme.com" in r.program.scope.out_of_scope  # host denies stay host denies
+    scope = r.program.to_scope_config()
+    from dastcore.core.scope import ScopeChecker
+
+    checker = ScopeChecker(scope)
+    assert checker.is_in_scope("http://api.acme.com/admin/x") is False
+    assert checker.is_in_scope("http://api.acme.com/public") is True
+
+
 def test_parse_detects_per_endpoint_daily_cap() -> None:
     r = parse_program_policy(
         "*.acme.com in scope. Max 1,000 requests per day per endpoint.", platform="hackerone"

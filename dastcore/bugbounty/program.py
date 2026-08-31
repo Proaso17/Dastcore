@@ -24,6 +24,8 @@ class ProgramScope(BaseModel):
     wildcards: list[str] = Field(default_factory=list)  # e.g. *.target.com (subdomains, not the apex)
     cidrs: list[str] = Field(default_factory=list)  # e.g. 10.0.0.0/8
     out_of_scope: list[str] = Field(default_factory=list)  # deny list (domains / wildcards / CIDR)
+    deny_paths: list[str] = Field(default_factory=list)  # excluded routes (globs/prefixes: /admin/*, *.bak)
+    allow_paths: list[str] = Field(default_factory=list)  # if set, only these routes are in scope
 
     def allow_patterns(self) -> list[str]:
         return [*self.domains, *self.wildcards, *self.cidrs]
@@ -87,6 +89,8 @@ class Program(BaseModel):
             allow_domains=self.scope.allow_patterns(),
             deny_domains=list(self.scope.out_of_scope),
             allow_subdomains=True,
+            deny_paths=list(self.scope.deny_paths),
+            allow_paths=list(self.scope.allow_paths),
         )
 
     def to_scan_config(self, target: str, *, authorized: bool) -> ScanConfig:

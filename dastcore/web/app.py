@@ -92,12 +92,15 @@ def _program_from_form(
     makes via ``Program.to_scan_config``.
     """
     domains, wildcards, cidrs = _classify_scope(in_scope)
-    out_lines = [line.strip().lower() for line in out_of_scope.splitlines() if line.strip()]
+    raw_out = [line.strip() for line in out_of_scope.splitlines() if line.strip()]
+    out_hosts = [x.lower() for x in raw_out if not x.startswith("/")]  # host denies (lowercased)
+    deny_paths = [x for x in raw_out if x.startswith("/")]  # a line starting with / is a route exclusion
     seeds = domains + [w[2:] for w in wildcards]  # start recon from the apex of each in-scope host
     return Program(
         handle=handle.strip() or "objetivo",
         platform=platform if platform in ("hackerone", "bugcrowd", "intigriti", "immunefi", "self") else "self",
-        scope=ProgramScope(domains=domains, wildcards=wildcards, cidrs=cidrs, out_of_scope=out_lines),
+        scope=ProgramScope(domains=domains, wildcards=wildcards, cidrs=cidrs, out_of_scope=out_hosts,
+                           deny_paths=deny_paths),
         limits=ProgramLimits(
             no_automated_scanning=not allow_active,
             requests_per_second=rps if rps > 0 else 5.0,
