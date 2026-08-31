@@ -22,6 +22,7 @@ from dastcore.core.models import HttpResponse
 from dastcore.core.scope import ScopeChecker
 
 if TYPE_CHECKING:
+    from dastcore.core.rate_governor import RateGovernor
     from dastcore.core.session import SessionManager
 
 logger = logging.getLogger("dastcore.http")
@@ -118,6 +119,7 @@ class HttpClient:
         host_overrides: dict[str, str] | None = None,
         user_agent: str | None = None,
         attribution: dict[str, str] | None = None,
+        governor: RateGovernor | None = None,
     ) -> None:
         # Auth/IdP endpoints (from the auth config) are reachable for (re)login even off the attack scope.
         self._scope_checker = ScopeChecker(scope, auth_urls=auth_urls)
@@ -127,6 +129,8 @@ class HttpClient:
         self._host_overrides = {h.lower().rstrip("."): ip for h, ip in (host_overrides or {}).items()}
         rate_limit = rate_limit or RateLimitConfig()
         self._bucket = TokenBucket(rate_limit.requests_per_second)
+        # Optional per-host / per-endpoint-daily governance layered on top of the global bucket (RoE).
+        self._governor = governor
         self._semaphore = asyncio.Semaphore(rate_limit.max_concurrency)
         self._max_retries = max_retries
         self._session = session
@@ -166,6 +170,8 @@ class HttpClient:
         await self.aclose()
 
     async def aclose(self) -> None:
+        if self._governor is not None:
+            self._governor.close()
         await self._client.aclose()
 
     def is_in_scope(self, url: str) -> bool:
@@ -267,6 +273,11 @@ class HttpClient:
         """
         if not self._scope_checker.is_in_scope(url):
             raise OutOfScopeError(f"Refusing to request out-of-scope URL: {url}")
+
+        # Per-host pacing + per-endpoint daily cap (RoE). Raises EndpointCapReachedError (a skip, like
+        # out-of-scope) when the endpoint is out of daily quota — checked before spending budget.
+        if self._governor is not None:
+            await self._governor.gate(url)
 
         # Enforce the scan budget before spending a request (raises BudgetExceededError).
         self._account_for_budget()

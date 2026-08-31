@@ -129,6 +129,10 @@ class RateLimitConfig(BaseModel):
     max_concurrency: int = Field(default=5, gt=0)
     timeout: float = Field(default=10.0, gt=0)  # per-request timeout (s); lower it for slow targets
     max_retries: int = Field(default=2, ge=0)  # transport retries; lower it to avoid dragging on a slow host
+    # Bug-bounty RoE governance (layered over the global rate limit; None/0 = off):
+    per_host_rps: float | None = None  # cap requests/second per host, so no single host is hit too fast
+    per_endpoint_daily_cap: int | None = None  # max requests/day per endpoint, persisted across runs
+    daily_cap_db: str = ""  # path for the persistent per-endpoint daily-cap store (default: cwd)
 
 
 class OastConfig(BaseModel):

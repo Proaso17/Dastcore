@@ -108,6 +108,18 @@
       </div>
       <p class="hint" style="margin:5px 0 0"><b>De dónde sacarlo:</b> la <em>policy</em> del programa (busca "rate limit" / "requests per second"). Si no lo indica, sé conservador — banca: <code>2 / 2</code> ("avoid harm" del safe harbor).</p>
 
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label for="per_host_rps">Peticiones/segundo por host <span class="muted">(opcional)</span></label>
+          <input id="per_host_rps" name="per_host_rps" type="number" step="0.5" min="0" value="{{ d.get('per_host_rps', '') }}" placeholder="p. ej. 2" style="max-width:140px">
+        </div>
+        <div>
+          <label for="per_endpoint_daily_cap">Tope diario por endpoint <span class="muted">(opcional)</span></label>
+          <input id="per_endpoint_daily_cap" name="per_endpoint_daily_cap" type="number" step="1" min="0" value="{{ d.get('per_endpoint_daily_cap', '') }}" placeholder="p. ej. 1000" style="max-width:160px">
+        </div>
+      </div>
+      <p class="hint" style="margin:5px 0 0"><b>Cumplimiento (RoE):</b> límites por host y un <b>tope de peticiones/día por endpoint</b> que <b>persiste entre ejecuciones</b> (p. ej. Clever: ~1000/día/endpoint). Se aplican encima del rate limit global; déjalos vacíos si el programa no los exige.</p>
+
       <label for="proxy" style="margin-top:12px">Proxy / VPN (opcional)</label>
       <input id="proxy" name="proxy" placeholder="http://127.0.0.1:8080  ·  socks5://127.0.0.1:1080">
       <p class="hint" style="margin:5px 0 0"><b>Cómo obtenerlo:</b> sale por tu IP de confianza para esquivar el bloqueo por IP del WAF. Opciones: túnel SSH a tu casa/servidor <code>ssh -D 1080 tu-host</code> → <code>socks5://127.0.0.1:1080</code> · <em>Burp Suite</em> escuchando → <code>http://127.0.0.1:8080</code> · o tu VPN.</p>

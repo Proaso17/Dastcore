@@ -37,6 +37,9 @@ class ProgramLimits(BaseModel):
     # Some programs forbid automated/active scanning — this hard-disables the active scanner
     # for the whole hunt (recon + passive only). Enforced by the campaign runner (Phase 11).
     no_automated_scanning: bool = False
+    # Per-host / per-endpoint RoE caps (None = off), enforced by the RateGovernor on every request:
+    per_host_rps: float | None = None  # no single host is hit faster than this
+    per_endpoint_daily_cap: int | None = None  # max requests/day/endpoint, persisted across runs
 
 
 class Program(BaseModel):
@@ -98,6 +101,8 @@ class Program(BaseModel):
             rate_limit=RateLimitConfig(
                 requests_per_second=self.limits.requests_per_second,
                 max_concurrency=self.limits.max_concurrency,
+                per_host_rps=self.limits.per_host_rps,
+                per_endpoint_daily_cap=self.limits.per_endpoint_daily_cap,
             ),
             i_have_authorization=authorized,
         )

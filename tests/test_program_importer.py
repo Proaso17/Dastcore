@@ -67,3 +67,12 @@ def test_empty_or_hostless_policy_is_flagged_not_crashing() -> None:
 def test_self_platform_does_not_force_bug_bounty_mode() -> None:
     r = parse_program_policy("example.com", platform="self")
     assert r.program.bug_bounty_mode is False and r.program.platform == "self"
+
+
+def test_parse_detects_per_endpoint_daily_cap() -> None:
+    r = parse_program_policy(
+        "*.acme.com in scope. Max 1,000 requests per day per endpoint.", platform="hackerone"
+    )
+    assert r.program.limits.per_endpoint_daily_cap == 1000  # comma stripped, flows to the RoE governor
+    assert any("Tope diario" in n for n in r.notes)
+    assert r.program.to_scan_config("http://x", authorized=True).rate_limit.per_endpoint_daily_cap == 1000

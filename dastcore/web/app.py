@@ -81,6 +81,8 @@ def _program_from_form(
     cookies: str = "",
     bug_bounty_mode: bool = False,
     required_headers: str = "",
+    per_host_rps: float | None = None,
+    per_endpoint_daily_cap: int | None = None,
 ) -> Program:
     """Build a Program from the friendly dashboard form (seeds derived from the in-scope hosts).
 
@@ -99,6 +101,10 @@ def _program_from_form(
             no_automated_scanning=not allow_active,
             requests_per_second=rps if rps > 0 else 5.0,
             max_concurrency=concurrency if concurrency > 0 else 5,
+            per_host_rps=per_host_rps if (per_host_rps and per_host_rps > 0) else None,
+            per_endpoint_daily_cap=(
+                per_endpoint_daily_cap if (per_endpoint_daily_cap and per_endpoint_daily_cap > 0) else None
+            ),
         ),
         proxy=proxy.strip(),
         user_agent=user_agent.strip(),
@@ -107,6 +113,20 @@ def _program_from_form(
         required_headers=_parse_headers(required_headers),
         seeds=seeds,
     )
+
+
+def _to_float(raw: str) -> float | None:
+    try:
+        return float(raw) if raw.strip() else None
+    except ValueError:
+        return None
+
+
+def _to_int(raw: str) -> int | None:
+    try:
+        return int(raw) if raw.strip() else None
+    except ValueError:
+        return None
 
 
 def _draft_from_program(program: Program) -> dict[str, object]:
@@ -119,6 +139,8 @@ def _draft_from_program(program: Program) -> dict[str, object]:
         "out_of_scope": "\n".join(program.scope.out_of_scope),
         "rps": program.limits.requests_per_second,
         "concurrency": program.limits.max_concurrency,
+        "per_host_rps": program.limits.per_host_rps or "",
+        "per_endpoint_daily_cap": program.limits.per_endpoint_daily_cap or "",
         "allow_active": program.allows_active_scanning(),
         "bug_bounty_mode": program.bug_bounty_mode,
         "required_headers": "\n".join(f"{k}: {v}" for k, v in program.required_headers.items()),
@@ -699,11 +721,14 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         cookies: str = Form(""),
         bug_bounty_mode: str = Form(""),
         required_headers: str = Form(""),
+        per_host_rps: str = Form(""),
+        per_endpoint_daily_cap: str = Form(""),
     ) -> Response:
         program = _program_from_form(
             handle, platform, in_scope, out_of_scope, allow_active == "on",
             rps=rps, concurrency=concurrency, proxy=proxy, user_agent=user_agent, cookies=cookies,
             bug_bounty_mode=bug_bounty_mode == "on", required_headers=required_headers,
+            per_host_rps=_to_float(per_host_rps), per_endpoint_daily_cap=_to_int(per_endpoint_daily_cap),
         )
         if not program.scope.allow_patterns():
             return render(

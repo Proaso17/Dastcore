@@ -62,6 +62,9 @@ _NO_AUTOMATION = re.compile(
 _RATE = re.compile(
     r"(\d+(?:\.\d+)?)\s*(?:requests?|req|peticiones?)\s*(?:per|/|por)\s*(?:second|sec|segundo|s)\b", re.IGNORECASE
 )
+_DAILY_CAP = re.compile(
+    r"(\d[\d,]*)\s*(?:requests?|req|peticiones?)\s*(?:per|/|por)\s*(?:day|dia|día)\b", re.IGNORECASE
+)
 _FINANCE = re.compile(r"\bbank|banking|banco|financ|payment|fintech|avoid harm|minimi[sz]e", re.IGNORECASE)
 _ATTR_HEADER = re.compile(r"\b(X-[A-Za-z][A-Za-z0-9-]*)\b\s*[:=]?\s*([^\s,;]+)?", re.IGNORECASE)
 _H1_HANDLE = re.compile(r"hackerone\.com/([A-Za-z0-9_.-]+)", re.IGNORECASE)
@@ -170,6 +173,11 @@ def parse_program_policy(text: str, platform: str = "hackerone", handle: str = "
     if _NO_AUTOMATION.search(text):
         limits.no_automated_scanning = True
         notes.append("La política prohíbe herramientas automáticas → 'solo recon' activado (sin escaneo activo).")
+    daily = _DAILY_CAP.search(text)
+    if daily:
+        limits.per_endpoint_daily_cap = int(daily.group(1).replace(",", ""))
+        notes.append(f"Tope diario por endpoint detectado: {limits.per_endpoint_daily_cap} peticiones/día "
+                     "(persistente entre ejecuciones).")
 
     # Attribution header (X-…) if the policy asks for one.
     required_headers: dict[str, str] = {}

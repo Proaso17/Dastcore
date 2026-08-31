@@ -528,6 +528,16 @@ def _make_client(
     proxy: str = "",
     attribution: dict[str, str] | None = None,
 ) -> HttpClient:
+    rl = config.rate_limit
+    governor = None
+    if rl.per_host_rps or rl.per_endpoint_daily_cap:
+        from dastcore.core.rate_governor import RateGovernor
+
+        governor = RateGovernor(
+            per_host_rps=rl.per_host_rps,
+            per_endpoint_daily_cap=rl.per_endpoint_daily_cap,
+            daily_cap_db=rl.daily_cap_db or None,
+        )
     return HttpClient(
         config.scope,
         rate_limit=config.rate_limit,
@@ -541,6 +551,7 @@ def _make_client(
         user_agent=user_agent or None,
         proxy=proxy or None,  # route every request via the proxy/VPN so traffic exits a trusted IP
         attribution=attribution or None,  # e.g. X-Bug-Bounty: identify our traffic as programs require
+        governor=governor,  # per-host / per-endpoint-daily RoE governance (None = off)
     )
 
 
