@@ -14,7 +14,7 @@ import json as _json
 import logging
 import sys
 import time
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
@@ -765,6 +765,7 @@ async def _run_scan(
     findings_log: str = "",
     surface: dict[str, Any] | None = None,
     ai_payloads: AiPayloadGenerator | None = None,
+    on_finding: Callable[[Finding], None] | None = None,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -809,8 +810,12 @@ async def _run_scan(
             )
             failed_phases.append(name)
             return []
-        if sink is not None and result and isinstance(result[0], Finding):
-            sink.write(result)  # persist findings the moment the check produces them
+        if result and isinstance(result[0], Finding):
+            if sink is not None:
+                sink.write(result)  # persist findings the moment the check produces them
+            if on_finding is not None:
+                for finding in result:  # surface each finding live (e.g. the web panel's feed)
+                    on_finding(finding)
         return result
 
     oast = _build_oast_provider(oast_mode, oast_server)

@@ -14,6 +14,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from dastcore.cli import (
     SessionLoginError,
@@ -80,6 +81,19 @@ class LiveJob:
     completed: int = 0
     total: int | None = None
     status: str = "running"  # running | done | error
+    # Verbose live feed: the accumulated stream of what the scan is doing/discovering, plus findings as
+    # they're confirmed. The panel polls and renders the tail so the user watches progress in real time.
+    log: list[str] = field(default_factory=list)
+    found: int = 0
+
+    def add_log(self, text: str) -> None:
+        """Append one line to the live feed (skip consecutive duplicates; keep only the last 80)."""
+        text = text.strip()
+        if not text or (self.log and self.log[-1] == text):
+            return
+        self.log.append(text)
+        if len(self.log) > 80:
+            del self.log[:-80]
 
 
 # Profiles mirror the CLI's convenience defaults (engine + crawl breadth).
@@ -102,14 +116,22 @@ class _JobProgress:
 
     def status(self, text: str) -> None:
         self._job.phase = text
+        self._job.add_log(text)  # accumulate the stream so the panel shows what's being discovered
 
     def start_scanning(self, total: int) -> None:
         self._job.phase = "Escaneando"
         self._job.total = total
         self._job.completed = 0
+        self._job.add_log(f"Escaneando la superficie descubierta ({total} peticiones)…")
 
     def tick(self) -> None:
         self._job.completed += 1
+
+    def finding(self, f: Finding) -> None:
+        """A finding was just confirmed — surface it live in the feed."""
+        self._job.found += 1
+        path = urlsplit(f.request.url).path or "/" if f.request else "/"
+        self._job.add_log(f"⚠ [{f.severity}] {f.name} · {path}")
 
 
 class ScanManager:
@@ -244,13 +266,15 @@ class ScanManager:
         use_permutations: bool = False,
     ) -> None:
         started = time.monotonic()
+        prog = _JobProgress(job)  # one sink drives both the progress bar and the live findings feed
         try:
             findings = await _run_scan(
                 config,
                 max_pages,
                 engine,
                 budget=_Budget(None, None),
-                progress=_JobProgress(job),
+                progress=prog,
+                on_finding=prog.finding,
                 prove_impact=prove_impact,
                 discover_subdomains=discover_subdomains,
                 discover_content=discover_content,

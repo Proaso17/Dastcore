@@ -1,11 +1,20 @@
 {% if running %}
-  <div class="status st-running">Escaneando…</div>
+  <div class="status st-running">Escaneando…
+    {% if found %}<span class="badge sev-high" style="margin-left:8px">{{ found }} hallazgo(s)</span>{% endif %}
+  </div>
   <p class="muted">{{ phase }}</p>
   {% if total %}
     <div class="progress"><span style="width: {{ (100 * completed / total) | round(1) }}%"></span></div>
     <p class="muted">{{ completed }} / {{ total }} peticiones</p>
   {% else %}
     <div class="progress"><span style="width: 8%"></span></div>
+  {% endif %}
+  {% if feed %}
+    <div class="feed" aria-live="polite">
+      {% for line in feed | reverse %}
+      <div class="feed-line{% if line.startswith('⚠') %} feed-hit{% endif %}">{{ line }}</div>
+      {% endfor %}
+    </div>
   {% endif %}
 {% elif scan.status == 'error' %}
   <div class="status st-error">Error</div>

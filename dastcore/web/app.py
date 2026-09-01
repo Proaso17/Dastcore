@@ -228,7 +228,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         if running:
             assert live is not None
             return (
-                {"scan": scan, "running": True, "phase": live.phase, "completed": live.completed, "total": live.total},
+                {"scan": scan, "running": True, "phase": live.phase, "completed": live.completed,
+                 "total": live.total, "feed": live.log[-25:], "found": live.found},
                 False,
             )
         ctx: dict[str, object] = {"scan": scan, "running": False, "issues": [], "accepted": []}

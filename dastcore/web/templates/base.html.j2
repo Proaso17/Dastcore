@@ -257,6 +257,13 @@
     label.choice:has(input:checked) { border-color: var(--accent);
       background: var(--accent-soft); box-shadow: 0 0 0 3px var(--ring); }
     label.choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+    /* --- Live scan feed (verbose progress) --- */
+    .feed { margin-top: 14px; max-height: 280px; overflow-y: auto; border: 1px solid var(--border);
+      border-radius: 8px; background: rgba(127,127,127,.06); padding: 8px 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55; }
+    .feed-line { color: var(--muted); white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+    .feed-line + .feed-line { border-top: 1px solid rgba(127,127,127,.08); }
+    .feed-hit { color: var(--ink); font-weight: 600; }
     ul.recap { list-style: none; margin: 6px 0 0; padding: 0; }
     ul.recap li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 2px;
       border-bottom: 1px solid var(--border); font-size: 14px; }
