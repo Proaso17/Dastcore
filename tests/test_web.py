@@ -77,6 +77,19 @@ async def test_alerts_config_saves_and_shows_on_schedules_page(client: httpx.Asy
     assert 'value="discord" selected' in page.text  # format persisted
 
 
+async def test_scan_wizard_form_has_no_nested_forms(client: httpx.AsyncClient) -> None:
+    # HTML forms can't nest: a <form> inside the wizard form closes it early and ejects the later steps
+    # (auth fields, the authorization checkbox, the launch button) — so the scan never starts. Guard it.
+    async with client:
+        html = (await client.get("/")).text
+    start = html.index('<form class="wizard"')
+    aux = html.index('<form id="seclistsInstallForm"')  # the auxiliary forms live AFTER the wizard's </form>
+    wizard = html[start:aux]
+    assert wizard.count("<form") == 1  # only the wizard's own <form> — no nested forms
+    assert 'id="authorization"' in wizard  # the authorization gate is inside the wizard form
+    assert 'id="wzLaunch"' in wizard  # so is the launch button, so a submit carries the required fields
+
+
 async def test_dashboard_loads_empty(client: httpx.AsyncClient) -> None:
     async with client:
         resp = await client.get("/")
