@@ -12,7 +12,12 @@
   {% if feed %}
     <div class="feed" aria-live="polite">
       {% for line in feed | reverse %}
-      <div class="feed-line{% if line.startswith('⚠') %} feed-hit{% endif %}">{{ line }}</div>
+        {% if line.startswith('⚠') %}
+          {% set sev = 'critical' if '[critical]' in line else 'high' if '[high]' in line else 'medium' if '[medium]' in line else 'low' if '[low]' in line else 'info' %}
+          <div class="feed-line feed-hit feed-sev-{{ sev }}">{{ line }}</div>
+        {% else %}
+          <div class="feed-line">{{ line }}</div>
+        {% endif %}
       {% endfor %}
     </div>
   {% endif %}

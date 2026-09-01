@@ -71,6 +71,7 @@ async def run_campaign(
     checkpoint_path: str | Path | None = None,
     adapters: list | None = None,
     on_status: Callable[[str], None] | None = None,
+    on_finding: Callable[[Finding], None] | None = None,
     discover_depth: str = "light",
     seed_paths: Sequence[str] = (),
     discover_ports: bool = False,
@@ -139,6 +140,7 @@ async def run_campaign(
             user_agent=program.user_agent,
             bug_bounty=program.bug_bounty_mode,  # suppress N/A hardening findings for a cleaner report
             attribution=program.attribution_headers(),  # identify our traffic (X-Bug-Bounty) as required
+            on_finding=on_finding,  # surface findings live (the web hunt's verbose feed)
         )
         checkpoint.mark_done(url, found)
         checkpoint.save()

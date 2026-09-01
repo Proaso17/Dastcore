@@ -226,6 +226,7 @@ class ScanManager:
 
         started = time.monotonic()
         store = AssetStore(assets_db)
+        prog = _JobProgress(job)  # feed the live panel: status stream + findings as they're confirmed
         try:
             result = await run_campaign(
                 program,
@@ -233,7 +234,8 @@ class ScanManager:
                 asset_store=store,
                 recon_opts=ReconOptions(profile=profile if profile in ("passive", "standard", "deep") else "standard"),
                 engine="http",
-                on_status=lambda text: setattr(job, "phase", text),
+                on_status=prog.status,
+                on_finding=prog.finding,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, result.findings)
@@ -351,10 +353,16 @@ class ScanManager:
         max_pages: int,
     ) -> None:
         started = time.monotonic()
+        prog = _JobProgress(job)
         try:
+            prog.status("Descubriendo el chatbot embebido en la app…")
             profile, findings = await _run_ai_discover_scan(
                 config, str(config.target), headers, "", max_pages, victim_headers, victim_refs
             )
+            if profile is not None:
+                prog.status(f"Chatbot detectado. Comprobaciones OWASP LLM completadas ({len(findings)} hallazgo(s)).")
+            for finding in findings:  # surface each LLM finding in the feed
+                prog.finding(finding)
             self._store.mark_done(job.id, time.time(), time.monotonic() - started, findings)
             await self._notify_delta(job.id, job.target, findings)
             job.status = "done"
@@ -408,13 +416,20 @@ class ScanManager:
 
     async def _run_retest_job(self, job: LiveJob, config: ScanConfig, prior: list[Finding]) -> None:
         started = time.monotonic()
+        prog = _JobProgress(job)
         try:
+            prog.status(f"Reverificando {len(prior)} hallazgo(s) previo(s)…")
             new_findings = await _run_retest(config, prior, "off", "", _Budget(None, None))
             active_rule_ids = frozenset(r.id for r in load_rules())
             outcomes = classify(prior, new_findings, oast_attempted=False, active_rule_ids=active_rule_ids)
             still_open = open_findings(outcomes)
+            for finding in still_open:  # surface the still-open findings in the feed
+                prog.finding(finding)
+            counts = summarize(outcomes)
+            prog.status(f"Reverificación: {counts.get('open', 0)} abiertos · {counts.get('fixed', 0)} corregidos "
+                        f"· {counts.get('unverified', 0)} sin verificar.")
             retest = {
-                "counts": summarize(outcomes),
+                "counts": counts,
                 "outcomes": [
                     {
                         "id": o.prior.id,
