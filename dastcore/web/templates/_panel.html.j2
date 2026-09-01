@@ -24,9 +24,6 @@
 {% elif scan.status == 'error' %}
   <div class="status st-error">Error</div>
   <div class="panel err" style="margin-top:10px">{{ scan.error }}</div>
-{% elif scan.status == 'interrupted' %}
-  <div class="status st-interrupted">Interrumpido</div>
-  <p class="muted">El escaneo no terminó (probablemente el servidor se reinició).</p>
 {% elif scan.kind == 'retest' %}
   <div class="status st-done">Reverificación completada</div>
   {% set c = (retest.counts if retest else {}) %}
@@ -70,7 +67,18 @@
     'medium':'Medio — riesgo moderado; planifica su corrección.',
     'low':'Bajo — riesgo menor.',
     'info':'Informativo — sin impacto directo, para tu conocimiento.'} %}
-  <div class="status st-done">Completado</div>
+  {% if scan.status == 'interrupted' %}
+    <div class="status st-interrupted">Interrumpido — resultados parciales guardados</div>
+    <p class="muted">El escaneo se detuvo (p. ej. el servidor se reinició), pero <strong>lo encontrado hasta ahí se ha conservado</strong>.</p>
+    {% if scan.kind == 'hunt' %}
+    <form method="post" action="/scans/{{ scan.id }}/resume" style="margin:8px 0 12px"
+          onsubmit="return confirm('¿Reanudar la caza donde se quedó?')">
+      <button type="submit">▶ Reanudar donde se quedó</button>
+    </form>
+    {% endif %}
+  {% else %}
+    <div class="status st-done">Completado</div>
+  {% endif %}
   <p class="muted">
     {{ issues | sum(attribute='count') }} hallazgo(s) activo(s) · {{ issues | length }} issue(s)
     {% if accepted %}· {{ accepted | sum(attribute='count') }} aceptado(s){% endif %}

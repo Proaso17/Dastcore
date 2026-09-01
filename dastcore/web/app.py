@@ -233,7 +233,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 False,
             )
         ctx: dict[str, object] = {"scan": scan, "running": False, "issues": [], "accepted": []}
-        if scan.status == "done":
+        # An interrupted scan still shows its partial findings (persisted incrementally) — nothing is lost.
+        if scan.status in ("done", "interrupted"):
             findings = store.get_findings(scan.id)
             if scan.kind == "retest":
                 ctx["retest"] = store.get_retest(scan.id)
@@ -765,7 +766,20 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                 programs=store.list_programs(),
                 error="Debes confirmar que tienes autorización para analizar este objetivo.",
             )
-        scan_id = manager.start_hunt(row.program, "standard", db_path)
+        scan_id = manager.start_hunt(row.program, "standard", db_path, program_id=program_id)
         return RedirectResponse(url=f"/scans/{scan_id}", status_code=303)
+
+    @app.post("/scans/{scan_id}/resume")
+    def resume_hunt(scan_id: str) -> Response:
+        """Resume an interrupted hunt where it stopped — it re-runs the program's campaign, whose
+        per-asset checkpoint skips the assets already scanned. (Only hunts are resumable.)"""
+        scan = store.get_scan(scan_id)
+        if scan is None or scan.kind != "hunt" or not scan.program_id:
+            return HTMLResponse("<h1>404</h1><p>No es una caza reanudable.</p>", status_code=404)
+        row = store.get_program(scan.program_id)
+        if row is None:
+            return HTMLResponse("<h1>404</h1><p>El programa ya no existe.</p>", status_code=404)
+        new_id = manager.start_hunt(row.program, scan.profile or "standard", db_path, program_id=scan.program_id)
+        return RedirectResponse(url=f"/scans/{new_id}", status_code=303)
 
     return app

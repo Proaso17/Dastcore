@@ -111,8 +111,9 @@ class _JobProgress:
     progress object, so this drop-in updates the live job for the UI to poll.
     """
 
-    def __init__(self, job: LiveJob) -> None:
+    def __init__(self, job: LiveJob, store: Store | None = None) -> None:
         self._job = job
+        self._store = store  # when set, findings are persisted incrementally (crash-safe partial results)
 
     def status(self, text: str) -> None:
         self._job.phase = text
@@ -128,10 +129,13 @@ class _JobProgress:
         self._job.completed += 1
 
     def finding(self, f: Finding) -> None:
-        """A finding was just confirmed — surface it live in the feed."""
+        """A finding was just confirmed — surface it live in the feed and persist it immediately, so a
+        stop/restart never loses what was already found."""
         self._job.found += 1
         path = urlsplit(f.request.url).path or "/" if f.request else "/"
         self._job.add_log(f"⚠ [{f.severity}] {f.name} · {path}")
+        if self._store is not None:
+            self._store.append_scan_findings(self._job.id, [f])
 
 
 class ScanManager:
@@ -205,28 +209,37 @@ class ScanManager:
 
     # --- bug-bounty hunt (recon -> scan) -----------------------------------------------
 
-    def start_hunt(self, program, profile: str, db_path) -> str:
-        """Launch a full hunt (recon + scan of the in-scope live surface) as a background job."""
+    def start_hunt(self, program, profile: str, db_path, program_id: str | None = None) -> str:
+        """Launch a full hunt (recon + scan of the in-scope live surface) as a background job. The hunt
+        checkpoints per asset, keyed by the program, so an interrupted hunt can be resumed where it
+        stopped (it skips the assets already scanned)."""
         from pathlib import Path
 
         scan_id = uuid.uuid4().hex[:12]
         target = program.handle or (program.seeds[0] if program.seeds else "hunt")
         job = LiveJob(id=scan_id, target=target, phase="Preparando la caza…")
         self._live[scan_id] = job
-        self._store.insert_running(scan_id, target, "hunt", profile or None, time.time(), kind="hunt")
-        assets_db = str(Path(db_path).with_name("hunt-assets.db"))
-        task = asyncio.create_task(self._run_hunt(job, program, profile, assets_db))
+        self._store.insert_running(scan_id, target, "hunt", profile or None, time.time(),
+                                   kind="hunt", program_id=program_id)
+        base = Path(db_path)
+        assets_db = str(base.with_name("hunt-assets.db"))
+        key = "".join(c if c.isalnum() else "_" for c in (program_id or program.handle or "hunt"))
+        checkpoint_path = str(base.with_name(f"hunt-{key}.checkpoint.json"))  # stable per program -> resumable
+        task = asyncio.create_task(self._run_hunt(job, program, profile, assets_db, checkpoint_path))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return scan_id
 
-    async def _run_hunt(self, job: LiveJob, program, profile: str, assets_db: str) -> None:
+    async def _run_hunt(self, job: LiveJob, program, profile: str, assets_db: str,
+                        checkpoint_path: str | None = None) -> None:
+        from pathlib import Path
+
         from dastcore.bugbounty.campaign import run_campaign
         from dastcore.recon import AssetStore, ReconOptions
 
         started = time.monotonic()
         store = AssetStore(assets_db)
-        prog = _JobProgress(job)  # feed the live panel: status stream + findings as they're confirmed
+        prog = _JobProgress(job, self._store)  # feed the live panel: status stream + findings as they're confirmed
         try:
             result = await run_campaign(
                 program,
@@ -236,9 +249,12 @@ class ScanManager:
                 engine="http",
                 on_status=prog.status,
                 on_finding=prog.finding,
+                checkpoint_path=checkpoint_path,  # per-asset resume state (survives an interruption)
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, result.findings)
+            if checkpoint_path:  # completed cleanly -> drop the checkpoint so a fresh hunt starts over
+                Path(checkpoint_path).unlink(missing_ok=True)
             await self._notify_delta(job.id, job.target, result.findings)
             job.status = "done"
             job.phase = f"Completado · {len(result.assets)} activos, {len(result.findings)} hallazgos"
@@ -268,7 +284,7 @@ class ScanManager:
         use_permutations: bool = False,
     ) -> None:
         started = time.monotonic()
-        prog = _JobProgress(job)  # one sink drives both the progress bar and the live findings feed
+        prog = _JobProgress(job, self._store)  # one sink drives both the progress bar and the live findings feed
         try:
             findings = await _run_scan(
                 config,
@@ -353,7 +369,7 @@ class ScanManager:
         max_pages: int,
     ) -> None:
         started = time.monotonic()
-        prog = _JobProgress(job)
+        prog = _JobProgress(job, self._store)
         try:
             prog.status("Descubriendo el chatbot embebido en la app…")
             profile, findings = await _run_ai_discover_scan(
@@ -416,7 +432,7 @@ class ScanManager:
 
     async def _run_retest_job(self, job: LiveJob, config: ScanConfig, prior: list[Finding]) -> None:
         started = time.monotonic()
-        prog = _JobProgress(job)
+        prog = _JobProgress(job, self._store)
         try:
             prog.status(f"Reverificando {len(prior)} hallazgo(s) previo(s)…")
             new_findings = await _run_retest(config, prior, "off", "", _Budget(None, None))

@@ -90,6 +90,7 @@ _MIGRATIONS = {
     "kind": "TEXT NOT NULL DEFAULT 'scan'",
     "parent_id": "TEXT",
     "retest_json": "TEXT",
+    "program_id": "TEXT",  # for a hunt row: which program it ran, so it can be resumed
 }
 
 
@@ -108,8 +109,9 @@ class ScanRow:
     num_findings: int = 0
     severity_counts: dict[str, int] = field(default_factory=dict)
     error: str | None = None
-    kind: str = "scan"  # scan | retest
+    kind: str = "scan"  # scan | retest | hunt | ai
     parent_id: str | None = None
+    program_id: str | None = None  # hunt rows: the program that was hunted (for resume)
     accepted: int = 0  # display-only: findings hidden by triage (not persisted)
 
 
@@ -214,6 +216,7 @@ class Store:
             error=row["error"],
             kind=row["kind"] if "kind" in row.keys() else "scan",
             parent_id=row["parent_id"] if "parent_id" in row.keys() else None,
+            program_id=row["program_id"] if "program_id" in row.keys() else None,
         )
 
     def insert_running(
@@ -226,12 +229,13 @@ class Store:
         *,
         kind: str = "scan",
         parent_id: str | None = None,
+        program_id: str | None = None,
     ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT INTO scans (id, target, engine, profile, status, created_at, kind, parent_id) "
-                "VALUES (?, ?, ?, ?, 'running', ?, ?, ?)",
-                (scan_id, target, engine, profile, created_at, kind, parent_id),
+                "INSERT INTO scans (id, target, engine, profile, status, created_at, kind, parent_id, program_id) "
+                "VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+                (scan_id, target, engine, profile, created_at, kind, parent_id, program_id),
             )
 
     def mark_done(self, scan_id: str, finished_at: float, duration_s: float, findings: list[Finding]) -> None:
@@ -242,6 +246,29 @@ class Store:
                 "UPDATE scans SET status='done', finished_at=?, duration_s=?, num_findings=?, "
                 "severity_counts=?, findings_json=? WHERE id=?",
                 (finished_at, duration_s, len(findings), json.dumps(counts), findings_json, scan_id),
+            )
+
+    def append_scan_findings(self, scan_id: str, new: list[Finding]) -> None:
+        """Merge newly-confirmed findings into a *running* scan's stored set (dedup by id) and refresh
+        its counts — so if the process stops, everything found so far survives. Status is left as-is."""
+        if not new:
+            return
+        with self._lock, self._conn:
+            row = self._conn.execute("SELECT findings_json FROM scans WHERE id=?", (scan_id,)).fetchone()
+            by_id: dict[str, dict] = {}
+            for item in (json.loads(row["findings_json"]) if row and row["findings_json"] else []):
+                by_id[item.get("id")] = item
+            for finding in new:
+                by_id[finding.id] = finding.model_dump(mode="json")
+            merged = list(by_id.values())
+            counts = dict.fromkeys(_SEVERITIES, 0)
+            for item in merged:
+                sev = item.get("severity", "info")
+                if sev in counts:
+                    counts[sev] += 1
+            self._conn.execute(
+                "UPDATE scans SET num_findings=?, severity_counts=?, findings_json=? WHERE id=?",
+                (len(merged), json.dumps(counts), json.dumps(merged, ensure_ascii=False), scan_id),
             )
 
     def mark_retest_done(
