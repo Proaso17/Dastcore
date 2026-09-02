@@ -77,7 +77,10 @@ async def run_spa_check(client: HttpClient, target: str, engine: str) -> list[Fi
         remediation = (
             f"El objetivo usa {framework}: su contenido y sus llamadas XHR/fetch se generan en el navegador, "
             "y el crawler estático no ejecuta JavaScript, por lo que su superficie real queda sin explorar. "
-            "Vuelve a escanear con --engine headless (o both) para descubrir y probar esas rutas."
+            "Vuelve a escanear con el motor **Navegador/headless** (--engine headless o both) y activa el "
+            "**crawl interactivo** (--interactive / casilla «Crawl interactivo de SPA»): hace clic en controles "
+            "seguros para disparar las llamadas API que la app solo hace al interactuar y así descubrir su "
+            "superficie real. Con sesión (login/cookie) llegarás además a la parte autenticada."
         )
     else:
         name = f"Aplicación JavaScript (SPA) detectada: {framework}"

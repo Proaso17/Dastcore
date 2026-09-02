@@ -438,6 +438,30 @@ document.addEventListener('DOMContentLoaded', function(){
             mimetype="text/html",
         )
 
+    @app.get("/spa-click")
+    def spa_click() -> Response:
+        # A SPA whose API calls only happen on interaction: a SAFE button (fetch on click) and a
+        # DESTRUCTIVE one. The interactive crawl must click "Ver detalles" (discovering /api/click-data)
+        # but NEVER "Eliminar cuenta" (so /api/danger-deleted is never called).
+        return Response(
+            """<!doctype html><html><head><title>spa-click</title></head><body>
+<button id="safe" type="button">Ver detalles</button>
+<button id="danger" type="button">Eliminar cuenta</button>
+<script>
+document.getElementById('safe').addEventListener('click', function(){ fetch('/api/click-data?id=1'); });
+document.getElementById('danger').addEventListener('click', function(){ fetch('/api/danger-deleted?id=1'); });
+</script></body></html>""",
+            mimetype="text/html",
+        )
+
+    @app.get("/api/click-data")
+    def click_data() -> Response:
+        return jsonify({"ok": True})
+
+    @app.get("/api/danger-deleted")
+    def danger_deleted() -> Response:
+        return jsonify({"deleted": True})  # must NOT be reached by the interactive crawl
+
     @app.get("/api/spa-data")
     def spa_data() -> Response:
         # XHR endpoint only reachable by executing the page's JS. Not injectable.

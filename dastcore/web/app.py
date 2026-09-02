@@ -352,6 +352,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
         seed_hosts: str = Form(""),
         seed_paths: str = Form(""),
         mine_params: str = Form(""),
+        interactive: str = Form(""),
         authorization: str = Form(""),
     ) -> Response:
         target = target.strip()
@@ -410,6 +411,7 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
                         seed_hosts=[s.strip() for s in seed_hosts.splitlines() if s.strip()],
                         seed_paths=[s.strip() for s in seed_paths.splitlines() if s.strip()],
                         mine_params=mine_params == "on",
+                        interactive=interactive == "on",
                     )
                 )
         except Exception as exc:  # noqa: BLE001 — bad target/config -> re-render the form with the reason

@@ -766,6 +766,7 @@ async def _run_scan(
     surface: dict[str, Any] | None = None,
     ai_payloads: AiPayloadGenerator | None = None,
     on_finding: Callable[[Finding], None] | None = None,
+    interactive: bool = False,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -1036,7 +1037,7 @@ async def _run_scan(
                     progress.status(f"Crawleando (headless / SPA) {root}…")
                     try:
                         headless_reqs, root_dom = await _run_headless(
-                            config, client, root, max_pages, user_agent, proxy
+                            config, client, root, max_pages, user_agent, proxy, interactive=interactive
                         )
                     except httpx.HTTPError:
                         continue  # a flaky host must not abort the whole multi-host scan
@@ -1381,7 +1382,8 @@ async def _scan_with_optional_resume(
 
 
 async def _run_headless(
-    config: ScanConfig, client: HttpClient, target: str, max_pages: int, user_agent: str = "", proxy: str = ""
+    config: ScanConfig, client: HttpClient, target: str, max_pages: int, user_agent: str = "", proxy: str = "",
+    interactive: bool = False,
 ) -> tuple[list[HttpRequest], list[Finding]]:
     """Render with a headless browser: crawl JS/XHR + probe DOM-XSS, reusing the auth session.
 
@@ -1397,6 +1399,7 @@ async def _run_headless(
         max_pages=max_pages,
         user_agent=user_agent or None,
         proxy=proxy or None,
+        interactive=interactive,
     ) as engine:
         discovered = await engine.crawl(target)
         page_urls = [req.url for req in discovered if req.method == "GET"]
@@ -1748,6 +1751,13 @@ def scan(
         "--js/--no-js",
         help="Con el descubrimiento activo, extrae endpoints de los bundles JavaScript (SPAs modernas: "
         "Next.js, React…). --no-js para desactivarlo.",
+    ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        help="Crawl interactivo de SPA (headless): hace clic en controles SEGUROS (tabs/nav/ver…) para "
+        "disparar y capturar las llamadas API que un React/Vue solo hace al interactuar. Nunca toca "
+        "acciones destructivas (delete/logout/pagar/enviar). Descubre mucha más superficie en SPAs.",
     ),
     mine_params: bool = typer.Option(
         False,
@@ -2149,6 +2159,7 @@ def scan(
                     findings_log=findings_log,
                     surface=surface,
                     ai_payloads=payload_generator,
+                    interactive=interactive,
                 )
             )
     except SessionLoginError as exc:

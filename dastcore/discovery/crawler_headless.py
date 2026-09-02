@@ -13,6 +13,7 @@ Playwright is imported lazily so the rest of dastcore works without it installed
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from urllib.parse import parse_qsl, urlsplit
 
@@ -67,6 +68,28 @@ if (_q) {
 """
 
 
+# Interactive-crawl safety: elements we may click to trigger navigation/XHR (never form-submit buttons),
+# and labels that mark a *destructive* control we must never click, so an interactive crawl can't cause
+# side effects (delete/logout/pay/submit…). The label guard is re-checked at click time (DOM may shift).
+_SAFE_CLICK_SELECTOR = (
+    "button:not([type=submit]):not([type=reset]), [role=button], [role=tab], [role=menuitem], "
+    "[role=link], a:not([href]), a[href^='#'], nav li, .tab, .nav-link, [data-toggle], [aria-expanded]"
+)
+_DANGEROUS_LABEL = re.compile(
+    r"delete|remove|borrar|elimin|logout|log\s*out|sign\s*out|cerrar\s*sesi|salir|"
+    r"pay|pagar|buy|comprar|purchase|checkout|order|submit|enviar|send|confirm|confirmar|"
+    r"save|guardar|update|actualizar|create|crear|add\b|añadir|agregar|transfer|transferir|"
+    r"deactivate|disable|desactivar|cancel|cancelar|reset|restablecer|approve|aprobar|reject|"
+    r"publish|publicar|unsubscribe|block|ban|archive|archivar|invite|invitar|upload|subir",
+    re.IGNORECASE,
+)
+
+
+def _is_dangerous(label: str) -> bool:
+    """True if an element's visible text/label suggests a state-changing action we must not click."""
+    return bool(_DANGEROUS_LABEL.search(label or ""))
+
+
 class HeadlessUnavailableError(RuntimeError):
     """Raised when Playwright or its Chromium browser is not available."""
 
@@ -86,6 +109,8 @@ class HeadlessEngine:
         stealth: bool = True,
         user_agent: str | None = None,
         proxy: str | None = None,
+        interactive: bool = False,
+        max_clicks: int = 12,
     ) -> None:
         self._scope = ScopeChecker(scope)
         self._cookies = cookies or {}
@@ -97,6 +122,11 @@ class HeadlessEngine:
         # it through. On by default; a caller can pass a user_agent to match their real browser exactly.
         self._stealth = stealth
         self._user_agent = user_agent or (_DEFAULT_UA if stealth else None)
+        # Interactive SPA crawl (opt-in): after load, click SAFE elements to trigger the XHR/fetch a
+        # React/Vue app only makes on interaction — discovering the real API surface. Off by default,
+        # so a normal scan is unchanged; safe-click heuristics never touch destructive controls.
+        self._interactive = interactive
+        self._max_clicks = max(0, max_clicks)
         # Route the browser through a proxy/VPN so its traffic exits from a trusted IP (bypasses WAF
         # IP-reputation blocks). Same proxy the HTTP client uses, so both engines share the exit IP.
         self._proxy = proxy
@@ -239,9 +269,52 @@ class HeadlessEngine:
                 forms = await page.evaluate(_FORM_EXTRACT_JS)
             except Exception:
                 anchors, forms = [], []
+            if self._interactive:
+                # Click safe controls to trigger the SPA's interaction-time XHR/fetch (captured passively
+                # by _on_request). Best-effort: any failure here never aborts the crawl.
+                try:
+                    await self._interact_and_capture(page)
+                except Exception:  # noqa: BLE001
+                    pass
             return anchors, forms
         finally:
             await page.close()
+
+    async def _interact_and_capture(self, page) -> None:
+        """Click up to ``max_clicks`` SAFE, non-destructive controls to surface interaction-time API
+        calls (React/Vue apps fetch on click/route change, not on load). Never submits forms; the
+        destructive-label guard is re-checked at click time, so no state-changing action is triggered."""
+        import time as _time
+
+        try:
+            labels = await page.eval_on_selector_all(
+                _SAFE_CLICK_SELECTOR,
+                "els => els.map(e => (e.innerText || e.getAttribute('aria-label') || "
+                "e.getAttribute('title') || '').trim().slice(0, 60))",
+            )
+        except Exception:  # noqa: BLE001
+            return
+        safe_idx = [i for i, text in enumerate(labels) if not _is_dangerous(text)][: self._max_clicks]
+        deadline = _time.monotonic() + 8.0  # cap total interaction time per page
+        for idx in safe_idx:
+            if _time.monotonic() > deadline:
+                break
+            loc = page.locator(_SAFE_CLICK_SELECTOR).nth(idx)
+            try:
+                text = (await loc.inner_text(timeout=500)) or ""
+            except Exception:  # noqa: BLE001 — element gone (DOM shifted): skip
+                continue
+            if _is_dangerous(text):  # re-check at click time — the DOM may have changed since we listed
+                continue
+            try:
+                await loc.click(timeout=1500, no_wait_after=True, force=False)
+            except Exception:  # noqa: BLE001 — not clickable / navigated / detached: skip
+                continue
+            await page.wait_for_timeout(120)  # let the click's XHR fire (captured by _on_request)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=1200)
+            except Exception:  # noqa: BLE001
+                pass
 
     # --- Screenshots ------------------------------------------------------------------
 

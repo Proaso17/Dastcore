@@ -65,6 +65,7 @@ class ScanRequest:
     seed_hosts: list[str] = field(default_factory=list)  # known hosts to always include in discovery
     seed_paths: list[str] = field(default_factory=list)  # known paths to always probe on each host
     mine_params: bool = False  # Arjun-style hidden parameter discovery on the discovered endpoints
+    interactive: bool = False  # interactive SPA crawl (headless clicks safe controls to surface API calls)
     allow_domains: list[str] = field(default_factory=list)
     # Embedded-chatbot ("ai --discover") scans: a second identity for the cross-tenant checks.
     victim_bearer: str = ""
@@ -201,6 +202,7 @@ class ScanManager:
                 use_js=req.discover_content and not_quick,  # JS endpoint extraction too
                 mine_params=req.mine_params and not_quick,
                 use_permutations=req.discover_subdomains and not_quick,  # permute found subdomains
+                interactive=req.interactive,  # interactive SPA crawl (opt-in; safe clicks only)
             )
         )
         self._tasks.add(task)
@@ -282,6 +284,7 @@ class ScanManager:
         use_js: bool = False,
         mine_params: bool = False,
         use_permutations: bool = False,
+        interactive: bool = False,
     ) -> None:
         started = time.monotonic()
         prog = _JobProgress(job, self._store)  # one sink drives both the progress bar and the live findings feed
@@ -305,6 +308,7 @@ class ScanManager:
                 use_js=use_js,
                 mine_params=mine_params,
                 use_permutations=use_permutations,
+                interactive=interactive,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

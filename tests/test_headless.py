@@ -76,6 +76,31 @@ async def test_headless_no_dom_xss_false_positive_on_clean_page(vuln_app_url: st
     assert findings == []
 
 
+def test_is_dangerous_flags_destructive_labels_only() -> None:
+    from dastcore.discovery.crawler_headless import _is_dangerous
+
+    for bad in ("Eliminar cuenta", "Delete", "Logout", "Cerrar sesión", "Pagar ahora", "Enviar",
+                "Confirmar", "Guardar cambios", "Transferir", "Cancelar"):
+        assert _is_dangerous(bad) is True, bad
+    for ok in ("Ver detalles", "Abrir", "Más info", "Siguiente", "Perfil", "Inicio", "Detalles", "Filtrar"):
+        assert _is_dangerous(ok) is False, ok
+
+
+async def test_interactive_crawl_finds_click_only_endpoints_and_skips_destructive(vuln_app_url: str) -> None:
+    async with headless_engine(interactive=True) as engine:
+        discovered = await engine.crawl(f"{vuln_app_url}/spa-click")
+    urls = {req.url for req in discovered}
+    assert any(u.endswith("/api/click-data") for u in urls), urls  # the SAFE click triggered its XHR
+    assert not any("danger-deleted" in u for u in urls), urls  # the destructive button was NEVER clicked
+
+
+async def test_non_interactive_crawl_misses_click_only_endpoints(vuln_app_url: str) -> None:
+    # Contrast: without interaction the load-only crawl never triggers the click's fetch, so it's missed.
+    async with headless_engine(interactive=False) as engine:
+        discovered = await engine.crawl(f"{vuln_app_url}/spa-click")
+    assert not any(req.url.endswith("/api/click-data") for req in discovered)
+
+
 async def test_headless_detects_client_side_template_injection(vuln_app_url: str) -> None:
     """/csti reflects input into a client-side {{ }} template engine — the product only appears
     after JS renders, never in the raw response, so it's CSTI (not SSTI)."""

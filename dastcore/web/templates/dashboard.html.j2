@@ -181,6 +181,15 @@
           </div>
           <p class="hint" style="margin:2px 0 10px">Busca parámetros no documentados (<code>?debug=</code>,
             <code>?admin=</code>…) que el servidor sí procesa — cada uno es un nuevo punto de inyección. Más intrusivo.</p>
+          <div class="check" style="margin-top:6px">
+            <input id="interactive" name="interactive" type="checkbox" value="on">
+            <label for="interactive" style="margin:0">Crawl <strong>interactivo</strong> de SPA (React/Vue) —
+              descubre mucha más superficie API</label>
+          </div>
+          <p class="hint" style="margin:2px 0 10px">Con el motor <strong>Navegador (headless)</strong>, hace clic en
+            controles <strong>seguros</strong> (pestañas, menús, «ver/detalles»…) para disparar y capturar las llamadas
+            API que un SPA solo hace <strong>al interactuar</strong>. Nunca toca acciones destructivas
+            (borrar/logout/pagar/enviar). Recomendado para apps modernas que dan pocos endpoints al cargar.</p>
           <details class="guide" style="margin-top:12px">
             <summary>Diccionarios (avanzado)</summary>
             <div class="gbody">
