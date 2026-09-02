@@ -5,7 +5,7 @@ severity: high
 cwe: CWE-22
 owasp: WSTG-ATHZ-01
 cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
-inject_into: [query, body, json]
+inject_into: [query, body, json, path]
 payloads:
   - "../../../../etc/passwd"
   - "../../../../../../etc/passwd"

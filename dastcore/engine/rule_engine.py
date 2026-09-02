@@ -6,7 +6,9 @@ A new injection detector is meant to be addable by writing a YAML file here
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from pydantic import BaseModel, Field
@@ -119,9 +121,21 @@ def build_mutated_request(point: InjectionPoint, payload_value: str) -> HttpRequ
         return request.model_copy(update={"data": data})
 
     if point.location == "json":
-        json_body = dict(request.json_body) if isinstance(request.json_body, dict) else {}
-        json_body[point.name] = payload_value
-        return request.model_copy(update={"json_body": json_body})
+        # Deep-copy the body and set the value at the point's dotted path (``a.b.0.c`` navigates nested
+        # objects/arrays), so nested-JSON injection points mutate exactly one leaf.
+        root = copy.deepcopy(request.json_body) if isinstance(request.json_body, (dict, list)) else {}
+        _set_json_path(root, point.name, payload_value)
+        return request.model_copy(update={"json_body": root})
+
+    if point.location == "path":
+        # Replace the injected path segment and rebuild the URL (IDOR/SQLi/traversal on /api/orders/123).
+        parts = urlsplit(request.url)
+        segs = parts.path.split("/")
+        idx = int(point.name)
+        if 0 <= idx < len(segs):
+            segs[idx] = payload_value  # raw — httpx normalises; traversal payloads keep their slashes
+        new_url = urlunsplit((parts.scheme, parts.netloc, "/".join(segs), parts.query, parts.fragment))
+        return request.model_copy(update={"url": new_url})
 
     if point.location == "header":
         headers = dict(request.headers)
@@ -129,3 +143,17 @@ def build_mutated_request(point: InjectionPoint, payload_value: str) -> HttpRequ
         return request.model_copy(update={"headers": headers})
 
     raise ValueError(f"Unsupported injection location for mutation: {point.location}")
+
+
+def _set_json_path(root: object, path: str, value: str) -> None:
+    """Set ``value`` at ``path`` (dot-separated: dict keys and list indices) inside a JSON structure,
+    in place. A single-segment path (a top-level key) works too."""
+    keys = path.split(".")
+    node: object = root
+    for key in keys[:-1]:
+        node = node[int(key)] if isinstance(node, list) else node[key]  # type: ignore[index]
+    last = keys[-1]
+    if isinstance(node, list):
+        node[int(last)] = value
+    elif isinstance(node, dict):
+        node[last] = value

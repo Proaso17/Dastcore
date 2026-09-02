@@ -5,7 +5,7 @@ severity: high
 cwe: CWE-89
 owasp: WSTG-INPV-05
 cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
-inject_into: [query, body, json]
+inject_into: [query, body, json, path]
 # No response oracle: confirmation is the TRUE/FALSE differential below. Each pair
 # appends a logically-true and a logically-false condition to the original value;
 # a hit needs TRUE to behave like the baseline and FALSE to diverge.
