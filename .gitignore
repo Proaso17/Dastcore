@@ -20,3 +20,9 @@ htmlcov/
 # bug-bounty engagement artifacts (keep local)
 bancoplata-*
 *.partial.jsonl
+
+# credentialed scan configs & generated reports — may hold secrets/PII, keep local
+*.local.yaml
+getnyma_*.yaml
+getnyma_*.html
+*_api_report.html

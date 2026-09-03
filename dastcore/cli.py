@@ -205,6 +205,39 @@ _PROFILES: dict[str, dict[str, object]] = {
 }
 
 
+_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _expand_env_refs(value: object) -> object:
+    """Replace ``${VAR}`` / ``${VAR:-default}`` references in string leaves with the environment's
+    value, so secrets (passwords, API keys) live in env vars instead of a committed config file.
+
+    Expansion is done on the parsed structure (not the raw YAML text), so a secret's contents can
+    never alter the document's shape. An unset variable with no default is a clear error rather than
+    a silent empty string, so a typo can't quietly turn into an anonymous scan."""
+    import os
+
+    if isinstance(value, str):
+
+        def _sub(match: re.Match[str]) -> str:
+            name, default = match.group(1), match.group(2)
+            if name in os.environ:
+                return os.environ[name]
+            if default is not None:
+                return default
+            raise ValueError(
+                f"la variable de entorno '{name}' que usa el config no está definida "
+                f"(o dale un valor por defecto con ${{{name}:-valor}})"
+            )
+
+        return _ENV_REF_RE.sub(_sub, value)
+    if isinstance(value, dict):
+        return {key: _expand_env_refs(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_refs(item) for item in value]
+    return value
+
+
 def _load_scan_file(path: str) -> ScanFile:
     import yaml
 
@@ -212,6 +245,7 @@ def _load_scan_file(path: str) -> ScanFile:
     data = yaml.safe_load(raw)  # YAML is a superset of JSON, so this handles both
     if not isinstance(data, dict):
         raise ValueError("el archivo de config debe ser un mapeo (objeto) en su raíz")
+    data = _expand_env_refs(data)  # ${VAR} / ${VAR:-default} → env, so passwords stay out of the file
     return ScanFile.model_validate(data)
 
 

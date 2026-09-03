@@ -58,6 +58,37 @@ def test_cli_flag_overrides_config_file(vuln_app_url: str, tmp_path) -> None:
     assert "Motor de descubrimiento: http" in result.stdout
 
 
+def test_scan_file_expands_env_vars(monkeypatch) -> None:
+    from dastcore.cli import _expand_env_refs
+
+    monkeypatch.setenv("GETNYMA_PW", "s3cr3t!:with#chars")
+    data = {
+        "target": "https://x.example",
+        "auth": {"type": "form", "form": {"login_url": "https://x/login", "credentials": {"password": "${GETNYMA_PW}"}}},
+    }
+    expanded = _expand_env_refs(data)
+    # The secret is injected as a plain value; its ':'/'#' can't corrupt the parsed structure.
+    assert expanded["auth"]["form"]["credentials"]["password"] == "s3cr3t!:with#chars"
+    assert expanded["target"] == "https://x.example"  # non-ref strings pass through untouched
+
+
+def test_scan_file_env_var_default_used_when_unset(monkeypatch) -> None:
+    from dastcore.cli import _expand_env_refs
+
+    monkeypatch.delenv("DAST_MISSING", raising=False)
+    assert _expand_env_refs({"k": "${DAST_MISSING:-fallback}"}) == {"k": "fallback"}
+
+
+def test_scan_file_unset_env_var_without_default_errors(monkeypatch) -> None:
+    import pytest
+
+    from dastcore.cli import _expand_env_refs
+
+    monkeypatch.delenv("DAST_MISSING", raising=False)
+    with pytest.raises(ValueError, match="DAST_MISSING"):  # a typo'd/unset var must fail loudly
+        _expand_env_refs({"k": "${DAST_MISSING}"})
+
+
 def test_missing_target_without_config_errors() -> None:
     result = runner.invoke(app, ["scan", "--i-have-authorization"])
     assert result.exit_code == 1
