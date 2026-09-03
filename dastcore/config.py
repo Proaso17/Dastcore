@@ -177,6 +177,7 @@ class ScanFile(BaseModel):
     time_budget: float | None = None
     openapi: str | None = None
     graphql: str | None = None
+    supabase_frontend: str | None = None  # front-end URL to mine for Supabase table names (RLS/authz)
     format: str | None = None
     output: str | None = None
     fail_on: str | None = None

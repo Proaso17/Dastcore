@@ -127,6 +127,7 @@ from dastcore.discovery.subdomains import (
     load_subdomain_wordlist,
     subdomain_recursion_depth,
 )
+from dastcore.discovery.supabase import SupabaseDiscoverer
 from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.discovery.tls_info import run_tls_checks
 from dastcore.discovery.vhosts import VhostDiscoverer, vhost_findings
@@ -802,6 +803,7 @@ async def _run_scan(
     ai_payloads: AiPayloadGenerator | None = None,
     on_finding: Callable[[Finding], None] | None = None,
     interactive: bool = False,
+    supabase_frontend: str = "",
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -1161,6 +1163,17 @@ async def _run_scan(
                 progress.status("Ingiriendo OpenAPI…")
                 for req in await phase("openapi-ingest", fetch_and_parse_openapi(client, openapi_url, target)):
                     discovered.setdefault(req.signature(), req)
+
+            if supabase_frontend:
+                # A Supabase project's OpenAPI schema is service_role-only, so the table list can't be
+                # read from the API. Mine the front-end bundle for `.from('<table>')` / `/rest/v1/<table>`
+                # instead, and probe each table (the authz detector then tests RLS anon-vs-authed).
+                progress.status("Minando el frontend de Supabase (tablas)…")
+                supa = SupabaseDiscoverer(client)
+                probes = await phase("supabase-discover", supa.discover(supabase_frontend, target))
+                for req in probes:
+                    discovered.setdefault(req.signature(), req)
+                progress.status(f"Supabase: {len(probes)} tabla(s) descubiertas para probar RLS/authz")
 
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")
@@ -1674,6 +1687,11 @@ def scan(
     ),
     openapi_url: str = typer.Option("", "--openapi", help="URL de un documento OpenAPI/Swagger a ingerir."),
     graphql_url: str = typer.Option("", "--graphql", help="URL de un endpoint GraphQL a introspeccionar."),
+    supabase_frontend: str = typer.Option(
+        "",
+        "--supabase-frontend",
+        help="URL del frontend de una app Supabase: mina sus tablas (.from()/rest/v1) para probar RLS/authz.",
+    ),
     stored: bool = typer.Option(
         False,
         "--stored",
@@ -2008,6 +2026,7 @@ def scan(
     time_budget = _pick(ctx, "time_budget", time_budget, scan_file.time_budget)
     openapi_url = _pick(ctx, "openapi_url", openapi_url, scan_file.openapi)
     graphql_url = _pick(ctx, "graphql_url", graphql_url, scan_file.graphql)
+    supabase_frontend = _pick(ctx, "supabase_frontend", supabase_frontend, scan_file.supabase_frontend)
     output_format = _pick(ctx, "output_format", output_format, scan_file.format).lower()
     output_path = _pick(ctx, "output_path", output_path, scan_file.output)
     fail_on = _pick(ctx, "fail_on", fail_on, scan_file.fail_on).lower()
@@ -2226,6 +2245,7 @@ def scan(
                     surface=surface,
                     ai_payloads=payload_generator,
                     interactive=interactive,
+                    supabase_frontend=supabase_frontend,
                 )
             )
     except SessionLoginError as exc:
