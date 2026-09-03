@@ -76,6 +76,33 @@ async def test_headless_no_dom_xss_false_positive_on_clean_page(vuln_app_url: st
     assert findings == []
 
 
+async def test_local_storage_injection_makes_the_spa_authenticate(vuln_app_url: str) -> None:
+    # Seed localStorage before the SPA boots (as for a Supabase session): the page then calls its API
+    # with the token, which the crawl captures — proving the browser rendered "logged in".
+    async with headless_engine(local_storage={"sb-test-auth-token": "SESSION-XYZ"}) as engine:
+        discovered = await engine.crawl(f"{vuln_app_url}/spa-localstorage")
+    urls = {req.url + "?" + "&".join(f"{k}={v}" for k, v in req.params.items()) for req in discovered}
+    assert any("/api/ls-echo" in u and "SESSION-XYZ" in u for u in urls), urls
+
+
+async def test_without_local_storage_the_spa_stays_logged_out(vuln_app_url: str) -> None:
+    async with headless_engine() as engine:  # no seeded session
+        discovered = await engine.crawl(f"{vuln_app_url}/spa-localstorage")
+    assert not any("/api/ls-echo" in req.url for req in discovered)  # the gated API call never fires
+
+
+def test_supabase_local_storage_only_for_supabase_form_login() -> None:
+    import asyncio
+
+    from dastcore.cli import _supabase_local_storage
+    from dastcore.config import AuthConfig, FormLoginConfig
+
+    # A non-Supabase / non-form auth yields nothing (feature is inert unless it applies).
+    assert asyncio.run(_supabase_local_storage(AuthConfig(type="none"))) == {}
+    plain = AuthConfig(type="form", form=FormLoginConfig(login_url="https://app.example.com/login"))
+    assert asyncio.run(_supabase_local_storage(plain)) == {}
+
+
 def test_is_dangerous_flags_destructive_labels_only() -> None:
     from dastcore.discovery.crawler_headless import _is_dangerous
 

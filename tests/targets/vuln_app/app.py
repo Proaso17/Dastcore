@@ -462,6 +462,23 @@ document.getElementById('danger').addEventListener('click', function(){ fetch('/
     def danger_deleted() -> Response:
         return jsonify({"deleted": True})  # must NOT be reached by the interactive crawl
 
+    @app.get("/spa-localstorage")
+    def spa_localstorage() -> Response:
+        # On load, reads a session from localStorage and calls an API with it — as a Supabase SPA does.
+        # If the crawler seeded localStorage, /api/ls-echo is reached with the token; otherwise it isn't.
+        return Response(
+            """<!doctype html><html><head><title>ls</title></head><body>
+<script>
+try { var t = localStorage.getItem('sb-test-auth-token');
+      if (t) { fetch('/api/ls-echo?token=' + encodeURIComponent(t)); } } catch(e){}
+</script></body></html>""",
+            mimetype="text/html",
+        )
+
+    @app.get("/api/ls-echo")
+    def ls_echo() -> Response:
+        return jsonify({"ok": True})
+
     @app.get("/api/spa-data")
     def spa_data() -> Response:
         # XHR endpoint only reachable by executing the page's JS. Not injectable.

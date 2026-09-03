@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import re
 import sys
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -1381,6 +1382,34 @@ async def _scan_with_optional_resume(
     return prior + in_band + oob + stored
 
 
+async def _supabase_local_storage(auth: AuthConfig) -> dict[str, str]:
+    """If ``auth`` is a Supabase form-login, log in and return the localStorage entry a Supabase SPA reads
+    (``sb-<ref>-auth-token`` = the session JSON), so the headless browser renders *logged in* and the
+    crawl reaches the authenticated views. Best-effort: any problem returns {} (falls back to token auth)."""
+    form = auth.form
+    if auth.type != "form" or form is None:
+        return {}
+    match = re.search(r"https?://([a-z0-9-]+)\.supabase\.co/auth/v1/token", form.login_url, re.IGNORECASE)
+    if not match:
+        return {}
+    ref = match.group(1)
+    headers = {"Content-Type": "application/json", **(form.login_headers or {})}
+    apikey = headers.get("apikey")
+    if apikey and "Authorization" not in headers:
+        headers["Authorization"] = f"Bearer {apikey}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(form.login_url, json=dict(form.credentials), headers=headers)
+        if resp.status_code >= 400:
+            return {}
+        session = resp.json()
+    except (httpx.HTTPError, ValueError):
+        return {}
+    if not isinstance(session, dict) or "access_token" not in session:
+        return {}
+    return {f"sb-{ref}-auth-token": _json.dumps(session)}
+
+
 async def _run_headless(
     config: ScanConfig, client: HttpClient, target: str, max_pages: int, user_agent: str = "", proxy: str = "",
     interactive: bool = False,
@@ -1400,6 +1429,9 @@ async def _run_headless(
         user_agent=user_agent or None,
         proxy=proxy or None,
         interactive=interactive,
+        # Seed a Supabase SPA's session into localStorage so the browser renders logged in (reaches the
+        # authenticated views/XHR that a token-in-header alone can't unlock in a client-rendered app).
+        local_storage=await _supabase_local_storage(config.auth),
     ) as engine:
         discovered = await engine.crawl(target)
         page_urls = [req.url for req in discovered if req.method == "GET"]

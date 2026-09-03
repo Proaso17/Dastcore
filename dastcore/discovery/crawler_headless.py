@@ -111,6 +111,7 @@ class HeadlessEngine:
         proxy: str | None = None,
         interactive: bool = False,
         max_clicks: int = 12,
+        local_storage: dict[str, str] | None = None,
     ) -> None:
         self._scope = ScopeChecker(scope)
         self._cookies = cookies or {}
@@ -127,6 +128,10 @@ class HeadlessEngine:
         # so a normal scan is unchanged; safe-click heuristics never touch destructive controls.
         self._interactive = interactive
         self._max_clicks = max(0, max_clicks)
+        # Seed the browser's localStorage before any page script runs, so a SPA that keeps its session
+        # there (Supabase, Firebase, many token-in-localStorage apps) renders *logged in* — the crawl then
+        # discovers the authenticated views/XHR. Empty = no change.
+        self._local_storage = dict(local_storage or {})
         # Route the browser through a proxy/VPN so its traffic exits from a trusted IP (bypasses WAF
         # IP-reputation blocks). Same proxy the HTTP client uses, so both engines share the exit IP.
         self._proxy = proxy
@@ -169,6 +174,13 @@ class HeadlessEngine:
         self._context = await self._browser.new_context(**context_kwargs)
         if self._stealth:
             await self._context.add_init_script(_STEALTH_INIT_JS)  # runs before any page script
+        if self._local_storage:
+            # Seed localStorage before the SPA boots, so it sees an existing session (renders logged in).
+            script = (
+                "(function(){try{var e=" + json.dumps(self._local_storage) + ";"
+                "for(var k in e){localStorage.setItem(k,e[k]);}}catch(_){}})();"
+            )
+            await self._context.add_init_script(script)
         if self._cookies and self._cookie_url:
             await self._context.add_cookies(
                 [{"name": name, "value": value, "url": self._cookie_url} for name, value in self._cookies.items()]
