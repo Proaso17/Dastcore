@@ -127,7 +127,7 @@ from dastcore.discovery.subdomains import (
     load_subdomain_wordlist,
     subdomain_recursion_depth,
 )
-from dastcore.discovery.supabase import SupabaseDiscoverer
+from dastcore.discovery.supabase import SupabaseDiscoverer, table_probes
 from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.discovery.tls_info import run_tls_checks
 from dastcore.discovery.vhosts import VhostDiscoverer, vhost_findings
@@ -804,6 +804,7 @@ async def _run_scan(
     on_finding: Callable[[Finding], None] | None = None,
     interactive: bool = False,
     supabase_frontend: str = "",
+    supabase_tables: Sequence[str] = (),
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -1164,16 +1165,24 @@ async def _run_scan(
                 for req in await phase("openapi-ingest", fetch_and_parse_openapi(client, openapi_url, target)):
                     discovered.setdefault(req.signature(), req)
 
-            if supabase_frontend:
+            if supabase_frontend or supabase_tables:
                 # A Supabase project's OpenAPI schema is service_role-only, so the table list can't be
-                # read from the API. Mine the front-end bundle for `.from('<table>')` / `/rest/v1/<table>`
-                # instead, and probe each table (the authz detector then tests RLS anon-vs-authed).
-                progress.status("Minando el frontend de Supabase (tablas)…")
-                supa = SupabaseDiscoverer(client)
-                probes = await phase("supabase-discover", supa.discover(supabase_frontend, target))
+                # read from the API. Recover it from the front-end bundle (`.from('<table>')` /
+                # `/rest/v1/<table>`) and/or an explicit list, then probe each table so the authz
+                # detector can test RLS anon-vs-authed.
+                progress.status("Descubriendo tablas de Supabase…")
+                probes: list[HttpRequest] = []
+                if supabase_frontend:
+                    supa = SupabaseDiscoverer(client)
+                    probes.extend(await phase("supabase-discover", supa.discover(supabase_frontend, target)))
+                if supabase_tables:
+                    probes.extend(table_probes(target, set(supabase_tables)))
+                added = 0
                 for req in probes:
-                    discovered.setdefault(req.signature(), req)
-                progress.status(f"Supabase: {len(probes)} tabla(s) descubiertas para probar RLS/authz")
+                    if client.is_in_scope(req.url):
+                        discovered.setdefault(req.signature(), req)
+                        added += 1
+                progress.status(f"Supabase: {added} tabla(s) para probar RLS/authz")
 
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")
@@ -2027,6 +2036,7 @@ def scan(
     openapi_url = _pick(ctx, "openapi_url", openapi_url, scan_file.openapi)
     graphql_url = _pick(ctx, "graphql_url", graphql_url, scan_file.graphql)
     supabase_frontend = _pick(ctx, "supabase_frontend", supabase_frontend, scan_file.supabase_frontend)
+    supabase_tables = scan_file.supabase_tables or []  # config-file only: an explicit table list to probe
     output_format = _pick(ctx, "output_format", output_format, scan_file.format).lower()
     output_path = _pick(ctx, "output_path", output_path, scan_file.output)
     fail_on = _pick(ctx, "fail_on", fail_on, scan_file.fail_on).lower()
@@ -2246,6 +2256,7 @@ def scan(
                     ai_payloads=payload_generator,
                     interactive=interactive,
                     supabase_frontend=supabase_frontend,
+                    supabase_tables=supabase_tables,
                 )
             )
     except SessionLoginError as exc:

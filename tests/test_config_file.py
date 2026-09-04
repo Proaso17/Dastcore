@@ -27,6 +27,18 @@ def test_scan_file_model_accepts_full_config(vuln_app_url: str) -> None:
     assert sf.concurrency == 4
 
 
+def test_scan_file_accepts_supabase_fields() -> None:
+    sf = ScanFile.model_validate(
+        {
+            "target": "https://x.supabase.co/rest/v1/",
+            "supabase_frontend": "https://app.example.com",
+            "supabase_tables": ["profiles", "orders"],
+        }
+    )
+    assert sf.supabase_frontend == "https://app.example.com"
+    assert sf.supabase_tables == ["profiles", "orders"]
+
+
 def test_scan_file_rejects_unknown_keys() -> None:
     import pytest
     from pydantic import ValidationError

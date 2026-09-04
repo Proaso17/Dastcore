@@ -178,6 +178,7 @@ class ScanFile(BaseModel):
     openapi: str | None = None
     graphql: str | None = None
     supabase_frontend: str | None = None  # front-end URL to mine for Supabase table names (RLS/authz)
+    supabase_tables: list[str] | None = None  # explicit Supabase tables to probe (bypasses front-end mining)
     format: str | None = None
     output: str | None = None
     fail_on: str | None = None
