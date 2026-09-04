@@ -898,7 +898,7 @@ async def _run_scan(
             )
             failed_phases.append(name)
             return []
-        if result and isinstance(result[0], Finding):
+        if isinstance(result, list) and result and isinstance(result[0], Finding):
             if sink is not None:
                 sink.write(result)  # persist findings the moment the check produces them
             if on_finding is not None:
@@ -1221,15 +1221,22 @@ async def _run_scan(
                 # the authz detector can test RLS anon-vs-authed. Auto-runs on any *.supabase.co target.
                 progress.status("Perfilando Supabase (GraphQL introspection + enum PostgREST)…")
                 supa = SupabaseDiscoverer(client)
-                supa_prof = await phase(
-                    "supabase-profile",
-                    supa.profile(
+                # profile() returns a SupabaseProfile (not a Finding list), so it isn't wrapped in phase();
+                # isolate its errors here so a profiling hiccup never aborts the whole scan.
+                try:
+                    supa_prof = await supa.profile(
                         target,
                         frontend_url=supabase_frontend,
                         graphql_url=graphql_url_for(target),
                         extra_tables=tuple(supabase_tables),
-                    ),
-                )
+                    )
+                except BudgetExceededError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — isolate: a profiling error must not abort the scan
+                    _scan_log.warning(
+                        "Perfilado Supabase omitido por un error: %s: %s", type(exc).__name__, exc, exc_info=True
+                    )
+                    supa_prof = SupabaseProfile()
                 added = 0
                 for req in supa_prof.probes:
                     if client.is_in_scope(req.url):

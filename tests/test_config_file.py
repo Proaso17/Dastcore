@@ -39,6 +39,28 @@ def test_scan_file_accepts_supabase_fields() -> None:
     assert sf.supabase_tables == ["profiles", "orders"]
 
 
+def test_supabase_profiling_block_runs_and_emits_coverage_finding(vuln_app_url: str, tmp_path) -> None:
+    # Regression: profile() returns a SupabaseProfile (not a Finding list). The scan must handle that
+    # and emit the info coverage finding — not crash with "'SupabaseProfile' object is not subscriptable".
+    cfg = tmp_path / "scan.yaml"
+    cfg.write_text(
+        json.dumps(
+            {
+                "target": vuln_app_url,
+                "engine": "http",
+                "rps": 90,
+                "fail_on": "none",
+                "supabase_tables": ["zzz_probe"],  # forces the Supabase profiling block on a local target
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["scan", "--config", str(cfg), "--i-have-authorization", "--quiet", "-f", "json"])
+    assert result.exit_code == 0, result.stdout
+    data = json.loads(result.stdout)
+    assert any("supabase" in json.dumps(f).lower() for f in data), "supabase coverage finding missing"
+
+
 def test_scan_file_rejects_unknown_keys() -> None:
     import pytest
     from pydantic import ValidationError
