@@ -365,11 +365,16 @@ async def _cleanup_created_rows(client: HttpClient, base: str, table: str, body:
                 pass
 
 
-async def probe_write_rls(client: HttpClient, rest_base: str, tables: set[str], *, identity: str = "anon") -> list[Finding]:
+async def probe_write_rls(
+    client: HttpClient, rest_base: str, tables: set[str], *, identity: str = "anon"
+) -> tuple[list[Finding], int]:
     """Safely test whether ``identity`` (whatever session ``client`` carries) can INSERT into each table.
-    Returns a finding per writable table. See the module note above for the safety model."""
+    Returns (findings, n_conclusive) — a finding per writable table, and how many tables gave a
+    definitive answer (blocked or writable; inconclusive/errored ones aren't counted). See the module
+    note above for the safety model."""
     base = _rest_base(rest_base)
     findings: list[Finding] = []
+    tested = 0
     for table in sorted(tables):
         url = f"{base}/{table}"
         if not client.is_in_scope(url):
@@ -385,14 +390,17 @@ async def probe_write_rls(client: HttpClient, rest_base: str, tables: set[str], 
         body = resp.text or ""
         low = body.lower()
         if resp.status_code in (401, 403) or any(s in low for s in _RLS_DENIED):
-            continue  # RLS refused the write → secure
+            tested += 1  # conclusive: RLS refused the write → secure
+            continue
         if resp.status_code == 201:  # a row was actually inserted → clean it up, then flag
             await _cleanup_created_rows(client, base, table, body)
             findings.append(_write_finding(url, table, identity, resp.status_code, body, created=True))
+            tested += 1
         elif resp.status_code in (400, 409, 422) and any(s in low for s in _WRITE_AUTHORIZED_ERR):
             findings.append(_write_finding(url, table, identity, resp.status_code, body, created=False))
-        # any other response (e.g. 400 PGRST parse/column errors) is inconclusive → no finding
-    return findings
+            tested += 1
+        # any other response (e.g. 400 PGRST parse/column errors) is inconclusive → not counted
+    return findings, tested
 
 
 # Cross-user BOLA probe ----------------------------------------------------------------------------
@@ -454,10 +462,13 @@ def _bola_finding(url: str, table: str, name_a: str, name_b: str, leaked: list[s
 
 async def probe_cross_user_bola(
     client_a: HttpClient, client_b: HttpClient, rest_base: str, tables: set[str], *, name_a: str, name_b: str
-) -> list[Finding]:
-    """Test whether identity A can read identity B's own rows by id (see the module note above)."""
+) -> tuple[list[Finding], int]:
+    """Test whether identity A can read identity B's own rows by id (see the module note above).
+    Returns (findings, n_comparable) — a finding per leaking table, and how many tables actually had
+    B-private rows for A to try (0 means the test had nothing to compare, so 'no leak' isn't a signal)."""
     base = _rest_base(rest_base)
     findings: list[Finding] = []
+    comparable = 0
     for table in sorted(tables):
         url = f"{base}/{table}"
         a_ids = await _read_ids(client_a, base, table)
@@ -467,8 +478,9 @@ async def probe_cross_user_bola(
         private_to_b = [i for i in b_ids if i not in set(a_ids)][:3]  # rows B sees that A's listing doesn't
         if not private_to_b:
             continue  # collection isn't per-user-filtered here (RLS-off is caught by the read/authz test)
+        comparable += 1
         got = await _read_ids(client_a, base, table, id_filter=private_to_b)
         leaked = [i for i in (got or []) if i in private_to_b]
         if leaked:
             findings.append(_bola_finding(url, table, name_a, name_b, leaked))
-    return findings
+    return findings, comparable

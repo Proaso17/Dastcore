@@ -633,7 +633,9 @@ async def _run_supabase_write_test(
     """Opt-in write-side RLS test: for each configured identity (or the main session), probe whether it
     can INSERT into each discovered table. Safe (see probe_write_rls) but mutating in the worst case, so
     it only runs when explicitly enabled."""
-    findings: list[Finding] = []
+    vulns: list[Finding] = []
+    identities_probed = 0
+    tables_tested = 0
     async with AsyncExitStack() as stack:
         identity_cfgs = config.identities or [Identity(name=config.auth.type or "sesión", auth=config.auth)]
         for identity_cfg in identity_cfgs:
@@ -642,8 +644,14 @@ async def _run_supabase_write_test(
             except Exception as exc:  # noqa: BLE001 — a bad identity is reported by authz; just skip it here
                 _scan_log.warning("write-rls: identidad '%s' no autenticó: %s", identity_cfg.name, exc)
                 continue
-            findings.extend(await probe_write_rls(client, rest_base, tables, identity=identity_cfg.name))
-    return findings
+            f, tested = await probe_write_rls(client, rest_base, tables, identity=identity_cfg.name)
+            vulns.extend(f)
+            tables_tested = max(tables_tested, tested)
+            identities_probed += 1
+    result: list[Finding] = list(vulns)
+    if identities_probed:  # emit coverage even with 0 vulns, so the report documents what was tested
+        result.append(_supabase_write_coverage_finding(rest_base, tables_tested, identities_probed, len(vulns)))
+    return result
 
 
 _USER_AUTH_TYPES = ("form", "oauth2", "oauth2_pkce", "bearer")  # a distinct logged-in user (not the anon key)
@@ -658,7 +666,9 @@ async def _run_supabase_bola(config: ScanConfig, rest_base: str, tables: set[str
     users = [idc for idc in config.identities if idc.auth.type in _USER_AUTH_TYPES]
     if len(users) < 2:
         return []
-    findings: list[Finding] = []
+    vulns: list[Finding] = []
+    pairs = 0
+    comparable_total = 0
     async with AsyncExitStack() as stack:
         clients: dict[str, HttpClient] = {}
         for idc in users:
@@ -668,12 +678,16 @@ async def _run_supabase_bola(config: ScanConfig, rest_base: str, tables: set[str
                 _scan_log.warning("bola: identidad '%s' no autenticó: %s", idc.name, exc)
         names = [idc.name for idc in users if idc.name in clients]
         for name_a, name_b in itertools.permutations(names, 2):
-            findings.extend(
-                await probe_cross_user_bola(
-                    clients[name_a], clients[name_b], rest_base, tables, name_a=name_a, name_b=name_b
-                )
+            f, comparable = await probe_cross_user_bola(
+                clients[name_a], clients[name_b], rest_base, tables, name_a=name_a, name_b=name_b
             )
-    return findings
+            vulns.extend(f)
+            comparable_total += comparable
+            pairs += 1
+    result: list[Finding] = list(vulns)
+    if pairs:  # BOLA actually ran (≥2 users authenticated) → document coverage, incl. "nothing to compare"
+        result.append(_supabase_bola_coverage_finding(rest_base, comparable_total, pairs, len(vulns)))
+    return result
 
 
 async def _prove_impact_isolated(client: HttpClient, findings: list[Finding]) -> list[Finding]:
@@ -773,6 +787,63 @@ def _supabase_coverage_finding(target: str, prof: SupabaseProfile) -> Finding:
         request=request,
         response=HttpResponse(status_code=0, url=target, text=detail),
         remediation=remediation,
+    )
+
+
+def _supabase_write_coverage_finding(target: str, n_tested: int, n_identities: int, n_writable: int) -> Finding:
+    """Info advisory documenting the write-side RLS test, so the report itemizes what was tried."""
+    request = HttpRequest(method="POST", url=target)
+    verdict = "sin tablas escribibles" if n_writable == 0 else f"{n_writable} tabla(s) escribible(s)"
+    detail = (
+        f"RLS de escritura: INSERT probado de forma concluyente en {n_tested} tabla(s) por "
+        f"{n_identities} identidad(es); {verdict}."
+    )
+    return Finding(
+        id="supabase-write-coverage",
+        rule_id="supabase-write-profile",
+        name=f"Cobertura de escritura Supabase: {n_tested} tabla(s) probadas, {n_writable} escribible(s)",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="body", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="status", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation="Documenta la cobertura del test de escritura. 0 escribibles = ninguna identidad pudo INSERT.",
+    )
+
+
+def _supabase_bola_coverage_finding(target: str, n_comparable: int, n_pairs: int, n_leaks: int) -> Finding:
+    """Info advisory documenting the cross-user BOLA test — crucially, whether it had anything to compare."""
+    request = HttpRequest(method="GET", url=target)
+    if n_comparable == 0:
+        detail = (
+            f"BOLA user-vs-user: entre {n_pairs} par(es) de usuarios no se hallaron filas privadas de uno que "
+            "el otro no viera, así que no hubo nada que comparar — el 'sin fuga' NO es concluyente aquí."
+        )
+        name = "Cobertura BOLA Supabase: 0 comparaciones posibles (no concluyente)"
+    else:
+        verdict = "sin fugas" if n_leaks == 0 else f"{n_leaks} fuga(s)"
+        detail = (
+            f"BOLA user-vs-user: {n_comparable} tabla(s) con filas propias de otro usuario comprobadas entre "
+            f"{n_pairs} par(es) de usuarios; {verdict}."
+        )
+        name = f"Cobertura BOLA Supabase: {n_comparable} comparación(es), {n_leaks} fuga(s)"
+    return Finding(
+        id="supabase-bola-coverage",
+        rule_id="supabase-bola-profile",
+        name=name,
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="query", name="id", base_value="", request_template=request),
+        evidence=[Evidence(type="differential", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation=(
+            "Documenta la cobertura del BOLA. Si 0 comparaciones, crea datos en ambas cuentas de prueba "
+            "para que haya filas privadas que comparar y el resultado sea concluyente."
+        ),
     )
 
 

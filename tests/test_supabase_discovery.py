@@ -252,9 +252,10 @@ async def test_probe_write_rls_classifies_and_cleans_up() -> None:
         "quiet": (400, '{"code":"PGRST204","message":"Could not find the column"}'),  # inconclusive
     }
     client = _WriteClient(responses)
-    findings = await probe_write_rls(
+    findings, tested = await probe_write_rls(
         client, "https://x.supabase.co/rest/v1/", {"orders", "public_notes", "leads", "quiet"}, identity="anon"
     )
+    assert tested == 3  # orders(blocked) + public_notes(created) + leads(authorized); quiet is inconclusive
     ids = {f.id for f in findings}
     assert "supabase-write-rls:public_notes:anon" in ids  # 201 created
     assert "supabase-write-rls:leads:anon" in ids  # 23502 → write authorized, data invalid
@@ -303,7 +304,10 @@ class _BolaClient:
 async def test_cross_user_bola_detects_id_leak() -> None:
     a = _BolaClient(own_ids={"notes": ["a1"]}, leaks={"notes": ["b1"]})  # A can reach B's row b1 by id → BOLA
     b = _BolaClient(own_ids={"notes": ["b1"]})
-    findings = await probe_cross_user_bola(a, b, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B")
+    findings, comparable = await probe_cross_user_bola(
+        a, b, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B"
+    )
+    assert comparable == 1
     assert len(findings) == 1
     assert findings[0].rule_id == "supabase-bola"
     assert findings[0].severity == "high"
@@ -313,7 +317,10 @@ async def test_cross_user_bola_detects_id_leak() -> None:
 async def test_cross_user_bola_no_finding_when_isolated() -> None:
     a = _BolaClient(own_ids={"notes": ["a1"]})  # A cannot reach b1 → RLS correctly isolates
     b = _BolaClient(own_ids={"notes": ["b1"]})
-    findings = await probe_cross_user_bola(a, b, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B")
+    findings, comparable = await probe_cross_user_bola(
+        a, b, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B"
+    )
+    assert comparable == 1  # there WAS a B-private row to test; A just couldn't reach it → secure
     assert findings == []
 
 
@@ -326,7 +333,26 @@ async def test_cross_user_bola_skips_table_without_id_column() -> None:
             return SimpleNamespace(status_code=400, text='{"code":"42703","message":"column notes.id does not exist"}')
 
     client = _NoIdClient()
-    findings = await probe_cross_user_bola(
+    findings, comparable = await probe_cross_user_bola(
         client, client, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B"
     )
     assert findings == []  # no id column → id-based BOLA not applicable, no false positive
+    assert comparable == 0  # nothing was comparable → 'no leak' is not a signal here
+
+
+def test_write_coverage_finding_reports_counts() -> None:
+    from dastcore.cli import _supabase_write_coverage_finding
+
+    f = _supabase_write_coverage_finding("https://x.supabase.co/rest/v1/", n_tested=13, n_identities=2, n_writable=0)
+    assert f.severity == "info"
+    assert f.rule_id == "supabase-write-profile"
+    assert "13" in f.name and "0 escribible" in f.name
+
+
+def test_bola_coverage_finding_flags_non_conclusive_when_nothing_to_compare() -> None:
+    from dastcore.cli import _supabase_bola_coverage_finding
+
+    none = _supabase_bola_coverage_finding("https://x.supabase.co/rest/v1/", n_comparable=0, n_pairs=2, n_leaks=0)
+    assert "no concluyente" in none.name.lower()
+    ran = _supabase_bola_coverage_finding("https://x.supabase.co/rest/v1/", n_comparable=5, n_pairs=2, n_leaks=0)
+    assert "5 comparaci" in ran.name and ran.severity == "info"
