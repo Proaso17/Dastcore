@@ -11,6 +11,7 @@ from dastcore.discovery.supabase import (
     is_supabase_project,
     mine_supabase_refs,
     probe_cross_user_bola,
+    probe_supabase_aux,
     probe_write_rls,
     table_probes,
 )
@@ -33,6 +34,51 @@ def test_mine_extracts_tables_rpcs_and_ref() -> None:
     assert refs.rpcs == {"get_dashboard_stats"}
     assert refs.project_refs == {"abcdefghij1234567890"}
     assert refs.is_supabase is True
+
+
+def _make_jwt(payload: dict) -> str:
+    import base64
+
+    def seg(obj) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    return f"{seg({'alg': 'HS256', 'typ': 'JWT'})}.{seg(payload)}.sig_placeholder_abcdef"
+
+
+def test_mine_detects_service_role_key_and_ignores_anon() -> None:
+    svc = _make_jwt({"role": "service_role", "iss": "supabase", "ref": "abcdefghij1234567890"})
+    anon = _make_jwt({"role": "anon", "iss": "supabase"})
+    bundle = f'createClient("https://abcdefghij1234567890.supabase.co","{anon}"); const admin = "{svc}";'
+    refs = mine_supabase_refs(bundle)
+    assert len(refs.service_role_keys) == 1  # only the service_role JWT, never the (public) anon key
+    assert all("…" in k for k in refs.service_role_keys)  # stored redacted, not the full token
+
+
+def test_service_role_finding_is_critical() -> None:
+    from dastcore.cli import _supabase_service_role_finding
+
+    finding = _supabase_service_role_finding("https://x.supabase.co/rest/v1/", {"eyJhbGci…abc123"})
+    assert finding.severity == "critical"
+    assert finding.rule_id == "supabase-service-role"
+    assert "service_role" in finding.name.lower() or "service_role" in finding.evidence[0].data
+
+
+def test_mine_extracts_edge_functions() -> None:
+    bundle = (
+        'createClient("https://abcdefghij1234567890.supabase.co","k"); '
+        'supabase.functions.invoke("send-email"); fetch("/functions/v1/charge");'
+    )
+    refs = mine_supabase_refs(bundle)
+    assert refs.edge_functions == {"send-email", "charge"}
+
+
+def test_functions_finding_lists_surface() -> None:
+    from dastcore.cli import _supabase_functions_finding
+
+    finding = _supabase_functions_finding("https://x.supabase.co/rest/v1/", {"get_stats"}, {"send-email"})
+    assert finding.severity == "info"
+    assert finding.rule_id == "supabase-functions"
+    assert "get_stats" in finding.evidence[0].data and "send-email" in finding.evidence[0].data
 
 
 def test_mine_ignores_from_calls_without_supabase_context() -> None:
@@ -338,6 +384,45 @@ async def test_cross_user_bola_skips_table_without_id_column() -> None:
     )
     assert findings == []  # no id column → id-based BOLA not applicable, no false positive
     assert comparable == 0  # nothing was comparable → 'no leak' is not a signal here
+
+
+class _AuxClient:
+    """Fake client answering Supabase Storage/Auth GETs by URL suffix."""
+
+    def __init__(self, routes):
+        self.routes = routes  # url-suffix -> (status, text)
+
+    def is_in_scope(self, url: str) -> bool:
+        return True
+
+    async def get(self, url: str, timeout: float = 8.0, retries: int = 0):
+        for suffix, (status, text) in self.routes.items():
+            if url.endswith(suffix):
+                return SimpleNamespace(status_code=status, text=text)
+        return SimpleNamespace(status_code=404, text="{}")
+
+
+async def test_probe_supabase_aux_flags_public_bucket_and_open_signup() -> None:
+    routes = {
+        "/storage/v1/bucket": (
+            200,
+            json.dumps([{"name": "avatars", "public": True}, {"name": "private", "public": False}]),
+        ),
+        "/auth/v1/settings": (200, json.dumps({"disable_signup": False, "mailer_autoconfirm": True})),
+    }
+    findings = await probe_supabase_aux(_AuxClient(routes), "https://abcdefghij1234567890.supabase.co/rest/v1/")
+    ids = {f.id for f in findings}
+    assert {"supabase-storage-listable", "supabase-storage-public", "supabase-open-signup"} <= ids
+    assert next(f for f in findings if f.id == "supabase-storage-public").severity == "medium"
+
+
+async def test_probe_supabase_aux_quiet_when_locked_down() -> None:
+    routes = {
+        "/storage/v1/bucket": (401, "{}"),  # not listable
+        "/auth/v1/settings": (200, json.dumps({"disable_signup": True, "mailer_autoconfirm": False})),
+    }
+    findings = await probe_supabase_aux(_AuxClient(routes), "https://abcdefghij1234567890.supabase.co/rest/v1/")
+    assert findings == []
 
 
 def test_write_coverage_finding_reports_counts() -> None:

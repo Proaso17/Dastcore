@@ -133,6 +133,7 @@ from dastcore.discovery.supabase import (
     graphql_url_for,
     is_supabase_project,
     probe_cross_user_bola,
+    probe_supabase_aux,
     probe_write_rls,
 )
 from dastcore.discovery.tech_paths import discover_tech_paths
@@ -790,6 +791,62 @@ def _supabase_coverage_finding(target: str, prof: SupabaseProfile) -> Finding:
     )
 
 
+def _supabase_service_role_finding(target: str, keys: set[str]) -> Finding:
+    """CRITICAL: a service_role key was found in the front-end bundle. That key bypasses RLS entirely,
+    so anyone reading the JavaScript gains full read/write to the whole database."""
+    request = HttpRequest(method="GET", url=target)
+    detail = (
+        f"Se encontró {len(keys)} clave(s) `service_role` de Supabase en el bundle del frontend "
+        f"({', '.join(sorted(keys))}). Esa clave IGNORA el RLS: cualquiera que lea el JavaScript tiene "
+        "lectura/escritura TOTAL de la base de datos."
+    )
+    return Finding(
+        id="supabase-service-role-exposed",
+        rule_id="supabase-service-role",
+        name="CRÍTICO: clave service_role de Supabase expuesta en el frontend (bypass total de RLS)",
+        severity="critical",
+        cwe="CWE-798",
+        owasp="API2:2023",
+        injection_point=InjectionPoint(location="header", name="apikey", base_value="", request_template=request),
+        evidence=[Evidence(type="status", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation=(
+            "Quita la clave service_role del frontend de inmediato y ROTA la clave en Supabase "
+            "(Settings → API). El frontend solo debe usar la clave anon (o publishable). Nunca embebas "
+            "service_role en código que llega al navegador."
+        ),
+    )
+
+
+def _supabase_functions_finding(target: str, rpcs: set[str], edge: set[str]) -> Finding:
+    """Info surface: the RPC / Edge Functions the front-end invokes — listed for manual review, not
+    invoked (calling an unknown function could have side effects)."""
+    request = HttpRequest(method="GET", url=target)
+    parts = []
+    if rpcs:
+        parts.append(f"RPC ({len(rpcs)}): {', '.join(sorted(rpcs)[:20])}")
+    if edge:
+        parts.append(f"Edge Functions ({len(edge)}): {', '.join(sorted(edge)[:20])}")
+    detail = "Funciones que el frontend invoca (revisar manualmente authz/SECURITY DEFINER). " + " · ".join(parts)
+    return Finding(
+        id="supabase-functions",
+        rule_id="supabase-functions",
+        name=f"Supabase: {len(rpcs)} RPC + {len(edge)} Edge Function(s) descubiertas (revisar)",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="path", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="status", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation=(
+            "Revisa cada función: las RPC SECURITY DEFINER y las Edge Functions deben validar la "
+            "autorización del llamante; no confíes en que solo el frontend las invoque."
+        ),
+    )
+
+
 def _supabase_write_coverage_finding(target: str, n_tested: int, n_identities: int, n_writable: int) -> Finding:
     """Info advisory documenting the write-side RLS test, so the report itemizes what was tried."""
     request = HttpRequest(method="POST", url=target)
@@ -1405,6 +1462,14 @@ async def _run_scan(
                         discovered.setdefault(req.signature(), req)
                         added += 1
                 extra_findings.append(_supabase_coverage_finding(target, supa_prof))  # self-documenting report
+                if supa_prof.service_role_exposed:  # a leaked service_role key = full RLS bypass (critical)
+                    extra_findings.append(_supabase_service_role_finding(target, supa_prof.service_role_exposed))
+                # GET-only surface probes (Storage buckets, Auth signup config) — safe, auto-run.
+                extra_findings.extend(await phase("supabase-aux", probe_supabase_aux(client, target)))
+                if supa_prof.rpcs or supa_prof.edge_functions:  # surface the functions for manual review
+                    extra_findings.append(
+                        _supabase_functions_finding(target, supa_prof.rpcs, supa_prof.edge_functions)
+                    )
                 progress.status(f"Supabase: {added} tabla(s) confirmadas para probar RLS/authz")
                 if supabase_write_test and supa_prof.tables:
                     # Opt-in: also test write-side RLS (safe INSERT probe). Off by default because it can

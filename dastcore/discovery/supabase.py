@@ -19,6 +19,7 @@ Extraction is gated on the bundle actually referencing Supabase (a ``*.supabase.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 from dataclasses import dataclass, field
@@ -36,8 +37,29 @@ _FROM_CALL = re.compile(r"""(?<!Array)(?<!Buffer)\.from\(\s*['"]([a-zA-Z_][a-zA-
 _RPC_CALL = re.compile(r"""\.rpc\(\s*['"]([a-zA-Z_][a-zA-Z0-9_]*)['"]""")
 # REST URLs baked into the bundle: /rest/v1/<table> (any trailing ?select=… is ignored — we add ours).
 _REST_PATH = re.compile(r"""/rest/v1/([a-zA-Z_][a-zA-Z0-9_]*)""")
+# Edge Functions the front-end invokes: functions.invoke('name') or a baked /functions/v1/<name> URL.
+_EDGE_INVOKE = re.compile(r"""\.invoke\(\s*['"]([a-zA-Z0-9_-]+)['"]""")
+_EDGE_PATH = re.compile(r"""/functions/v1/([a-zA-Z0-9_-]+)""")
 # A Supabase project host; its presence confirms this really is a Supabase app (ref = 20 chars).
 _SUPABASE_HOST = re.compile(r"""https?://([a-z0-9]{20})\.supabase\.co""")
+# A JWT (three base64url segments). Supabase keys are JWTs; the anon key is meant to be public, but a
+# `service_role` key in the front-end is a full RLS bypass — the single worst Supabase misconfig.
+_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
+_PRIVILEGED_ROLES = frozenset({"service_role"})
+
+
+def _jwt_role(token: str) -> str | None:
+    """Decode a JWT's payload (no signature check) and return its ``role`` claim, if any."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)  # restore base64 padding
+        return json.loads(base64.urlsafe_b64decode(payload)).get("role")
+    except Exception:  # noqa: BLE001 — a non-JWT / malformed token simply has no role
+        return None
+
+
+def _redact(token: str) -> str:
+    return f"{token[:14]}…{token[-6:]}" if len(token) > 24 else "…"
 
 # PostgREST virtual/reserved path words that are not user tables.
 _NON_TABLE = frozenset({"rpc", "rest", "v1"})
@@ -94,6 +116,8 @@ class SupabaseRefs:
     tables: set[str] = field(default_factory=set)
     rpcs: set[str] = field(default_factory=set)
     project_refs: set[str] = field(default_factory=set)
+    service_role_keys: set[str] = field(default_factory=set)  # redacted service_role JWTs found in the bundle
+    edge_functions: set[str] = field(default_factory=set)  # Supabase Edge Function names the bundle invokes
 
     @property
     def is_supabase(self) -> bool:
@@ -113,13 +137,29 @@ def mine_supabase_refs(text: str) -> SupabaseRefs:
 
     tables = set(rest_tables)
     rpcs: set[str] = set()
+    edge = {m.group(1) for m in _EDGE_PATH.finditer(text)}
     if is_supabase:
         tables |= {m.group(1) for m in _FROM_CALL.finditer(text)}
         rpcs = {m.group(1) for m in _RPC_CALL.finditer(text)}
+        edge |= {m.group(1) for m in _EDGE_INVOKE.finditer(text)}
 
     refs.tables = {t for t in tables if t not in _NON_TABLE}
     refs.rpcs = {r for r in rpcs if r not in _NON_TABLE}
+    refs.edge_functions = edge
+    # A leaked service_role key = full RLS bypass. The anon key is a JWT too, but role=anon is expected.
+    refs.service_role_keys = {
+        _redact(tok) for tok in _JWT_RE.findall(text) if _jwt_role(tok) in _PRIVILEGED_ROLES
+    }
     return refs
+
+
+def _merge_refs(into: SupabaseRefs, found: SupabaseRefs) -> None:
+    """Union every field of ``found`` into ``into`` (used to accumulate refs across bundles)."""
+    into.tables |= found.tables
+    into.rpcs |= found.rpcs
+    into.project_refs |= found.project_refs
+    into.service_role_keys |= found.service_role_keys
+    into.edge_functions |= found.edge_functions
 
 
 def _rest_base(url: str) -> str:
@@ -152,6 +192,9 @@ class SupabaseProfile:
     frontend_tables: set[str] = field(default_factory=set)
     introspection_enabled: bool = False  # pg_graphql introspection returned a schema
     oracle_blind: bool = False  # PostgREST oracle couldn't distinguish existence (wordlist untrusted)
+    service_role_exposed: set[str] = field(default_factory=set)  # redacted service_role keys in the front-end
+    rpcs: set[str] = field(default_factory=set)  # RPC function names mined from the front-end
+    edge_functions: set[str] = field(default_factory=set)  # Edge Function names mined from the front-end
 
 
 class SupabaseDiscoverer:
@@ -188,19 +231,13 @@ class SupabaseDiscoverer:
         html = await self._get(origin)
         if html is None:
             return refs
-        found = mine_supabase_refs(html)
-        refs.tables |= found.tables
-        refs.rpcs |= found.rpcs
-        refs.project_refs |= found.project_refs
+        _merge_refs(refs, mine_supabase_refs(html))
         for script_url in self._script_urls(html, origin):
             if not self._client.is_in_scope(script_url):
                 continue
             js = await self._get(script_url)
             if js:
-                found = mine_supabase_refs(js)
-                refs.tables |= found.tables
-                refs.rpcs |= found.rpcs
-                refs.project_refs |= found.project_refs
+                _merge_refs(refs, mine_supabase_refs(js))
         return refs
 
     async def discover(self, frontend_url: str, rest_base: str) -> list[HttpRequest]:
@@ -286,7 +323,11 @@ class SupabaseDiscoverer:
             prof.graphql_tables = await self.introspect_graphql_tables(graphql_url)
             prof.introspection_enabled = bool(prof.graphql_tables)
         if frontend_url:
-            prof.frontend_tables = (await self.collect_refs(frontend_url)).tables
+            fe_refs = await self.collect_refs(frontend_url)
+            prof.frontend_tables = fe_refs.tables
+            prof.service_role_exposed = fe_refs.service_role_keys
+            prof.rpcs = fe_refs.rpcs
+            prof.edge_functions = fe_refs.edge_functions
 
         exact = {t for t in (set(extra_tables) | prof.graphql_tables | prof.frontend_tables) if t not in _NON_TABLE}
         candidates = set(exact)
@@ -484,3 +525,93 @@ async def probe_cross_user_bola(
         if leaked:
             findings.append(_bola_finding(url, table, name_a, name_b, leaked))
     return findings, comparable
+
+
+# Auxiliary Supabase surface (Storage / Auth) ------------------------------------------------------
+# Beyond the PostgREST tables, a Supabase project exposes Storage (`/storage/v1`) and Auth
+# (`/auth/v1`). These GET-only probes surface data/config exposure without mutating anything.
+
+
+async def _get_json(client: HttpClient, url: str) -> object | None:
+    try:
+        resp = await client.get(url, timeout=8.0, retries=0)
+    except (OutOfScopeError, BudgetExceededError):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    if resp.status_code >= 400:
+        return None
+    try:
+        return json.loads(resp.text)
+    except ValueError:
+        return None
+
+
+def _aux_finding(id_: str, url: str, name: str, severity: str, detail: str, remediation: str) -> Finding:
+    request = HttpRequest(method="GET", url=url)
+    return Finding(
+        id=id_,
+        rule_id="supabase-surface",
+        name=name,
+        severity=severity,
+        cwe="CWE-200",
+        owasp="API7:2023",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="status", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=200, url=url, text=detail[:300]),
+        remediation=remediation,
+    )
+
+
+async def probe_supabase_aux(client: HttpClient, project_url: str) -> list[Finding]:
+    """GET-only probes of Supabase's Storage and Auth surface (no mutation). Flags listable/public
+    storage buckets and open self-signup — the common misconfigs outside the REST tables."""
+    ref = is_supabase_project(project_url)
+    if not ref:
+        return []
+    base = f"https://{ref}.supabase.co"
+    findings: list[Finding] = []
+
+    # Storage: can this identity list the project's buckets? Are any public?
+    buckets = await _get_json(client, f"{base}/storage/v1/bucket")
+    if isinstance(buckets, list) and buckets:
+        names = [b.get("name") for b in buckets if isinstance(b, dict) and b.get("name")]
+        findings.append(
+            _aux_finding(
+                "supabase-storage-listable",
+                f"{base}/storage/v1/bucket",
+                f"Supabase Storage: {len(names)} bucket(s) listables por esta identidad",
+                "low",
+                f"El endpoint de Storage devolvió la lista de buckets: {', '.join(map(str, names[:15]))}.",
+                "Restringe el listado de buckets con políticas de Storage; no debería ser enumerable por anon.",
+            )
+        )
+        public = [b.get("name") for b in buckets if isinstance(b, dict) and b.get("public")]
+        if public:
+            findings.append(
+                _aux_finding(
+                    "supabase-storage-public",
+                    f"{base}/storage/v1/bucket",
+                    f"Supabase Storage: bucket(s) público(s) — {', '.join(map(str, public[:15]))}",
+                    "medium",
+                    f"Estos buckets son públicos (world-readable): {', '.join(map(str, public[:15]))}.",
+                    "Confirma que cada bucket público debe serlo; si no, ponlo privado y sirve con URLs firmadas.",
+                )
+            )
+
+    # Auth: open self-signup with autoconfirm lets anyone create working accounts.
+    settings = await _get_json(client, f"{base}/auth/v1/settings")
+    if isinstance(settings, dict) and settings.get("disable_signup") is False and settings.get("mailer_autoconfirm"):
+        findings.append(
+            _aux_finding(
+                "supabase-open-signup",
+                f"{base}/auth/v1/settings",
+                "Supabase Auth: registro abierto con autoconfirmación de email",
+                "low",
+                "disable_signup=false y mailer_autoconfirm=true: cualquiera puede crear cuentas activas sin "
+                "verificar email.",
+                "Si el registro no es público, desactívalo (disable_signup) o exige confirmación de email.",
+            )
+        )
+    return findings
