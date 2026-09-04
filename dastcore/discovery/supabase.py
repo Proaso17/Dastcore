@@ -141,6 +141,19 @@ def table_probes(rest_base: str, tables: set[str]) -> list[HttpRequest]:
     ]
 
 
+@dataclass
+class SupabaseProfile:
+    """Result of autonomously profiling a Supabase project: the confirmed tables, the probes to run,
+    and enough provenance to explain in the report how the surface was found (or why it wasn't)."""
+
+    tables: set[str] = field(default_factory=set)
+    probes: list[HttpRequest] = field(default_factory=list)
+    graphql_tables: set[str] = field(default_factory=set)
+    frontend_tables: set[str] = field(default_factory=set)
+    introspection_enabled: bool = False  # pg_graphql introspection returned a schema
+    oracle_blind: bool = False  # PostgREST oracle couldn't distinguish existence (wordlist untrusted)
+
+
 class SupabaseDiscoverer:
     """Fetch a Supabase app's front-end bundles, recover its table list, and emit per-table probes."""
 
@@ -260,24 +273,27 @@ class SupabaseDiscoverer:
         graphql_url: str = "",
         use_wordlist: bool = True,
         extra_tables: tuple[str, ...] = (),
-    ) -> list[HttpRequest]:
-        """Autonomously enumerate a Supabase project's tables and return in-scope RLS probes.
+    ) -> SupabaseProfile:
+        """Autonomously enumerate a Supabase project's tables and return the confirmed set + RLS probes.
 
         Candidates are gathered from every available source — pg_graphql introspection, front-end
         mining, an explicit list, and a built-in wordlist — then validated against the PostgREST
         oracle. If the oracle is blind (see ``confirm_tables``), only the exact-source names
         (GraphQL/front-end/explicit) are trusted, never the wordlist guesses."""
         base = _rest_base(rest_base)
-        exact: set[str] = {t for t in extra_tables if t}
+        prof = SupabaseProfile()
         if graphql_url:
-            exact |= await self.introspect_graphql_tables(graphql_url)
+            prof.graphql_tables = await self.introspect_graphql_tables(graphql_url)
+            prof.introspection_enabled = bool(prof.graphql_tables)
         if frontend_url:
-            exact |= (await self.collect_refs(frontend_url)).tables
-        exact = {t for t in exact if t not in _NON_TABLE}
+            prof.frontend_tables = (await self.collect_refs(frontend_url)).tables
 
+        exact = {t for t in (set(extra_tables) | prof.graphql_tables | prof.frontend_tables) if t not in _NON_TABLE}
         candidates = set(exact)
         if use_wordlist:
             candidates |= set(_COMMON_TABLES)
         confirmed = await self.confirm_tables(base, candidates)
-        tables = confirmed if confirmed is not None else exact  # oracle blind → trust exact sources only
-        return [p for p in table_probes(base, tables) if self._client.is_in_scope(p.url)]
+        prof.oracle_blind = confirmed is None
+        prof.tables = confirmed if confirmed is not None else exact  # oracle blind → trust exact sources only
+        prof.probes = [p for p in table_probes(base, prof.tables) if self._client.is_in_scope(p.url)]
+        return prof

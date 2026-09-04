@@ -173,13 +173,17 @@ async def test_profile_combines_graphql_wordlist_and_confirms() -> None:
     fields = [{"name": "secret_notesCollection"}]
     client = _RoutedClient(existing={"secret_notes", "orders"}, introspect_fields=fields)
     disc = SupabaseDiscoverer(client)  # type: ignore[arg-type]
-    probes = await disc.profile(
+    prof = await disc.profile(
         "https://x.supabase.co/rest/v1/", graphql_url="https://x.supabase.co/graphql/v1"
     )
-    urls = {p.url for p in probes}
+    urls = {p.url for p in prof.probes}
     assert "https://x.supabase.co/rest/v1/secret_notes" in urls
     assert "https://x.supabase.co/rest/v1/orders" in urls
     assert "https://x.supabase.co/rest/v1/users" not in urls  # in wordlist but not a real table
+    assert prof.tables == {"secret_notes", "orders"}
+    assert prof.introspection_enabled is True
+    assert prof.oracle_blind is False
+    assert prof.graphql_tables == {"secret_notes"}
 
 
 async def test_profile_when_oracle_blind_trusts_exact_sources_only() -> None:
@@ -187,8 +191,30 @@ async def test_profile_when_oracle_blind_trusts_exact_sources_only() -> None:
     fields = [{"name": "hidden_tableCollection"}]
     client = _RoutedClient(introspect_fields=fields, blind=True)
     disc = SupabaseDiscoverer(client)  # type: ignore[arg-type]
-    probes = await disc.profile(
+    prof = await disc.profile(
         "https://x.supabase.co/rest/v1/", graphql_url="https://x.supabase.co/graphql/v1"
     )
-    urls = {p.url for p in probes}
+    urls = {p.url for p in prof.probes}
     assert urls == {"https://x.supabase.co/rest/v1/hidden_table"}  # only the exact GraphQL name, no wordlist
+    assert prof.oracle_blind is True
+
+
+def test_coverage_finding_reports_table_count() -> None:
+    from dastcore.cli import _supabase_coverage_finding
+    from dastcore.discovery.supabase import SupabaseProfile
+
+    prof = SupabaseProfile(tables={"orders", "profiles"}, graphql_tables={"orders"}, introspection_enabled=True)
+    finding = _supabase_coverage_finding("https://x.supabase.co/rest/v1/", prof)
+    assert finding.severity == "info"
+    assert finding.rule_id == "supabase-profile"
+    assert "2 tabla" in finding.name
+    assert "orders" in finding.evidence[0].data  # the tested tables are named in the evidence
+
+
+def test_coverage_finding_when_no_tables_found() -> None:
+    from dastcore.cli import _supabase_coverage_finding
+    from dastcore.discovery.supabase import SupabaseProfile
+
+    finding = _supabase_coverage_finding("https://x.supabase.co/rest/v1/", SupabaseProfile())
+    assert finding.severity == "info"
+    assert "no se descubri" in finding.name.lower()

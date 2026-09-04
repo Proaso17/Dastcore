@@ -127,7 +127,12 @@ from dastcore.discovery.subdomains import (
     load_subdomain_wordlist,
     subdomain_recursion_depth,
 )
-from dastcore.discovery.supabase import SupabaseDiscoverer, graphql_url_for, is_supabase_project
+from dastcore.discovery.supabase import (
+    SupabaseDiscoverer,
+    SupabaseProfile,
+    graphql_url_for,
+    is_supabase_project,
+)
 from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.discovery.tls_info import run_tls_checks
 from dastcore.discovery.vhosts import VhostDiscoverer, vhost_findings
@@ -634,6 +639,50 @@ def _coverage_finding(target: str, failed: list[str]) -> Finding:
             "Algunas comprobaciones se saltaron por un error interno o del objetivo, así que este escaneo "
             "es de cobertura parcial. Revisa los registros (nivel WARNING) para ver cuál falló y por qué."
         ),
+    )
+
+
+def _supabase_coverage_finding(target: str, prof: SupabaseProfile) -> Finding:
+    """An info advisory recording the autonomous Supabase enumeration, so the report itself says how
+    many tables were found and tested (anon-vs-authed) — instead of that only living in the console."""
+    n = len(prof.tables)
+    request = HttpRequest(method="GET", url=target)
+    sources: list[str] = [
+        f"GraphQL introspection: {len(prof.graphql_tables)}" if prof.introspection_enabled
+        else "GraphQL introspection: deshabilitada/vacía"
+    ]
+    if prof.frontend_tables:
+        sources.append(f"frontend: {len(prof.frontend_tables)}")
+    if prof.oracle_blind:
+        sources.append("oráculo PostgREST ciego → solo fuentes exactas")
+    sample = ", ".join(sorted(prof.tables)[:20])
+    detail = f"{n} tabla(s) confirmadas y probadas anon-vs-authed. Fuentes → {'; '.join(sources)}."
+    if sample:
+        detail += f" Tablas: {sample}{' …' if n > 20 else ''}"
+    name = (
+        f"Supabase: {n} tabla(s) descubiertas y probadas (anon vs authed)"
+        if n
+        else "Supabase: no se descubrió ninguna tabla accesible con la apikey anon"
+    )
+    remediation = (
+        "Este aviso documenta la cobertura del perfilado de Supabase (introspección GraphQL + "
+        "enumeración PostgREST). Si el número de tablas es 0, revisa que la introspección de "
+        "pg_graphql esté deshabilitada y que ninguna tabla sea legible con la clave anon; si hay "
+        "tablas, cada una se comparó anónimo-vs-autenticado para detectar RLS/BOLA (mira los "
+        "hallazgos de autorización, si los hay)."
+    )
+    return Finding(
+        id="supabase-coverage",
+        rule_id="supabase-profile",
+        name=name,
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="response_match", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation=remediation,
     )
 
 
@@ -1172,7 +1221,7 @@ async def _run_scan(
                 # the authz detector can test RLS anon-vs-authed. Auto-runs on any *.supabase.co target.
                 progress.status("Perfilando Supabase (GraphQL introspection + enum PostgREST)…")
                 supa = SupabaseDiscoverer(client)
-                probes = await phase(
+                supa_prof = await phase(
                     "supabase-profile",
                     supa.profile(
                         target,
@@ -1182,10 +1231,11 @@ async def _run_scan(
                     ),
                 )
                 added = 0
-                for req in probes:
+                for req in supa_prof.probes:
                     if client.is_in_scope(req.url):
                         discovered.setdefault(req.signature(), req)
                         added += 1
+                extra_findings.append(_supabase_coverage_finding(target, supa_prof))  # self-documenting report
                 progress.status(f"Supabase: {added} tabla(s) confirmadas para probar RLS/authz")
 
             if graphql_url:
