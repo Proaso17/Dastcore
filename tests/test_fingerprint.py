@@ -60,8 +60,11 @@ class _WafClient:
 
 async def test_active_probe_detects_waf() -> None:
     findings = await fingerprint_and_waf(_WafClient(), "http://target/")
-    assert any(f.rule_id == "waf-detected" for f in findings)
+    waf = [f for f in findings if f.rule_id == "waf-detected"]
+    assert waf
     assert all(f.severity == "info" for f in findings)
+    # The finding must name the host it was detected on (avoids attributing it to the wrong host).
+    assert "target" in waf[0].name and "target" in waf[0].evidence[0].data
 
 
 # --- integration against the vuln app ----------------------------------------------------

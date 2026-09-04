@@ -201,12 +201,20 @@ async def fingerprint_and_waf(client: HttpClient, target: str) -> list[Finding]:
             Finding(
                 id=f"waf-detected:{parts.netloc}",
                 rule_id="waf-detected",
-                name=f"WAF / blocking layer detected: {waf}",
+                # Name the host: a multi-host scan (target + its Supabase/CDN + subdomains) can detect a
+                # WAF on a *different* host than the reader assumes, so say which one explicitly.
+                name=f"WAF / blocking layer detected on {parts.netloc}: {waf}",
                 severity="info",
                 cwe="CWE-693",
                 owasp="WSTG-INFO-02",
                 injection_point=_point(base_request),
-                evidence=[Evidence(type="differential", data=(waf_reason or "detected")[:200], confidence="high")],
+                evidence=[
+                    Evidence(
+                        type="differential",
+                        data=f"{waf} en {parts.netloc} — {waf_reason or 'firma de cabecera (cf-ray/server)'}"[:200],
+                        confidence="high",
+                    )
+                ],
                 request=base_request,
                 response=base,
                 remediation=(
