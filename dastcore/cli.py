@@ -127,7 +127,7 @@ from dastcore.discovery.subdomains import (
     load_subdomain_wordlist,
     subdomain_recursion_depth,
 )
-from dastcore.discovery.supabase import SupabaseDiscoverer, table_probes
+from dastcore.discovery.supabase import SupabaseDiscoverer, graphql_url_for, is_supabase_project
 from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.discovery.tls_info import run_tls_checks
 from dastcore.discovery.vhosts import VhostDiscoverer, vhost_findings
@@ -1165,24 +1165,28 @@ async def _run_scan(
                 for req in await phase("openapi-ingest", fetch_and_parse_openapi(client, openapi_url, target)):
                     discovered.setdefault(req.signature(), req)
 
-            if supabase_frontend or supabase_tables:
+            if supabase_frontend or supabase_tables or is_supabase_project(target):
                 # A Supabase project's OpenAPI schema is service_role-only, so the table list can't be
-                # read from the API. Recover it from the front-end bundle (`.from('<table>')` /
-                # `/rest/v1/<table>`) and/or an explicit list, then probe each table so the authz
-                # detector can test RLS anon-vs-authed.
-                progress.status("Descubriendo tablas de Supabase…")
-                probes: list[HttpRequest] = []
-                if supabase_frontend:
-                    supa = SupabaseDiscoverer(client)
-                    probes.extend(await phase("supabase-discover", supa.discover(supabase_frontend, target)))
-                if supabase_tables:
-                    probes.extend(table_probes(target, set(supabase_tables)))
+                # read from the API. Enumerate it autonomously — pg_graphql introspection + a PostgREST
+                # existence oracle — plus any front-end mining / explicit list, then probe each table so
+                # the authz detector can test RLS anon-vs-authed. Auto-runs on any *.supabase.co target.
+                progress.status("Perfilando Supabase (GraphQL introspection + enum PostgREST)…")
+                supa = SupabaseDiscoverer(client)
+                probes = await phase(
+                    "supabase-profile",
+                    supa.profile(
+                        target,
+                        frontend_url=supabase_frontend,
+                        graphql_url=graphql_url_for(target),
+                        extra_tables=tuple(supabase_tables),
+                    ),
+                )
                 added = 0
                 for req in probes:
                     if client.is_in_scope(req.url):
                         discovered.setdefault(req.signature(), req)
                         added += 1
-                progress.status(f"Supabase: {added} tabla(s) para probar RLS/authz")
+                progress.status(f"Supabase: {added} tabla(s) confirmadas para probar RLS/authz")
 
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")

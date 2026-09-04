@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from dastcore.discovery.supabase import (
     SupabaseDiscoverer,
+    graphql_url_for,
+    is_supabase_project,
     mine_supabase_refs,
     table_probes,
 )
@@ -96,3 +99,96 @@ async def test_discover_returns_nothing_for_non_supabase_app() -> None:
     disc = SupabaseDiscoverer(client)  # type: ignore[arg-type]
     probes = await disc.discover("https://app.example.com", "https://x.supabase.co/rest/v1/")
     assert probes == []
+
+
+# --- autonomous profiling: GraphQL introspection + PostgREST oracle ---------------------------
+
+def test_is_supabase_project_and_graphql_url() -> None:
+    ref = "abcdefghij1234567890"
+    assert is_supabase_project(f"https://{ref}.supabase.co/rest/v1/") == ref
+    assert is_supabase_project("https://beta-panel.getnyma.com") == ""
+    assert graphql_url_for(f"https://{ref}.supabase.co/rest/v1/") == f"https://{ref}.supabase.co/graphql/v1"
+    assert graphql_url_for("https://example.com") == ""
+
+
+class _RoutedClient:
+    """Fake client that answers GraphQL introspection and the PostgREST existence oracle by route."""
+
+    def __init__(self, *, existing=(), introspect_fields=None, blind=False):
+        self.existing = set(existing)
+        self.introspect_fields = introspect_fields  # None => introspection disabled
+        self.blind = blind
+
+    def is_in_scope(self, url: str) -> bool:
+        return True
+
+    async def post(self, url: str, json=None, timeout: float = 6.0, retries: int = 0):
+        if self.introspect_fields is None:
+            return SimpleNamespace(status_code=200, text='{"errors":[{"message":"unknown field"}]}')
+        body = {"data": {"__schema": {"queryType": {"fields": self.introspect_fields}}}}
+        return SimpleNamespace(status_code=200, text=jsondumps(body))
+
+    async def get(self, url: str, params=None, timeout: float = 6.0, retries: int = 0):
+        table = url.rstrip("/").rsplit("/", 1)[-1]
+        if self.blind:
+            return SimpleNamespace(status_code=401, text="{}")  # everything looks protected → oracle blind
+        if table in self.existing:
+            return SimpleNamespace(status_code=200, text="[]")
+        return SimpleNamespace(
+            status_code=404, text='{"code":"42P01","message":"relation \\"public.' + table + '\\" does not exist"}'
+        )
+
+
+def jsondumps(obj) -> str:
+    return json.dumps(obj)
+
+
+async def test_introspect_graphql_recovers_tables() -> None:
+    fields = [{"name": "profilesCollection"}, {"name": "ordersCollection"}, {"name": "node"}, {"name": "__type"}]
+    disc = SupabaseDiscoverer(_RoutedClient(introspect_fields=fields))  # type: ignore[arg-type]
+    tables = await disc.introspect_graphql_tables("https://x.supabase.co/graphql/v1")
+    assert tables == {"profiles", "orders"}
+
+
+async def test_introspect_graphql_empty_when_disabled() -> None:
+    disc = SupabaseDiscoverer(_RoutedClient(introspect_fields=None))  # type: ignore[arg-type]
+    assert await disc.introspect_graphql_tables("https://x.supabase.co/graphql/v1") == set()
+
+
+async def test_confirm_tables_keeps_only_real_ones() -> None:
+    disc = SupabaseDiscoverer(_RoutedClient(existing={"orders", "profiles"}))  # type: ignore[arg-type]
+    confirmed = await disc.confirm_tables("https://x.supabase.co/rest/v1", {"orders", "profiles", "ghost_table"})
+    assert confirmed == {"orders", "profiles"}  # ghost_table 404s with 42P01 → dropped
+
+
+async def test_confirm_tables_returns_none_when_oracle_blind() -> None:
+    # If a known-bogus name doesn't classify as "missing" (everything 401s), the oracle is blind.
+    disc = SupabaseDiscoverer(_RoutedClient(blind=True))  # type: ignore[arg-type]
+    assert await disc.confirm_tables("https://x.supabase.co/rest/v1", {"orders"}) is None
+
+
+async def test_profile_combines_graphql_wordlist_and_confirms() -> None:
+    # GraphQL names 'secret_notes'; 'orders' comes from the built-in wordlist; both are real. A wordlist
+    # word that isn't a real table ('users' here) is dropped by the oracle.
+    fields = [{"name": "secret_notesCollection"}]
+    client = _RoutedClient(existing={"secret_notes", "orders"}, introspect_fields=fields)
+    disc = SupabaseDiscoverer(client)  # type: ignore[arg-type]
+    probes = await disc.profile(
+        "https://x.supabase.co/rest/v1/", graphql_url="https://x.supabase.co/graphql/v1"
+    )
+    urls = {p.url for p in probes}
+    assert "https://x.supabase.co/rest/v1/secret_notes" in urls
+    assert "https://x.supabase.co/rest/v1/orders" in urls
+    assert "https://x.supabase.co/rest/v1/users" not in urls  # in wordlist but not a real table
+
+
+async def test_profile_when_oracle_blind_trusts_exact_sources_only() -> None:
+    # Oracle blind → wordlist guesses are untrusted, but exact GraphQL names still yield probes.
+    fields = [{"name": "hidden_tableCollection"}]
+    client = _RoutedClient(introspect_fields=fields, blind=True)
+    disc = SupabaseDiscoverer(client)  # type: ignore[arg-type]
+    probes = await disc.profile(
+        "https://x.supabase.co/rest/v1/", graphql_url="https://x.supabase.co/graphql/v1"
+    )
+    urls = {p.url for p in probes}
+    assert urls == {"https://x.supabase.co/rest/v1/hidden_table"}  # only the exact GraphQL name, no wordlist
