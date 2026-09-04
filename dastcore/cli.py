@@ -132,6 +132,7 @@ from dastcore.discovery.supabase import (
     SupabaseProfile,
     graphql_url_for,
     is_supabase_project,
+    probe_cross_user_bola,
     probe_write_rls,
 )
 from dastcore.discovery.tech_paths import discover_tech_paths
@@ -642,6 +643,36 @@ async def _run_supabase_write_test(
                 _scan_log.warning("write-rls: identidad '%s' no autenticó: %s", identity_cfg.name, exc)
                 continue
             findings.extend(await probe_write_rls(client, rest_base, tables, identity=identity_cfg.name))
+    return findings
+
+
+_USER_AUTH_TYPES = ("form", "oauth2", "oauth2_pkce", "bearer")  # a distinct logged-in user (not the anon key)
+
+
+async def _run_supabase_bola(config: ScanConfig, rest_base: str, tables: set[str], budget: _Budget) -> list[Finding]:
+    """Cross-user BOLA on Supabase tables: for every ordered pair of authenticated identities, test if
+    one can read the other's own rows by id. Read-only, so it runs automatically once ≥2 real user
+    identities are configured."""
+    import itertools
+
+    users = [idc for idc in config.identities if idc.auth.type in _USER_AUTH_TYPES]
+    if len(users) < 2:
+        return []
+    findings: list[Finding] = []
+    async with AsyncExitStack() as stack:
+        clients: dict[str, HttpClient] = {}
+        for idc in users:
+            try:
+                clients[idc.name] = await _open_authenticated_client(stack, config, idc.auth, budget)
+            except Exception as exc:  # noqa: BLE001 — a bad identity is already reported by authz; skip here
+                _scan_log.warning("bola: identidad '%s' no autenticó: %s", idc.name, exc)
+        names = [idc.name for idc in users if idc.name in clients]
+        for name_a, name_b in itertools.permutations(names, 2):
+            findings.extend(
+                await probe_cross_user_bola(
+                    clients[name_a], clients[name_b], rest_base, tables, name_a=name_a, name_b=name_b
+                )
+            )
     return findings
 
 
@@ -1313,6 +1344,12 @@ async def _run_scan(
                             "supabase-write-rls",
                             _run_supabase_write_test(config, target, supa_prof.tables, budget),
                         )
+                    )
+                if supa_prof.tables and sum(1 for i in config.identities if i.auth.type in _USER_AUTH_TYPES) >= 2:
+                    # Cross-user BOLA (read-only): auto-runs once two real user identities exist.
+                    progress.status("Probando BOLA user-vs-user (acceso cruzado por id)…")
+                    extra_findings.extend(
+                        await phase("supabase-bola", _run_supabase_bola(config, target, supa_prof.tables, budget))
                     )
 
             if graphql_url:

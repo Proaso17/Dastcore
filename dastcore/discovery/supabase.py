@@ -393,3 +393,82 @@ async def probe_write_rls(client: HttpClient, rest_base: str, tables: set[str], 
             findings.append(_write_finding(url, table, identity, resp.status_code, body, created=False))
         # any other response (e.g. 400 PGRST parse/column errors) is inconclusive → no finding
     return findings
+
+
+# Cross-user BOLA probe ----------------------------------------------------------------------------
+# The read probes prove anon can't read; this proves user A can't read user B's *specific* rows. It
+# complements the collection test: when a table's listing IS filtered per-user (so A's list excludes
+# B's rows), we take an id B can see but A cannot, and have A fetch it directly by id. If A gets it,
+# object-level authorization is broken (RLS filters the collection but not a targeted lookup) — a
+# classic BOLA/IDOR. Read-only, and only the `id` column is ever requested (no PII pulled).
+
+
+async def _read_ids(
+    client: HttpClient, base: str, table: str, *, id_filter: list[str] | None = None, limit: int = 20
+) -> list[str] | None:
+    """Read up to ``limit`` ``id`` values from a table (only the id column). ``None`` = table has no
+    ``id`` column or wasn't readable; ``[]`` = readable but no rows for this identity."""
+    params = {"select": "id", "limit": str(limit)}
+    if id_filter:
+        params["id"] = "in.(" + ",".join(id_filter) + ")"
+    try:
+        resp = await client.get(f"{base}/{table}", params=params, timeout=8.0, retries=0)
+    except (OutOfScopeError, BudgetExceededError):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        rows = json.loads(resp.text)
+    except ValueError:
+        return None
+    if not isinstance(rows, list):
+        return None
+    return [str(row["id"]) for row in rows if isinstance(row, dict) and "id" in row]
+
+
+def _bola_finding(url: str, table: str, name_a: str, name_b: str, leaked: list[str]) -> Finding:
+    request = HttpRequest(method="GET", url=url)
+    detail = (
+        f"'{name_a}' leyó por id {len(leaked)} fila(s) de '{table}' que su propio listado NO incluye y que "
+        f"pertenecen a '{name_b}' (ids: {', '.join(leaked[:5])}). El RLS filtra la colección pero no una "
+        f"búsqueda dirigida por id → autorización a nivel de objeto rota (BOLA/IDOR)."
+    )
+    return Finding(
+        id=f"supabase-bola:{table}:{name_a}<-{name_b}",
+        rule_id="supabase-bola",
+        name=f"BOLA: '{name_a}' puede leer filas de '{name_b}' en '{table}'",
+        severity="high",
+        cwe="CWE-639",
+        owasp="API1:2023",
+        injection_point=InjectionPoint(location="query", name="id", base_value="", request_template=request),
+        evidence=[Evidence(type="differential", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=200, url=url, text=", ".join(leaked[:10])),
+        remediation=(
+            "Define políticas RLS de SELECT que restrinjan cada fila a su propietario "
+            "(p. ej. USING (auth.uid() = user_id)); no basta con filtrar por defecto — un lookup por id "
+            "debe respetar la misma política."
+        ),
+    )
+
+
+async def probe_cross_user_bola(
+    client_a: HttpClient, client_b: HttpClient, rest_base: str, tables: set[str], *, name_a: str, name_b: str
+) -> list[Finding]:
+    """Test whether identity A can read identity B's own rows by id (see the module note above)."""
+    base = _rest_base(rest_base)
+    findings: list[Finding] = []
+    for table in sorted(tables):
+        url = f"{base}/{table}"
+        a_ids = await _read_ids(client_a, base, table)
+        b_ids = await _read_ids(client_b, base, table)
+        if a_ids is None or b_ids is None:
+            continue  # no `id` column or unreadable → id-based BOLA not applicable
+        private_to_b = [i for i in b_ids if i not in set(a_ids)][:3]  # rows B sees that A's listing doesn't
+        if not private_to_b:
+            continue  # collection isn't per-user-filtered here (RLS-off is caught by the read/authz test)
+        got = await _read_ids(client_a, base, table, id_filter=private_to_b)
+        leaked = [i for i in (got or []) if i in private_to_b]
+        if leaked:
+            findings.append(_bola_finding(url, table, name_a, name_b, leaked))
+    return findings

@@ -10,6 +10,7 @@ from dastcore.discovery.supabase import (
     graphql_url_for,
     is_supabase_project,
     mine_supabase_refs,
+    probe_cross_user_bola,
     probe_write_rls,
     table_probes,
 )
@@ -273,3 +274,59 @@ def test_login_failed_finding_advises_unreliable_authz() -> None:
     assert finding.severity == "info"
     assert "authed" in finding.name
     assert finding.rule_id == "authz-login"
+
+
+# --- cross-user BOLA (Gap 2) -------------------------------------------------------------------
+
+class _BolaClient:
+    """Fake client: `own_ids` = what this identity's collection returns; `leaks` = extra ids it can
+    reach via a targeted id filter (i.e. a broken object-level policy)."""
+
+    def __init__(self, own_ids, leaks=None):
+        self.own_ids = own_ids  # table -> [id, ...]
+        self.leaks = leaks or {}
+
+    def is_in_scope(self, url: str) -> bool:
+        return True
+
+    async def get(self, url: str, params=None, timeout: float = 8.0, retries: int = 0):
+        table = url.rstrip("/").rsplit("/", 1)[-1]
+        params = params or {}
+        if "id" in params and params["id"].startswith("in.("):
+            wanted = params["id"][len("in.("):-1].split(",")
+            reachable = set(self.own_ids.get(table, [])) | set(self.leaks.get(table, []))
+            got = [i for i in wanted if i in reachable]
+            return SimpleNamespace(status_code=200, text=json.dumps([{"id": i} for i in got]))
+        return SimpleNamespace(status_code=200, text=json.dumps([{"id": i} for i in self.own_ids.get(table, [])]))
+
+
+async def test_cross_user_bola_detects_id_leak() -> None:
+    a = _BolaClient(own_ids={"notes": ["a1"]}, leaks={"notes": ["b1"]})  # A can reach B's row b1 by id → BOLA
+    b = _BolaClient(own_ids={"notes": ["b1"]})
+    findings = await probe_cross_user_bola(a, b, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B")
+    assert len(findings) == 1
+    assert findings[0].rule_id == "supabase-bola"
+    assert findings[0].severity == "high"
+    assert "b1" in findings[0].response.text
+
+
+async def test_cross_user_bola_no_finding_when_isolated() -> None:
+    a = _BolaClient(own_ids={"notes": ["a1"]})  # A cannot reach b1 → RLS correctly isolates
+    b = _BolaClient(own_ids={"notes": ["b1"]})
+    findings = await probe_cross_user_bola(a, b, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B")
+    assert findings == []
+
+
+async def test_cross_user_bola_skips_table_without_id_column() -> None:
+    class _NoIdClient:
+        def is_in_scope(self, url: str) -> bool:
+            return True
+
+        async def get(self, url: str, params=None, timeout: float = 8.0, retries: int = 0):
+            return SimpleNamespace(status_code=400, text='{"code":"42703","message":"column notes.id does not exist"}')
+
+    client = _NoIdClient()
+    findings = await probe_cross_user_bola(
+        client, client, "https://x.supabase.co/rest/v1/", {"notes"}, name_a="A", name_b="B"
+    )
+    assert findings == []  # no id column → id-based BOLA not applicable, no false positive
