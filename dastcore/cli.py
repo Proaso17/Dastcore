@@ -122,6 +122,7 @@ from dastcore.discovery.openapi import fetch_and_parse_openapi
 from dastcore.discovery.osint import bucket_findings, check_buckets, github_code_search, github_findings
 from dastcore.discovery.params import load_param_wordlist, mine_hidden_params
 from dastcore.discovery.ports import discover_http_ports
+from dastcore.discovery.recon_paths import ReconPathDiscoverer
 from dastcore.discovery.subdomains import (
     SubdomainDiscoverer,
     load_subdomain_wordlist,
@@ -1393,11 +1394,18 @@ async def _run_scan(
                             await phase("dir-sensitive-files", probe_sensitive_files(client, directory, under_directory=True))
                         )
 
+            # robots.txt / sitemap.xml: mine the paths the site advertises (admin panels, exports,
+            # staging routes) — high-signal endpoints a blind crawler never reaches. Cheap + always on.
+            for root in scan_roots:
+                for req in await phase("recon-paths", ReconPathDiscoverer(client).discover(root)):
+                    discovered.setdefault(req.signature(), req)
+
             if use_js:
                 # Modern SPAs hide their API in JS bundles — extract those endpoints and scan them too.
+                # harvest_maps also pulls each bundle's .map sourcemap to mine the original source.
                 for root in scan_roots:
                     progress.status(f"Extrayendo endpoints de JavaScript en {root}…")
-                    for req in await JsEndpointDiscoverer(client).discover(root):
+                    for req in await JsEndpointDiscoverer(client, harvest_maps=True).discover(root):
                         discovered.setdefault(req.signature(), req)
 
             if discover_content:

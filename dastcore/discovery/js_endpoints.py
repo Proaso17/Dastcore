@@ -13,6 +13,7 @@ noise filtered out — so what reaches the scanner is signal, not junk. Bad gues
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urljoin, urlsplit
 
@@ -61,14 +62,67 @@ def extract_endpoints(js_text: str) -> set[str]:
     return {endpoint for endpoint in found if _is_useful(endpoint)}
 
 
+def extract_from_sourcemap(text: str) -> set[str]:
+    """Endpoints mined from a JS sourcemap's original source. A deployed ``.js.map`` embeds the
+    unminified ``sourcesContent`` — far richer and cleaner to parse than the minified bundle."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return set()
+    found: set[str] = set()
+    for src in data.get("sourcesContent") or []:
+        if isinstance(src, str):
+            found |= extract_endpoints(src)
+    return found
+
+
+async def harvest_sourcemaps(
+    client: HttpClient, origin: str, script_urls: list[str], *, max_scripts: int = 25, timeout: float = 6.0
+) -> list[HttpRequest]:
+    """For each bundle, fetch its ``<script>.map`` sourcemap (a common misconfig in production) and
+    mine endpoints from the original source, returned as scope-gated requests."""
+    endpoints: set[str] = set()
+    for url in script_urls[:max_scripts]:
+        map_url = url + ".map"
+        if not client.is_in_scope(map_url):
+            continue
+        try:
+            resp = await client.get(map_url, timeout=timeout, retries=0)
+        except (OutOfScopeError, BudgetExceededError):
+            continue
+        except Exception:  # noqa: BLE001 — a missing sourcemap must not abort discovery
+            continue
+        if resp.status_code < 400 and resp.text:
+            endpoints |= extract_from_sourcemap(resp.text)
+
+    requests: dict[str, HttpRequest] = {}
+    for endpoint in endpoints:
+        absolute = urljoin(origin, endpoint)
+        if not client.is_in_scope(absolute):
+            continue
+        req = url_to_request(absolute)
+        if req is not None:
+            requests.setdefault(req.signature(), req)
+    return list(requests.values())
+
+
 class JsEndpointDiscoverer:
     """Fetch a page's script bundles and extract the endpoints they reference, as scoped requests."""
 
-    def __init__(self, client: HttpClient, *, max_scripts: int = 25, max_endpoints: int = 500, timeout: float = 6.0):
+    def __init__(
+        self,
+        client: HttpClient,
+        *,
+        max_scripts: int = 25,
+        max_endpoints: int = 500,
+        timeout: float = 6.0,
+        harvest_maps: bool = False,
+    ):
         self._client = client
         self._max_scripts = max_scripts
         self._max_endpoints = max_endpoints
         self._timeout = timeout
+        self._harvest_maps = harvest_maps  # also fetch each bundle's .map sourcemap and mine its source
 
     async def _get(self, url: str) -> str | None:
         try:
@@ -95,8 +149,9 @@ class JsEndpointDiscoverer:
         if html is None:
             return []
 
+        script_urls = self._script_urls(html, origin)
         endpoints: set[str] = set()
-        for script_url in self._script_urls(html, origin):
+        for script_url in script_urls:
             if not self._client.is_in_scope(script_url):
                 continue
             js = await self._get(script_url)
@@ -112,5 +167,10 @@ class JsEndpointDiscoverer:
                 continue
             req = url_to_request(absolute)
             if req is not None:
+                requests.setdefault(req.signature(), req)
+        if self._harvest_maps:  # mine each bundle's sourcemap for the original, unminified source
+            for req in await harvest_sourcemaps(
+                self._client, origin, script_urls, max_scripts=self._max_scripts, timeout=self._timeout
+            ):
                 requests.setdefault(req.signature(), req)
         return list(requests.values())
