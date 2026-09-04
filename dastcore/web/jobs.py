@@ -66,6 +66,7 @@ class ScanRequest:
     seed_paths: list[str] = field(default_factory=list)  # known paths to always probe on each host
     mine_params: bool = False  # Arjun-style hidden parameter discovery on the discovered endpoints
     interactive: bool = False  # interactive SPA crawl (headless clicks safe controls to surface API calls)
+    supabase_write_test: bool = False  # opt-in: also test write-side RLS on a Supabase target (safe INSERT)
     allow_domains: list[str] = field(default_factory=list)
     # Embedded-chatbot ("ai --discover") scans: a second identity for the cross-tenant checks.
     victim_bearer: str = ""
@@ -203,6 +204,7 @@ class ScanManager:
                 mine_params=req.mine_params and not_quick,
                 use_permutations=req.discover_subdomains and not_quick,  # permute found subdomains
                 interactive=req.interactive,  # interactive SPA crawl (opt-in; safe clicks only)
+                supabase_write_test=req.supabase_write_test,  # opt-in write-side RLS test (safe INSERT)
             )
         )
         self._tasks.add(task)
@@ -285,6 +287,7 @@ class ScanManager:
         mine_params: bool = False,
         use_permutations: bool = False,
         interactive: bool = False,
+        supabase_write_test: bool = False,
     ) -> None:
         started = time.monotonic()
         prog = _JobProgress(job, self._store)  # one sink drives both the progress bar and the live findings feed
@@ -309,6 +312,7 @@ class ScanManager:
                 mine_params=mine_params,
                 use_permutations=use_permutations,
                 interactive=interactive,
+                supabase_write_test=supabase_write_test,
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)

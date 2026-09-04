@@ -132,6 +132,7 @@ from dastcore.discovery.supabase import (
     SupabaseProfile,
     graphql_url_for,
     is_supabase_project,
+    probe_write_rls,
 )
 from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.discovery.tls_info import run_tls_checks
@@ -603,15 +604,45 @@ async def _run_authz(
     """Run BOLA/BFLA/missing-auth checks across the configured identities (REST + GraphQL)."""
     async with AsyncExitStack() as stack:
         identities = []
+        failed_logins: list[str] = []
         for identity_cfg in config.identities:
-            client = await _open_authenticated_client(stack, config, identity_cfg.auth, budget)
+            # Verify each identity authenticates. A silent login failure would make the anon-vs-authed
+            # comparison meaningless (both sessions equal), so we record it and keep the ones that worked
+            # rather than aborting all of authz.
+            try:
+                client = await _open_authenticated_client(stack, config, identity_cfg.auth, budget)
+            except Exception as exc:  # noqa: BLE001 — one bad identity must not sink the others
+                _scan_log.warning("Identidad '%s' no autenticó: %s: %s", identity_cfg.name, type(exc).__name__, exc)
+                failed_logins.append(identity_cfg.name)
+                continue
             identities.append(AuthzIdentity(name=identity_cfg.name, role=identity_cfg.role, client=client))
         unauth_client = await stack.enter_async_context(_make_client(config, budget))
         findings = await run_authz_checks(identities, probes, unauth_client=unauth_client)
         if graphql_url:
             findings.extend(await run_graphql_authz_checks(identities, graphql_url, unauth_client=unauth_client))
             findings.extend(await run_graphql_field_authz_checks(identities, graphql_url, unauth_client=unauth_client))
+        if failed_logins:
+            findings.append(_login_failed_finding(str(config.target), failed_logins))
         return findings
+
+
+async def _run_supabase_write_test(
+    config: ScanConfig, rest_base: str, tables: set[str], budget: _Budget
+) -> list[Finding]:
+    """Opt-in write-side RLS test: for each configured identity (or the main session), probe whether it
+    can INSERT into each discovered table. Safe (see probe_write_rls) but mutating in the worst case, so
+    it only runs when explicitly enabled."""
+    findings: list[Finding] = []
+    async with AsyncExitStack() as stack:
+        identity_cfgs = config.identities or [Identity(name=config.auth.type or "sesión", auth=config.auth)]
+        for identity_cfg in identity_cfgs:
+            try:
+                client = await _open_authenticated_client(stack, config, identity_cfg.auth, budget)
+            except Exception as exc:  # noqa: BLE001 — a bad identity is reported by authz; just skip it here
+                _scan_log.warning("write-rls: identidad '%s' no autenticó: %s", identity_cfg.name, exc)
+                continue
+            findings.extend(await probe_write_rls(client, rest_base, tables, identity=identity_cfg.name))
+    return findings
 
 
 async def _prove_impact_isolated(client: HttpClient, findings: list[Finding]) -> list[Finding]:
@@ -638,6 +669,34 @@ def _coverage_finding(target: str, failed: list[str]) -> Finding:
         remediation=(
             "Algunas comprobaciones se saltaron por un error interno o del objetivo, así que este escaneo "
             "es de cobertura parcial. Revisa los registros (nivel WARNING) para ver cuál falló y por qué."
+        ),
+    )
+
+
+def _login_failed_finding(target: str, names: list[str]) -> Finding:
+    """An advisory that one or more configured identities failed to authenticate — so any anon-vs-authed
+    / BOLA comparison over them is unreliable and must not be read as 'no authorization flaw'."""
+    who = ", ".join(names)
+    request = HttpRequest(method="GET", url=target)
+    detail = (
+        f"Identidad(es) que no autenticaron: {who}. La comparación de autorización (anon-vs-authed / BOLA) "
+        "sobre ellas NO es fiable: revisa credenciales, login_url y cabeceras (p. ej. apikey de Supabase)."
+    )
+    return Finding(
+        id="authz-identity-login-failed",
+        rule_id="authz-login",
+        name=f"Identidad(es) sin autenticar: {who} — la comprobación de autorización puede no ser válida",
+        severity="info",
+        cwe="CWE-287",
+        owasp="WSTG-ATHN-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="status", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation=(
+            "Corrige el login de esas identidades y vuelve a escanear. Para Supabase: login_url a "
+            "/auth/v1/token?grant_type=password, credenciales email/password correctas, y el header "
+            "apikey (anon) tanto en el login como en cada petición."
         ),
     )
 
@@ -854,6 +913,7 @@ async def _run_scan(
     interactive: bool = False,
     supabase_frontend: str = "",
     supabase_tables: Sequence[str] = (),
+    supabase_write_test: bool = False,
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -1244,6 +1304,16 @@ async def _run_scan(
                         added += 1
                 extra_findings.append(_supabase_coverage_finding(target, supa_prof))  # self-documenting report
                 progress.status(f"Supabase: {added} tabla(s) confirmadas para probar RLS/authz")
+                if supabase_write_test and supa_prof.tables:
+                    # Opt-in: also test write-side RLS (safe INSERT probe). Off by default because it can
+                    # mutate; here the operator asked for it explicitly.
+                    progress.status("Probando RLS de escritura (INSERT seguro, opt-in)…")
+                    extra_findings.extend(
+                        await phase(
+                            "supabase-write-rls",
+                            _run_supabase_write_test(config, target, supa_prof.tables, budget),
+                        )
+                    )
 
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")
@@ -1762,6 +1832,11 @@ def scan(
         "--supabase-frontend",
         help="URL del frontend de una app Supabase: mina sus tablas (.from()/rest/v1) para probar RLS/authz.",
     ),
+    supabase_write_test: bool = typer.Option(
+        False,
+        "--supabase-write-test",
+        help="Además del RLS de lectura, prueba el de ESCRITURA (INSERT seguro por tabla; puede mutar — opt-in).",
+    ),
     stored: bool = typer.Option(
         False,
         "--stored",
@@ -2098,6 +2173,7 @@ def scan(
     graphql_url = _pick(ctx, "graphql_url", graphql_url, scan_file.graphql)
     supabase_frontend = _pick(ctx, "supabase_frontend", supabase_frontend, scan_file.supabase_frontend)
     supabase_tables = scan_file.supabase_tables or []  # config-file only: an explicit table list to probe
+    supabase_write_test = _pick(ctx, "supabase_write_test", supabase_write_test, scan_file.supabase_write_test)
     output_format = _pick(ctx, "output_format", output_format, scan_file.format).lower()
     output_path = _pick(ctx, "output_path", output_path, scan_file.output)
     fail_on = _pick(ctx, "fail_on", fail_on, scan_file.fail_on).lower()
@@ -2318,6 +2394,7 @@ def scan(
                     interactive=interactive,
                     supabase_frontend=supabase_frontend,
                     supabase_tables=supabase_tables,
+                    supabase_write_test=supabase_write_test,
                 )
             )
     except SessionLoginError as exc:

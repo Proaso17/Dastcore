@@ -27,7 +27,7 @@ from urllib.parse import urljoin, urlsplit
 from selectolax.parser import HTMLParser
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
-from dastcore.core.models import HttpRequest
+from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 
 # `.from('table')` — supabase-js. The negative lookbehinds drop Array.from / Buffer.from so an
 # ordinary iterable call can't be mistaken for a table.
@@ -297,3 +297,99 @@ class SupabaseDiscoverer:
         prof.tables = confirmed if confirmed is not None else exact  # oracle blind → trust exact sources only
         prof.probes = [p for p in table_probes(base, prof.tables) if self._client.is_in_scope(p.url)]
         return prof
+
+
+# Write-side RLS probe -----------------------------------------------------------------------------
+# The read probes above only prove SELECT protection. A table can block reads yet still let a role
+# INSERT/UPDATE/DELETE — a common Supabase misconfig. This tests INSERT authorization *safely*: an
+# empty-body insert either is refused by RLS (secure), fails a data constraint after RLS lets it
+# through (a finding — but nothing is written), or actually creates a row (a finding — which we then
+# delete). It never sends UPDATE/DELETE, and it mutates only in the last case, with best-effort
+# cleanup. It is an active/mutating test, so callers must gate it behind an explicit opt-in.
+
+_RLS_DENIED = ("42501", "row-level security", "permission denied", "not authorized", "no autoriz", "pgrst301")
+_WRITE_AUTHORIZED_ERR = ("23502", "23503", "23505", "23514", "violates", "null value", "invalid input")
+
+
+def _write_finding(url: str, table: str, identity: str, status: int, body: str, *, created: bool) -> Finding:
+    request = HttpRequest(method="POST", url=url, json_body={})
+    if created:
+        name = f"RLS de escritura ABIERTO: '{identity}' pudo INSERTAR una fila en '{table}'"
+        detail = (
+            f"POST {url} devolvió {status}: se CREÓ una fila (se intentó borrarla). El rol '{identity}' "
+            f"puede escribir en '{table}' — el RLS de INSERT no lo impide."
+        )
+    else:
+        name = f"RLS de escritura ABIERTO: '{identity}' está autorizado a INSERTAR en '{table}'"
+        detail = (
+            f"POST {url} devolvió {status} con un error de restricción de datos (no de permiso): el RLS "
+            f"AUTORIZÓ la escritura y solo la validación del dato la frenó. No se escribió nada, pero el "
+            f"rol '{identity}' podría insertar con un cuerpo válido."
+        )
+    return Finding(
+        id=f"supabase-write-rls:{table}:{identity}",
+        rule_id="supabase-write-rls",
+        name=name,
+        severity="critical" if created else "high",
+        cwe="CWE-284",
+        owasp="API5:2023",
+        injection_point=InjectionPoint(location="body", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="status", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=status, url=url, text=body[:300]),
+        remediation=(
+            "Activa RLS en la tabla y define políticas de INSERT/UPDATE/DELETE con WITH CHECK que "
+            "restrinjan la escritura al propietario (p. ej. auth.uid() = user_id). Por defecto, deniega: "
+            "sin política, ningún rol anónimo/autenticado debería poder escribir."
+        ),
+    )
+
+
+async def _cleanup_created_rows(client: HttpClient, base: str, table: str, body: str) -> None:
+    """Best-effort delete of any row an INSERT probe created, matched by its returned ``id``."""
+    try:
+        rows = json.loads(body)
+    except ValueError:
+        return
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if isinstance(row, dict) and "id" in row:
+            try:
+                await client.request(
+                    "DELETE", f"{base}/{table}", params={"id": f"eq.{row['id']}"}, timeout=6.0, retries=0
+                )
+            except Exception:  # noqa: BLE001 — cleanup is best-effort; a failure is logged upstream, not raised
+                pass
+
+
+async def probe_write_rls(client: HttpClient, rest_base: str, tables: set[str], *, identity: str = "anon") -> list[Finding]:
+    """Safely test whether ``identity`` (whatever session ``client`` carries) can INSERT into each table.
+    Returns a finding per writable table. See the module note above for the safety model."""
+    base = _rest_base(rest_base)
+    findings: list[Finding] = []
+    for table in sorted(tables):
+        url = f"{base}/{table}"
+        if not client.is_in_scope(url):
+            continue
+        try:
+            resp = await client.post(
+                url, json={}, headers={"Prefer": "return=representation"}, timeout=8.0, retries=0
+            )
+        except (OutOfScopeError, BudgetExceededError):
+            continue
+        except Exception:  # noqa: BLE001 — a single failed probe must not abort the others
+            continue
+        body = resp.text or ""
+        low = body.lower()
+        if resp.status_code in (401, 403) or any(s in low for s in _RLS_DENIED):
+            continue  # RLS refused the write → secure
+        if resp.status_code == 201:  # a row was actually inserted → clean it up, then flag
+            await _cleanup_created_rows(client, base, table, body)
+            findings.append(_write_finding(url, table, identity, resp.status_code, body, created=True))
+        elif resp.status_code in (400, 409, 422) and any(s in low for s in _WRITE_AUTHORIZED_ERR):
+            findings.append(_write_finding(url, table, identity, resp.status_code, body, created=False))
+        # any other response (e.g. 400 PGRST parse/column errors) is inconclusive → no finding
+    return findings

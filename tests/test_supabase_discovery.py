@@ -10,6 +10,7 @@ from dastcore.discovery.supabase import (
     graphql_url_for,
     is_supabase_project,
     mine_supabase_refs,
+    probe_write_rls,
     table_probes,
 )
 
@@ -218,3 +219,57 @@ def test_coverage_finding_when_no_tables_found() -> None:
     finding = _supabase_coverage_finding("https://x.supabase.co/rest/v1/", SupabaseProfile())
     assert finding.severity == "info"
     assert "no se descubri" in finding.name.lower()
+
+
+# --- write-side RLS probe (Gap 1) -------------------------------------------------------------
+
+class _WriteClient:
+    """Fake client for the INSERT write-RLS probe: canned POST responses + records cleanup DELETEs."""
+
+    def __init__(self, responses):
+        self.responses = responses  # table -> (status, text)
+        self.deleted: list = []
+
+    def is_in_scope(self, url: str) -> bool:
+        return True
+
+    async def post(self, url: str, json=None, headers=None, timeout: float = 8.0, retries: int = 0):
+        table = url.rstrip("/").rsplit("/", 1)[-1]
+        status, text = self.responses.get(table, (400, '{"code":"PGRST204"}'))
+        return SimpleNamespace(status_code=status, text=text)
+
+    async def request(self, method: str, url: str, params=None, timeout: float = 6.0, retries: int = 0):
+        self.deleted.append((method, url, params))
+        return SimpleNamespace(status_code=204, text="")
+
+
+async def test_probe_write_rls_classifies_and_cleans_up() -> None:
+    responses = {
+        "orders": (401, '{"code":"42501","message":"new row violates row-level security policy"}'),
+        "public_notes": (201, '[{"id": 7, "title": "x"}]'),  # actually inserted → critical + cleanup
+        "leads": (400, '{"code":"23502","message":"null value in column violates not-null constraint"}'),
+        "quiet": (400, '{"code":"PGRST204","message":"Could not find the column"}'),  # inconclusive
+    }
+    client = _WriteClient(responses)
+    findings = await probe_write_rls(
+        client, "https://x.supabase.co/rest/v1/", {"orders", "public_notes", "leads", "quiet"}, identity="anon"
+    )
+    ids = {f.id for f in findings}
+    assert "supabase-write-rls:public_notes:anon" in ids  # 201 created
+    assert "supabase-write-rls:leads:anon" in ids  # 23502 → write authorized, data invalid
+    assert not any("orders" in i for i in ids)  # 42501 → RLS blocked, secure
+    assert not any("quiet" in i for i in ids)  # PGRST204 → inconclusive, no FP
+    assert client.deleted, "the created row should have been cleaned up"
+    created = next(f for f in findings if "public_notes" in f.id)
+    authorized = next(f for f in findings if "leads" in f.id)
+    assert created.severity == "critical"
+    assert authorized.severity == "high"
+
+
+def test_login_failed_finding_advises_unreliable_authz() -> None:
+    from dastcore.cli import _login_failed_finding
+
+    finding = _login_failed_finding("https://x.supabase.co/rest/v1/", ["authed"])
+    assert finding.severity == "info"
+    assert "authed" in finding.name
+    assert finding.rule_id == "authz-login"

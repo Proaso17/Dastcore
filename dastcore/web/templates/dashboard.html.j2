@@ -190,6 +190,15 @@
             controles <strong>seguros</strong> (pestañas, menús, «ver/detalles»…) para disparar y capturar las llamadas
             API que un SPA solo hace <strong>al interactuar</strong>. Nunca toca acciones destructivas
             (borrar/logout/pagar/enviar). Recomendado para apps modernas que dan pocos endpoints al cargar.</p>
+          <div class="check" style="margin-top:6px">
+            <input id="supabase_write_test" name="supabase_write_test" type="checkbox" value="on">
+            <label for="supabase_write_test" style="margin:0">Probar RLS de <strong>escritura</strong> en Supabase
+              (INSERT seguro)</label>
+          </div>
+          <p class="hint" style="margin:2px 0 10px">Solo en targets <code>*.supabase.co</code>. Además del RLS de
+            lectura, prueba si cada tabla acepta <strong>escritura</strong> (INSERT) de forma segura: distingue
+            «bloqueado» de «autorizado» sin escribir datos reales (y limpia si llegara a crear una fila).
+            <strong>Puede mutar</strong> en el peor caso — por eso es opt-in.</p>
           <details class="guide" style="margin-top:12px">
             <summary>Diccionarios (avanzado)</summary>
             <div class="gbody">

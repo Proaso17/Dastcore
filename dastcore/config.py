@@ -179,6 +179,7 @@ class ScanFile(BaseModel):
     graphql: str | None = None
     supabase_frontend: str | None = None  # front-end URL to mine for Supabase table names (RLS/authz)
     supabase_tables: list[str] | None = None  # explicit Supabase tables to probe (bypasses front-end mining)
+    supabase_write_test: bool | None = None  # opt-in: also test write-side RLS (safe INSERT probe; can mutate)
     format: str | None = None
     output: str | None = None
     fail_on: str | None = None
