@@ -48,7 +48,20 @@ _DEFAULT_UA = (
 # Chromium from advertising itself as automated (removes the tell that sets navigator.webdriver).
 _STEALTH_LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
+]
+# Memory-conserving flags applied to EVERY launch (stealth or not). A long scan keeps one browser
+# alive for a while; without these, Chromium's caches/GPU/renderer footprint grows until the host runs
+# out of memory and the process (and, in the web dashboard, the whole server) is killed mid-scan.
+_MEMORY_LAUNCH_ARGS = [
     "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-features=Translate,BackForwardCache,AcceptCHFrame",
+    "--disk-cache-size=1048576",
+    "--media-cache-size=1048576",
+    "--renderer-process-limit=2",
+    "--js-flags=--max-old-space-size=256",
 ]
 
 # Injected before any page script runs: patches the properties bot-detectors check to tell a headless
@@ -112,6 +125,8 @@ class HeadlessEngine:
         interactive: bool = False,
         max_clicks: int = 12,
         local_storage: dict[str, str] | None = None,
+        max_navigations: int = 600,
+        recycle_every: int = 150,
     ) -> None:
         self._scope = ScopeChecker(scope)
         self._cookies = cookies or {}
@@ -135,6 +150,12 @@ class HeadlessEngine:
         # Route the browser through a proxy/VPN so its traffic exits from a trusted IP (bypasses WAF
         # IP-reputation blocks). Same proxy the HTTP client uses, so both engines share the exit IP.
         self._proxy = proxy
+        # Robustness bounds for long scans: a hard cap on total pages opened (so a scan can't run
+        # unbounded) and periodic browser recycling (so Chromium's memory is reset before it OOMs).
+        self._max_navigations = max_navigations
+        self._recycle_every = max(1, recycle_every)
+        self._nav_count = 0
+        self._pages_since_recycle = 0
         self._captured: dict[str, HttpRequest] = {}
         self._pw = None
         self._browser = None
@@ -149,17 +170,23 @@ class HeadlessEngine:
             ) from exc
 
         self._pw = await async_playwright().start()
-        launch_args = _STEALTH_LAUNCH_ARGS if self._stealth else []
-        launch_kwargs: dict = {"args": launch_args}
-        if self._proxy:
-            launch_kwargs["proxy"] = {"server": self._proxy}  # route the browser via the proxy/VPN
         try:
-            self._browser = await self._pw.chromium.launch(**launch_kwargs)
+            await self._launch()
         except Exception as exc:  # pragma: no cover - depends on browser download
             await self._pw.stop()
             raise HeadlessUnavailableError(
                 "No se pudo lanzar Chromium. Ejecuta: python -m playwright install chromium"
             ) from exc
+        return self
+
+    async def _launch(self) -> None:
+        """(Re)create the browser + context with all auth/stealth/localStorage material re-applied.
+        Called on entry and on each recycle, so a long scan resets Chromium's memory periodically."""
+        launch_args = list(_MEMORY_LAUNCH_ARGS) + (_STEALTH_LAUNCH_ARGS if self._stealth else [])
+        launch_kwargs: dict = {"args": launch_args}
+        if self._proxy:
+            launch_kwargs["proxy"] = {"server": self._proxy}  # route the browser via the proxy/VPN
+        self._browser = await self._pw.chromium.launch(**launch_kwargs)
 
         # A real-looking context: a proper UA + viewport + locale, and an Accept-Language header — the
         # cheap tells a WAF checks before it even runs a JS challenge.
@@ -186,7 +213,27 @@ class HeadlessEngine:
                 [{"name": name, "value": value, "url": self._cookie_url} for name, value in self._cookies.items()]
             )
         self._context.on("request", self._on_request)
-        return self
+        self._context.on("page", self._on_page)  # count every page opened (crawl + detectors) for the cap/recycle
+
+    def _on_page(self, _page) -> None:
+        self._nav_count += 1
+        self._pages_since_recycle += 1
+
+    async def _maybe_recycle(self) -> None:
+        """Between operations, once enough pages have been opened, tear down and relaunch the browser to
+        release accumulated memory. Best-effort: a relaunch failure lets the next page open fail cleanly
+        rather than crash the scan. Must only be called when no page is currently held open."""
+        if self._pages_since_recycle < self._recycle_every:
+            return
+        self._pages_since_recycle = 0
+        try:
+            if self._context is not None:
+                await self._context.close()
+            if self._browser is not None:
+                await self._browser.close()
+            await self._launch()
+        except Exception:  # noqa: BLE001 — recycle is best-effort; a dead browser is handled at next page open
+            pass
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._context is not None:
@@ -235,7 +282,8 @@ class HeadlessEngine:
         discovered: list[HttpRequest] = []
         queue: deque[str] = deque([start_url])
 
-        while queue and len(seen_urls) < self._max_pages:
+        while queue and len(seen_urls) < self._max_pages and self._nav_count < self._max_navigations:
+            await self._maybe_recycle()
             url = queue.popleft().split("#", 1)[0]
             if url in seen_urls:
                 continue
@@ -363,10 +411,13 @@ class HeadlessEngine:
         findings: list[Finding] = []
         checked: set[str] = set()
         for url in urls:
+            if self._nav_count >= self._max_navigations:
+                break
             base = url.split("#", 1)[0]
             if base in checked or not self._scope.is_in_scope(base):
                 continue
             checked.add(base)
+            await self._maybe_recycle()
             finding = await probe_dom_xss(self._context, base)
             if finding is not None:
                 findings.append(finding)
@@ -380,6 +431,8 @@ class HeadlessEngine:
         seen: set[str] = set()
         probed = 0
         for req in requests:
+            if self._nav_count >= self._max_navigations:
+                break
             if req.method != "GET" or not (req.params or {}) or not self._scope.is_in_scope(req.url):
                 continue
             key = urlsplit(req.url).path + "?" + ",".join(sorted(req.params))
@@ -389,6 +442,7 @@ class HeadlessEngine:
             if probed >= max_points:
                 break
             probed += 1
+            await self._maybe_recycle()
             findings.extend(await probe_csti(self._context, req))
         return findings
 

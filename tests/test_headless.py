@@ -76,6 +76,24 @@ async def test_headless_no_dom_xss_false_positive_on_clean_page(vuln_app_url: st
     assert findings == []
 
 
+async def test_headless_recycles_browser_without_losing_functionality(vuln_app_url: str) -> None:
+    # Recycle after every page opened → the crawl must still discover the SPA's JS-rendered endpoints,
+    # proving the fresh browser re-applies auth/stealth/localStorage material (the OOM guard for long scans).
+    async with headless_engine(max_pages=10, recycle_every=1) as engine:
+        discovered = await engine.crawl(f"{vuln_app_url}/spa")
+    urls = {req.url for req in discovered}
+    assert any(u.endswith("/spa/item") for u in urls), urls
+
+
+async def test_headless_navigation_cap_stops_the_crawl(vuln_app_url: str) -> None:
+    # A hard cap of 1 total navigation stops the crawl almost immediately — it must return cleanly,
+    # never run unbounded (the robustness guard that prevents 3-hour scans / OOM).
+    async with headless_engine(max_pages=50, max_navigations=1) as engine:
+        discovered = await engine.crawl(f"{vuln_app_url}/spa")
+    assert isinstance(discovered, list)
+    assert engine._nav_count <= 1  # the cap was honored: it did not keep opening pages
+
+
 async def test_local_storage_injection_makes_the_spa_authenticate(vuln_app_url: str) -> None:
     # Seed localStorage before the SPA boots (as for a Supabase session): the page then calls its API
     # with the token, which the crawl captures — proving the browser rendered "logged in".
