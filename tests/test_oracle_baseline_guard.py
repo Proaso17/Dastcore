@@ -34,3 +34,23 @@ def test_echoed_payload_is_still_skipped() -> None:
     # The pre-existing reflection guard: a match that is only the echoed payload isn't a server signal.
     mutated = _resp("your input was: SQL syntax")
     assert check_response_match(mutated, [r"SQL syntax"], "body", payload="SQL syntax") is None
+
+
+def test_baseline_diffing_is_bounded_on_large_bodies() -> None:
+    # Regression (bWAPP): difflib over full large bodies with autojunk off froze the whole scan.
+    # Baseline diffing must be bounded now — a ~1MB mostly-repetitive HTML body profiles near-instantly.
+    import time
+
+    from dastcore.core.models import HttpResponse
+    from dastcore.validation.baseline import build_baseline, similarity_ratio
+
+    def r(text: str) -> HttpResponse:
+        return HttpResponse(status_code=200, headers={}, text=text, elapsed_ms=1.0, url="http://x/")
+
+    big_a = "<div class='row'>item</div>\n" * 40000 + "sid-AAAAAA"  # ~1.1 MB
+    big_b = "<div class='row'>item</div>\n" * 40000 + "sid-BBBBBB"
+    t0 = time.perf_counter()
+    build_baseline([r(big_a), r(big_b)])
+    similarity_ratio(big_a, big_b)
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 3.0, f"baseline diffing took {elapsed:.1f}s — not bounded (would hang the scan)"

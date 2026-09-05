@@ -140,3 +140,38 @@ def test_build_mutated_request_only_touches_targeted_param() -> None:
     point = InjectionPoint(location="query", name="q", base_value="demo", request_template=request)
     mutated = build_mutated_request(point, "'")
     assert mutated.params["page"] == "1"
+
+
+def test_ldap_xpath_rules_dont_fire_on_generic_sql_or_php_errors() -> None:
+    # #6 regression (bWAPP): on a MySQL SQL-error page (and no-param pages) ldap/xpath used to fire ~34x
+    # each on generic error text. Their oracles now require LDAP/XPath-specific signatures only.
+    from dastcore.core.models import HttpResponse
+    from dastcore.validation.oracles import check_response_match
+
+    rules = {rule.id: rule for rule in load_rules()}
+
+    def patterns_for(rule_id: str) -> list[str]:
+        return [p for check in rules[rule_id].oracle.checks
+                if check.type == "response_match" for p in check.patterns]
+
+    def body(text: str) -> HttpResponse:
+        return HttpResponse(status_code=500, headers={}, text=text, elapsed_ms=5.0, url="http://x/")
+
+    ldap_pats = patterns_for("ldap-injection")
+    xpath_pats = patterns_for("xpath-injection")
+
+    # bWAPP-style MySQL/PHP errors must NOT trigger ldap/xpath (the false-positive source).
+    for noise in (
+        "You have an error in your SQL syntax; check the manual that corresponds near '''",
+        "Warning: mysqli_fetch_array() expects parameter 1 to be mysqli_result, bool given",
+        "Fatal error: Uncaught Error in /var/www/bWAPP/sqli_1.php on line 42",
+        "Notice: Undefined index: title in /var/www/bWAPP/portal.php",
+    ):
+        assert check_response_match(body(noise), ldap_pats, part="body") is None, ("ldap FP", noise)
+        assert check_response_match(body(noise), xpath_pats, part="body") is None, ("xpath FP", noise)
+
+    # Their real, specific errors still fire — no loss of true positives.
+    assert check_response_match(body("LDAPError: invalid filter (LDAP: error code 87)"), ldap_pats, part="body")
+    assert check_response_match(body("javax.naming.NamingException: bad search filter"), ldap_pats, part="body")
+    assert check_response_match(body("XPathException: Invalid predicate"), xpath_pats, part="body")
+    assert check_response_match(body("net.sf.saxon.trans error XPST0003"), xpath_pats, part="body")

@@ -56,3 +56,32 @@ async def test_disconnect_on_one_request_does_not_abort_the_phase() -> None:
     # Every request in the batch was processed — the disconnects were isolated, not fatal to the gather.
     assert done.count("http://bad/x") == 2 and done.count("http://good/x") == 1
     assert isinstance(findings, list)
+
+
+def test_a_hanging_check_is_timed_out_not_frozen(vuln_app_url, monkeypatch) -> None:
+    # A check that hangs on a stuck socket/DNS (never attempting a new request, so the request-budget
+    # can't catch it) must be cancelled by the per-phase timeout — not freeze the entire scan forever.
+    import asyncio
+    import json
+
+    from typer.testing import CliRunner
+
+    from dastcore import cli
+
+    monkeypatch.setattr(cli, "_PHASE_TIMEOUT_S", 3.0)  # low cap so the test is fast
+
+    async def _hang(*_a, **_k):
+        await asyncio.sleep(120)  # simulate a hung phase (would freeze the scan without the fix)
+        return []
+
+    monkeypatch.setattr(cli, "run_nosql_checks", _hang)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["scan", vuln_app_url, "--i-have-authorization", "--rps", "80", "--fail-on", "none", "--quiet", "-f", "json"],
+    )
+    assert result.exit_code == 0, result.stdout  # the scan COMPLETED despite the hang
+    data = json.loads(result.stdout)
+    cov = [f for f in data if f.get("rule_id") == "scan-coverage"]
+    assert cov, "expected a partial-coverage advisory when a phase is skipped"
+    assert "nosql" in json.dumps(cov[0])  # the hung phase was recorded as skipped

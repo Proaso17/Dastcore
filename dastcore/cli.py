@@ -1023,6 +1023,12 @@ async def _discover_scan_roots(
     return roots
 
 
+# Per-isolated-check wall-clock cap (seconds). A check that hangs on a stuck socket/DNS to an
+# unroutable host never attempts a new request, so the request-level budget can't catch it; this
+# bounds every phase() so one hung check can't freeze the whole scan. The core active scan is exempt.
+_PHASE_TIMEOUT_S: float = 180.0
+
+
 async def _run_scan(
     config: ScanConfig,
     max_pages: int,
@@ -1102,19 +1108,29 @@ async def _run_scan(
     sink = FindingSink(findings_log).open() if findings_log else None  # persist findings as they're found
     failed_phases: list[str] = []
 
-    async def phase(name: str, coro: Awaitable[list[Any]]) -> list[Any]:
-        """Run one check in isolation: a bug or an odd response in it must never abort the whole scan.
+    async def phase(name: str, coro: Awaitable[list[Any]], *, timeout: float | None = _PHASE_TIMEOUT_S) -> list[Any]:
+        """Run one check in isolation: a bug, an odd response, OR a hang in it must never abort/freeze
+        the whole scan.
 
-        A budget cap still stops the scan (it's the intended soft stop, handled upstream); anything else
-        is logged with a traceback, recorded, and skipped so every other check still runs. Any findings a
-        check returns are streamed to the sink immediately, so a hard interruption loses nothing."""
+        A budget cap still stops the scan (it's the intended soft stop, handled upstream). Any other
+        error is logged, recorded, and skipped so every other check still runs. A per-phase wall-clock
+        ``timeout`` (default 180s) cancels a check that hangs — a stuck socket/DNS to an unroutable host
+        (e.g. cloud-metadata SSRF, takeover DNS) never attempts a new request, so the request-level
+        budget can't catch it and the scan would otherwise freeze forever. Any findings a check returns
+        are streamed to the sink immediately, so a hard interruption loses nothing."""
         try:
-            result = await coro
+            result = await (asyncio.wait_for(coro, timeout) if timeout is not None else coro)
         except BudgetExceededError:
             raise
         except Exception as exc:  # noqa: BLE001 — isolate: log it loudly, skip this one, keep going
+            is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
             _scan_log.warning(
-                "Comprobación '%s' omitida por un error: %s: %s", name, type(exc).__name__, exc, exc_info=True
+                "Comprobación '%s' omitida por %s: %s: %s",
+                name,
+                "timeout (posible cuelgue)" if is_timeout else "un error",
+                type(exc).__name__,
+                exc,
+                exc_info=not is_timeout,
             )
             failed_phases.append(name)
             return []
@@ -1613,7 +1629,12 @@ async def _run_scan(
                 progress.status("Probando HTTP request smuggling (CL.TE)…")
                 extra_findings.extend(await phase("smuggling", run_smuggling_checks(client, all_requests)))
             active_passive = await phase(
-                "active-scan", _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink)
+                # The core injection scan is exempt from the per-phase timeout: it is already bounded by
+                # per-request timeouts + the overall budget (checked between requests), and a large legit
+                # scan can outlast any fixed per-phase cap.
+                "active-scan",
+                _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink),
+                timeout=None,
             )
 
             # WAF-block advisory: if the target's WAF/CDN rejected most requests, the scan didn't see the

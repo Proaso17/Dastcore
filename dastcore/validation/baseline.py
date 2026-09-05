@@ -55,13 +55,19 @@ def normalize_body(text: str, extra_masks: Iterable[str] = ()) -> str:
 # real content — no whitespace or markup — so discovery never masks legitimate text.
 _TOKENISH = re.compile(r"^[^\s<>\"'{}]{3,40}$")
 
+# difflib.SequenceMatcher is ~O(n*m) and, with autojunk disabled, has no speedup on the repetitive
+# markup of a big HTML/error page — a large response could make it run for minutes and freeze the
+# whole (single-threaded async) scan. Cap the input length so baseline diffing is always bounded;
+# volatile tokens that matter for masking appear well within this prefix.
+_MAX_DIFF_LEN = 15000
+
 
 def _discover_masks(bodies: list[str]) -> tuple[str, ...]:
     """Residual volatile substrings: token-like spans that still differ between two
     samples after the global masks. These are app-specific ids the patterns missed."""
     if len(bodies) < 2:
         return ()
-    a, b = normalize_body(bodies[0]), normalize_body(bodies[1])
+    a, b = normalize_body(bodies[0][:_MAX_DIFF_LEN]), normalize_body(bodies[1][:_MAX_DIFF_LEN])
     masks: list[str] = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
         if tag in ("replace", "delete"):
@@ -96,7 +102,8 @@ class BaselineProfile:
 
 def similarity_ratio(a_text: str, b_text: str, extra_masks: Iterable[str] = ()) -> float:
     """How similar two bodies are (0..1) after volatile normalization."""
-    a, b = normalize_body(a_text, extra_masks), normalize_body(b_text, extra_masks)
+    a = normalize_body(a_text[:_MAX_DIFF_LEN], extra_masks)  # cap raw first: bounds both the regex
+    b = normalize_body(b_text[:_MAX_DIFF_LEN], extra_masks)  # normalization and difflib's ~O(n*m) cost
     if a == b:
         return 1.0
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
