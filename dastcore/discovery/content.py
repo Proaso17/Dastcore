@@ -28,6 +28,7 @@ import httpx
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import HttpResponse
+from dastcore.discovery.crawler_http import _is_logout  # never brute-force a logout path (drops the session)
 
 _WORDLISTS = Path(__file__).parent / "wordlists"
 # Depth takes a prefix of the (priority-ordered) wordlist. None = the whole list.
@@ -263,9 +264,11 @@ class ContentDiscoverer:
         async def probe(candidate: str) -> None:
             if budget[0] <= 0 or self._stopped or time.monotonic() >= self._deadline:
                 return
+            url = urljoin(directory, candidate)
+            if _is_logout(url):  # a GET to /logout(.php) would drop the authenticated session mid-scan
+                return
             budget[0] -= 1
             async with semaphore:
-                url = urljoin(directory, candidate)
                 resp = await self._get(url)
             if resp is None or resp.status_code not in _INTERESTING or baseline.explains(resp):
                 return

@@ -1189,6 +1189,35 @@ async def _run_scan(
             for historical_req in historical_requests:  # historical endpoints (with their params) get scanned
                 discovered.setdefault(historical_req.signature(), historical_req)
 
+            # Manual seed paths are scanned DIRECTLY (not only fed to the dirbuster as words): resolve each
+            # against every root so a known vulnerable page — with any query params as injection points — is
+            # always tested, even when it isn't linked/crawlable (e.g. bWAPP's dropdown-only navigation).
+            if seed_paths:
+                from urllib.parse import urljoin as _urljoin
+                from urllib.parse import urlsplit as _seed_split
+
+                seen_origins: set[str] = set()
+                seeded = 0
+                for root in scan_roots:
+                    parts = _seed_split(root)
+                    origin = f"{parts.scheme}://{parts.netloc}/"  # resolve against the host root, NOT the
+                    if origin in seen_origins:  # target's path — target may be a file (…/portal.php)
+                        continue
+                    seen_origins.add(origin)
+                    for seed in seed_paths:
+                        seed = seed.strip()
+                        if not seed:
+                            continue
+                        seed_url = _urljoin(origin, seed.lstrip("/"))
+                        if not client.is_in_scope(seed_url):
+                            continue
+                        seed_req = url_to_request(seed_url)
+                        if seed_req is not None and seed_req.signature() not in discovered:
+                            discovered[seed_req.signature()] = seed_req
+                            seeded += 1
+                if seeded:
+                    _scan_log.info("Rutas seed añadidas al escaneo activo: %d", seeded)
+
             if discover_subdomains or discover_content or discover_ports:
                 from urllib.parse import urlsplit as _urlsplit
 

@@ -177,3 +177,13 @@ async def test_recursion_is_bounded_by_depth() -> None:
     found = {urlsplit(e.url).path for e in await disc.discover("http://t/")}
     assert "/a/" in found and "/a/b/" in found  # depth 1 reached
     assert "/a/b/c" not in found  # ...but not depth 2
+
+
+async def test_content_discovery_never_requests_logout() -> None:
+    # A GET to /logout(.php) would drop the authenticated session mid-scan. Content discovery must skip
+    # logout paths even when the wordlist (or extension fuzzing) would produce them.
+    client = _FakeClient({"/admin": (200, "admin panel")})
+    disc = ContentDiscoverer(client, wordlist=["logout", "admin"], extensions=["php"])  # type: ignore[arg-type]
+    found = {urlsplit(e.url).path for e in await disc.discover("http://t/")}
+    assert "/admin" in found
+    assert not any("logout" in r.lower() for r in client.requested), client.requested  # never even requested

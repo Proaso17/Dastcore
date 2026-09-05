@@ -23,3 +23,12 @@ async def test_manual_seed_path_reaches_an_unlinked_vuln_without_auto_discovery(
     assert any(
         f.rule_id == "sqli-injection" and "/backup" in (f.request.url if f.request else "") for f in findings
     ), "the manually-seeded /backup path should have been scanned and its SQLi reported"
+
+
+async def test_manual_seed_path_with_query_is_scanned_directly(vuln_app_url: str) -> None:
+    # A seed carrying a query string becomes a DIRECT scannable request (its params are injection
+    # points), so a known vulnerable URL is tested even when it's unlinked and dirbust can't parse it.
+    findings = await _run_scan(_config(vuln_app_url), max_pages=1, engine="http", seed_paths=["backup?q=x"])
+    assert any(
+        f.rule_id == "sqli-injection" and "/backup" in (f.request.url if f.request else "") for f in findings
+    ), "a query-string seed should be scanned directly and its SQLi reported"

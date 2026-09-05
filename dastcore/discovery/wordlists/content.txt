@@ -4,7 +4,6 @@
 # Point --content-wordlist at a bigger list (e.g. SecLists) for exhaustive runs.
 admin
 login
-logout
 register
 signup
 signin
@@ -651,7 +650,6 @@ api/openapi
 api/graphql
 api/auth
 api/login
-api/logout
 api/token
 api/refresh
 api/register

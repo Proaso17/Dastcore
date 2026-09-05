@@ -24,6 +24,7 @@ import httpx
 
 from dastcore.core.http_client import HttpClient, OutOfScopeError
 from dastcore.core.models import HttpRequest
+from dastcore.discovery.crawler_http import _is_logout  # don't activate a logout endpoint (drops the session)
 
 # Path markers that mark a URL as an API endpoint worth probing for non-GET verbs.
 _API_MARKERS = ("/api/", "/api", "/v1/", "/v2/", "/v3/", "/rest/", "/rpc/", "/graphql", "/gql")
@@ -133,6 +134,8 @@ async def activate_endpoints(
 
     activated: dict[str, HttpRequest] = {}
     for url in candidates:
+        if _is_logout(url):  # a POST/OPTIONS to a logout endpoint would drop the authenticated session
+            continue
         try:
             options = await client.request("OPTIONS", url, timeout=8.0, retries=0)
             allow = _allowed_methods(options.headers.get("allow", ""))
