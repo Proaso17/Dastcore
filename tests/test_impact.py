@@ -429,3 +429,73 @@ async def test_code_injection_on_reflecting_endpoint_is_not_overclaimed(echo_url
     async with HttpClient(_scope()) as client:
         n = await prove_findings_impact(client, [finding])
     assert n == 0 and finding.impact is None
+
+
+# --- XPath injection → proof of record disclosure --------------------------------------------
+
+
+def _xpath_app():
+    """Simulates an injectable XPath filter [login='$lg' and password='$pw']: an always-true OR term
+    discloses a hidden record, an always-false AND matches nothing, a normal value matches only a hero."""
+    from flask import Flask, Response, request
+
+    SECRET = "MATRIX-SEEKRIT-42"
+    app = Flask(__name__)
+
+    @app.get("/login")
+    def login() -> Response:
+        lg = request.args.get("login", "")
+        if re.search(r"or\s+'?1'?\s*=\s*'?1", lg) or re.search(r"\bor\s+1=1", lg):
+            body = f"<p>Welcome <b>Neo</b>, how are you?</p><p>Your secret: <b>{SECRET}</b></p>"
+        elif lg == "neo":
+            body = "<p>Welcome <b>Neo</b>, how are you?</p><p>Your secret: <b>own</b></p>"
+        else:
+            body = "<p>No hero found</p>"
+        return Response(f"<html><body><nav>Menu Home About Contact</nav>{body}</body></html>", mimetype="text/html")
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def xpath_url() -> Iterator[str]:
+    url, server = _serve(_xpath_app())
+    yield url
+    server.shutdown()
+
+
+def _xpath_finding(base: str, path: str = "/login", name: str = "login") -> Finding:
+    req = HttpRequest(method="GET", url=f"{base}{path}", params={name: "neo", "password": "x"})
+    point = InjectionPoint(location="query", name=name, base_value="neo", request_template=req)
+    return Finding(
+        id=f"xpath-injection:GET:{path}:query:{name}",
+        rule_id="xpath-injection",
+        name="XPath Injection",
+        severity="high",
+        cwe="CWE-643",
+        owasp="WSTG-INPV-09",
+        injection_point=point,
+        evidence=[Evidence(type="response_match", data="XPath error surfaced")],
+        request=req,
+        response=HttpResponse(status_code=200),
+        remediation="Usa XPath parametrizado.",
+        family="xpath",
+    )
+
+
+async def test_confirmed_xpath_discloses_hidden_record(xpath_url: str) -> None:
+    finding = _xpath_finding(xpath_url)
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 1
+    assert finding.impact is not None
+    assert "MATRIX-SEEKRIT-42" in finding.impact  # the hidden record leaked by the always-true predicate
+    assert "Menu Home About Contact" not in finding.impact  # shared chrome cancels out, not reported as leak
+    assert len(finding.impact) < 400
+
+
+async def test_xpath_on_reflecting_endpoint_is_not_overclaimed(echo_url: str) -> None:
+    # /search returns the same regardless of the predicate → no differential → nothing "disclosed".
+    finding = _xpath_finding(echo_url, path="/search", name="q")
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 0 and finding.impact is None
