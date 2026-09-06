@@ -342,3 +342,90 @@ async def test_cmdi_reflect_only_endpoint_is_not_claimed(cmdi_reflect_url: str) 
         n = await prove_findings_impact(client, [finding])
     assert n == 0  # the payload is echoed but never executed → no impact
     assert finding.impact is None
+
+
+# --- Code injection (direct eval sink) → proof of RCE ----------------------------------------
+
+
+def _code_eval_app():
+    """A sink that eval()s the value as PHP `echo <code>;` — resolve the proof payloads' function calls
+    to canned, realistic output (so the test never runs real commands) while echoing anything else."""
+    from flask import Flask, Response, request
+
+    def _fn_output(name: str, arg: str) -> str:
+        if name in ("system", "exec", "shell_exec", "passthru"):
+            return {"id": "uid=0(root) gid=0(root) groups=0(root)",
+                    "uname -a": "Linux testhost 6.1.0 x86_64 GNU/Linux"}.get(arg, "")
+        if name == "php_uname":
+            return "Linux testhost 6.1.0 x86_64"
+        return ""
+
+    def _php_echo_eval(code: str) -> str:
+        m = re.fullmatch(r"'([^']*)'\.(\w+)\('([^']*)'\)\.'([^']*)'", code)  # 'L'.fn('arg').'R'
+        if m:
+            return m.group(1) + _fn_output(m.group(2), m.group(3)) + m.group(4)
+        m = re.fullmatch(r"'([^']*)'\.(\w+)\(\)\.'([^']*)'", code)  # 'L'.builtin().'R'
+        if m:
+            return m.group(1) + _fn_output(m.group(2), "") + m.group(3)
+        m = re.fullmatch(r"(\d+)\*(\d+)", code)  # arithmetic (the detection payload)
+        if m:
+            return str(int(m.group(1)) * int(m.group(2)))
+        return code  # anything else: reflect verbatim
+
+    app = Flask(__name__)
+
+    @app.get("/eval")
+    def ev() -> Response:
+        return Response(f"<p><i>{_php_echo_eval(request.args.get('code', ''))}</i></p>", mimetype="text/html")
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def code_eval_url() -> Iterator[str]:
+    url, server = _serve(_code_eval_app())
+    yield url
+    server.shutdown()
+
+
+def _code_injection_finding(base: str) -> Finding:
+    req = HttpRequest(method="GET", url=f"{base}/eval", params={"code": "1"})
+    point = InjectionPoint(location="query", name="code", base_value="1", request_template=req)
+    return Finding(
+        id="code-injection:GET:/eval:query:code",
+        rule_id="code-injection",
+        name="Server-side code injection (eval directo)",
+        severity="critical",
+        cwe="CWE-94",
+        owasp="A03:2021",
+        injection_point=point,
+        evidence=[Evidence(type="reflected", data="arithmetic evaluated")],
+        request=req,
+        response=HttpResponse(status_code=200),
+        remediation="No evalúes entrada como código.",
+        family="code-injection",
+    )
+
+
+async def test_confirmed_code_injection_is_escalated_to_rce(code_eval_url: str) -> None:
+    finding = _code_injection_finding(code_eval_url)
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 1
+    assert finding.impact is not None
+    assert "uid=0(root)" in finding.impact  # real command output read back, not the reflected payload
+    assert "RCE" in finding.impact
+    assert len(finding.impact) < 400
+
+
+async def test_code_injection_on_reflecting_endpoint_is_not_overclaimed(echo_url: str) -> None:
+    # /search echoes the raw payload but never executes it → no command output → no impact claimed.
+    finding = _code_injection_finding(echo_url)
+    finding.injection_point.request_template = HttpRequest(
+        method="GET", url=f"{echo_url}/search", params={"q": "1"}
+    )
+    finding.injection_point.name = "q"
+    finding.request = finding.injection_point.request_template
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 0 and finding.impact is None

