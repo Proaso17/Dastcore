@@ -399,28 +399,29 @@ class HttpClient:
             timeout=timeout, retries=retries,
         )
 
-        if (
-            self._session is not None
-            and _allow_relogin
-            and self._session.can_relogin
-            and self._session.is_expired(response)
-        ):
-            if await self._session.ensure_logged_in(self, seen_epoch=epoch):
-                # Retry once with the freshly re-established session (pass the *original*
-                # per-request headers/cookies so the new session material is re-applied).
-                return await self.request(
-                    method,
-                    url,
-                    params=params,
-                    headers=headers,
-                    cookies=cookies,
-                    data=data,
-                    json=json,
-                    files=files,
-                    timeout=timeout,
-                    retries=retries,
-                    _allow_relogin=False,
-                )
+        if self._session is not None and self._session.can_relogin:
+            if self._session.is_expired(response):
+                if _allow_relogin and await self._session.ensure_logged_in(self, seen_epoch=epoch):
+                    # Retry once with the freshly re-established session (pass the *original*
+                    # per-request headers/cookies so the new session material is re-applied).
+                    return await self.request(
+                        method,
+                        url,
+                        params=params,
+                        headers=headers,
+                        cookies=cookies,
+                        data=data,
+                        json=json,
+                        files=files,
+                        timeout=timeout,
+                        retries=retries,
+                        _allow_relogin=False,
+                    )
+            else:
+                # The session is alive (this request wasn't bounced to login). Reset the re-login
+                # budget so a fragile-but-recoverable session (drops under load, re-logs in, works,
+                # drops again) never exhausts it — only auth that never recovers trips max_relogin.
+                self._session.note_success()
 
         return response
 

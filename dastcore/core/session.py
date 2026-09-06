@@ -96,6 +96,19 @@ class SessionManager:
         async with self._lock:
             return
 
+    def note_success(self) -> None:
+        """Record that a request came back with a live session (auth material is working).
+
+        Resets the re-login counter. The ``max_relogin`` budget is meant to stop an *unproductive*
+        re-login loop — auth that is fundamentally broken, where each re-login yields a session that
+        immediately looks expired again. It must NOT cap the *total* re-logins over a long scan of an
+        app that legitimately drops its session periodically (a fragile PHP session under load, a
+        short server-side timeout) and recovers each time. By resetting on every successful request,
+        the budget becomes "consecutive re-logins with no working request in between": a recoverable
+        session runs indefinitely, while genuinely broken auth still trips it after max_relogin tries.
+        """
+        self._relogin_count = 0
+
     def apply(self, headers: dict[str, str] | None) -> dict[str, str]:
         """Merge session headers under any per-request overrides (explicit values win).
 
