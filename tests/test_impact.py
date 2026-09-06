@@ -499,3 +499,81 @@ async def test_xpath_on_reflecting_endpoint_is_not_overclaimed(echo_url: str) ->
     async with HttpClient(_scope()) as client:
         n = await prove_findings_impact(client, [finding])
     assert n == 0 and finding.impact is None
+
+
+# --- XXE → proof of file exfiltration (escalation) -------------------------------------------
+
+
+def _xxe_app():
+    """Vulnerable XML endpoint: resolves external entities and reflects the parsed root. The resolver
+    serves a fake SSH private key for id_rsa (so the test reads no real file and runs on any OS)."""
+    from flask import Flask, Response, request
+    from lxml import etree
+
+    fake_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+
+    class _Files(etree.Resolver):  # type: ignore[misc]
+        def resolve(self, url, pubid, context):  # noqa: A002
+            return self.resolve_string(fake_key if "id_rsa" in url else "", context)
+
+    app = Flask(__name__)
+
+    @app.post("/xml")
+    def xml() -> Response:
+        parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=True)
+        parser.resolvers.add(_Files())
+        try:
+            root = etree.fromstring(request.get_data(as_text=True).encode(), parser)
+            parsed = root.text or ""
+        except etree.XMLSyntaxError:
+            parsed = ""
+        return Response(f"<html><body><r>{parsed}</r></body></html>", mimetype="text/html")
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def xxe_url() -> Iterator[str]:
+    url, server = _serve(_xxe_app())
+    yield url
+    server.shutdown()
+
+
+def _xxe_finding(base: str) -> Finding:
+    req = HttpRequest(method="POST", url=f"{base}/xml", headers={"Content-Type": "application/xml"})
+    point = InjectionPoint(location="body", name="xml-document", base_value="", request_template=req)
+    return Finding(
+        id="xxe-inband:POST:/xml:body:xml-document",
+        rule_id="xxe-inband",
+        name="XML External Entity (in-band)",
+        severity="high",
+        cwe="CWE-611",
+        owasp="A05:2021",
+        injection_point=point,
+        evidence=[Evidence(type="response_match", data="entity resolved")],
+        request=req,
+        response=HttpResponse(status_code=200),
+        remediation="Desactiva DTD/entidades externas.",
+        family="xxe",
+    )
+
+
+async def test_confirmed_xxe_escalates_to_file_exfiltration(xxe_url: str) -> None:
+    finding = _xxe_finding(xxe_url)
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 1
+    assert finding.impact is not None
+    assert "clave privada" in finding.impact  # escalated to reading an SSH private key
+    assert len(finding.impact) < 400
+
+
+async def test_xxe_on_hardened_parser_yields_no_impact(echo_url: str) -> None:
+    # /search reflects the raw body but resolves no entities → nothing exfiltrated.
+    finding = _xxe_finding(echo_url)
+    finding.injection_point.request_template = HttpRequest(
+        method="POST", url=f"{echo_url}/search", headers={"Content-Type": "application/xml"}
+    )
+    async with HttpClient(_scope()) as client:
+        n = await prove_findings_impact(client, [finding])
+    assert n == 0 and finding.impact is None

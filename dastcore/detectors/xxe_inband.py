@@ -98,43 +98,45 @@ def _finding(point: InjectionPoint, request: HttpRequest, response: HttpResponse
     )
 
 
-async def _probe(client: HttpClient, sender, point: InjectionPoint) -> Finding | None:
-    """Send each file-target payload via ``sender`` (xml -> HttpResponse|None); confirm reproducible."""
-    for target in _XXE_TARGETS:
-        resp = await sender(_payload(target))
-        if resp is None:
-            continue
-        hit = _match_signature(resp.text)
-        if not hit:
-            continue
-        confirm = await sender(_payload(target))
-        if confirm is not None and _match_signature(confirm.text):
-            label, snippet = hit
-            return _finding(point, point.request_template, resp, label, snippet)
-    return None
-
-
-async def _send_raw_xml(client: HttpClient, request: HttpRequest, xml: str) -> HttpResponse | None:
-    """POST the raw XML document as the request body (Content-Type: application/xml), session-aware."""
-    headers = {k: v for k, v in (request.headers or {}).items() if k.lower() != "content-type"}
-    headers["Content-Type"] = "application/xml"
-    method = request.method if request.method in ("POST", "PUT", "PATCH") else "POST"
+async def xxe_send(client: HttpClient, point: InjectionPoint, xml: str) -> HttpResponse | None:
+    """Deliver an XXE document to ``point``: as the raw request body for an XML endpoint (the synthetic
+    ``xml-document`` point), or injected as the value of a body/JSON point that parses XML. Session-aware.
+    Shared by the detector and the proof-of-impact escalation so both send exactly the same way."""
     try:
-        return await client.request(method, request.url, headers=headers, content=xml)
-    except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
-        return None
-
-
-async def _send_value(client: HttpClient, point: InjectionPoint, xml: str) -> HttpResponse | None:
-    """Inject the XML document as the value of a body/JSON point (endpoints that parse a param as XML)."""
-    req = build_mutated_request(point, xml)
-    try:
+        if point.location == "body" and point.name == "xml-document":
+            request = point.request_template
+            headers = {k: v for k, v in (request.headers or {}).items() if k.lower() != "content-type"}
+            headers["Content-Type"] = "application/xml"
+            method = request.method if request.method in ("POST", "PUT", "PATCH") else "POST"
+            return await client.request(method, request.url, headers=headers, content=xml)
+        req = build_mutated_request(point, xml)
         return await client.request(
             req.method, req.url, params=req.params or None, headers=req.headers or None,
             cookies=req.cookies or None, data=req.data, json=req.json_body,
         )
     except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
         return None
+
+
+async def read_file_via_xxe(client: HttpClient, point: InjectionPoint, target: str) -> tuple[str, str] | None:
+    """Try to read ``target`` (a ``file://`` URI) through an external-entity payload on ``point``.
+    Returns ``(sensitive-file label, snippet)`` when the response reflects a known sensitive-file
+    signature, else None. The building block for both detection and impact escalation."""
+    resp = await xxe_send(client, point, _payload(target))
+    return _match_signature(resp.text) if resp is not None else None
+
+
+async def _probe(client: HttpClient, point: InjectionPoint) -> Finding | None:
+    """Try each file target on ``point`` and report the first that reflects a sensitive file; reproduce."""
+    for target in _XXE_TARGETS:
+        hit = await read_file_via_xxe(client, point, target)
+        if hit is None:
+            continue
+        confirm = await read_file_via_xxe(client, point, target)
+        if confirm is not None:
+            label, snippet = hit
+            return _finding(point, point.request_template, HttpResponse(status_code=200), label, snippet)
+    return None
 
 
 async def run_xxe_inband_checks(client: HttpClient, requests: list[HttpRequest]) -> list[Finding]:
@@ -152,7 +154,7 @@ async def run_xxe_inband_checks(client: HttpClient, requests: list[HttpRequest])
                 seen.add(key)
                 probed += 1
                 point = InjectionPoint(location="body", name="xml-document", base_value="", request_template=request)
-                found = await _probe(client, lambda xml, r=request: _send_raw_xml(client, r, xml), point)
+                found = await _probe(client, point)
                 if found is not None:
                     findings.append(found)
 
@@ -167,7 +169,7 @@ async def run_xxe_inband_checks(client: HttpClient, requests: list[HttpRequest])
             probed += 1
             if probed > _MAX_POINTS:
                 return findings
-            found = await _probe(client, lambda xml, p=point: _send_value(client, p, xml), point)
+            found = await _probe(client, point)
             if found is not None:
                 findings.append(found)
         if probed > _MAX_POINTS:

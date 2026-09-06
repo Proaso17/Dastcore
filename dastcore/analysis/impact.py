@@ -58,7 +58,7 @@ async def prove_findings_impact(
     client: HttpClient,
     findings: list[Finding],
     *,
-    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti", "cmdi", "code-injection", "xpath"}),
+    families: frozenset[str] = frozenset({"sqli", "lfi", "ssti", "cmdi", "code-injection", "xpath", "xxe"}),
 ) -> int:
     """Enrich confirmed findings in place with proof of impact. Returns how many were enriched."""
     provers = {
@@ -68,6 +68,7 @@ async def prove_findings_impact(
         "cmdi": _prove_cmdi,
         "code-injection": _prove_code_injection,
         "xpath": _prove_xpath,
+        "xxe": _prove_xxe,
     }
     proven = 0
     for finding in findings:
@@ -368,6 +369,40 @@ async def _prove_code_injection(client: HttpClient, finding: Finding) -> str | N
                 f"Ejecución de código arbitrario confirmada vía inyección de código (eval): {label} "
                 f"devolvió «{output}». Un atacante ejecuta código del lado servidor (posible RCE)."
             )
+    return None
+
+
+# --- XXE (CWE-611) → escalate a confirmed external-entity read to high-value file exfiltration -----
+# The in-band XXE detector confirms the parser resolves external entities (it read /etc/passwd). This
+# escalates that to the secrets an attacker would actually take — SSH keys, shadow, common credential and
+# app-config files — reusing the exact same delivery channel the finding was found on. Read-only, bounded;
+# reports only a real sensitive-file signature, so it never overclaims. Only runs over confirmed findings.
+_XXE_ESCALATION_TARGETS: list[str] = [
+    "file:///root/.ssh/id_rsa",
+    "file:///home/app/.ssh/id_rsa",
+    "file:///etc/shadow",
+    "file:///var/www/html/config.inc.php",
+    "file:///etc/passwd",
+    "file:///c:/windows/win.ini",
+]
+
+
+async def _prove_xxe(client: HttpClient, finding: Finding) -> str | None:
+    from dastcore.detectors.xxe_inband import read_file_via_xxe
+
+    point = finding.injection_point
+    if point is None:
+        return None
+    for target in _XXE_ESCALATION_TARGETS[:_MAX_REQ_PER_FINDING]:
+        hit = await read_file_via_xxe(client, point, target)
+        if hit is None:
+            continue
+        label, snippet = hit
+        return (
+            f"Exfiltración de fichero confirmada vía XXE: {label}. Fragmento (solo lectura, acotado): "
+            f"«{_clean(snippet)}». Un atacante puede leer ficheros arbitrarios del servidor (claves, "
+            "credenciales, código fuente)."
+        )
     return None
 
 
