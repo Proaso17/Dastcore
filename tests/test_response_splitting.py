@@ -82,3 +82,16 @@ async def test_sanitized_header_is_not_flagged(safe_url: str) -> None:
     async with HttpClient(_scope()) as client:
         findings = await run_response_splitting_checks(client, [_req(safe_url)])
     assert findings == []
+
+
+async def test_undeliverable_crlf_url_does_not_crash_the_phase(safe_url: str) -> None:
+    """A path injection point puts the CR/LF payload directly into request.url, and httpx refuses to
+    send a URL with a raw CR/LF — raising httpx.InvalidURL, which is NOT an httpx.HTTPError subclass.
+    The check must swallow it and return no findings, never let it abort the whole phase (a bare
+    'except httpx.HTTPError' would let it escape and falsely mark the scan coverage as partial)."""
+    # A trailing numeric path segment yields a `path` injection point; the mutated value lands in the
+    # URL, so the raw CR/LF makes httpx reject it. Must not raise; returns no finding.
+    req = HttpRequest(method="GET", url=f"{safe_url}/api/user/1")
+    async with HttpClient(_scope()) as client:
+        findings = await run_response_splitting_checks(client, [req])
+    assert findings == []

@@ -85,3 +85,52 @@ def test_a_hanging_check_is_timed_out_not_frozen(vuln_app_url, monkeypatch) -> N
     cov = [f for f in data if f.get("rule_id") == "scan-coverage"]
     assert cov, "expected a partial-coverage advisory when a phase is skipped"
     assert "nosql" in json.dumps(cov[0])  # the hung phase was recorded as skipped
+
+
+def test_authenticated_scan_caps_active_concurrency() -> None:
+    """A fragile server-side session (bWAPP/PHP) drops under a concurrent burst, so authenticated
+    active scans are capped to a safe concurrency; unauthenticated scans keep the configured value."""
+    from dastcore.cli import _AUTH_SAFE_CONCURRENCY, _active_scan_concurrency
+
+    # Authenticated: a high configured concurrency is capped down to the safe ceiling.
+    assert _active_scan_concurrency(5, authenticated=True) == _AUTH_SAFE_CONCURRENCY
+    assert _active_scan_concurrency(64, authenticated=True) == _AUTH_SAFE_CONCURRENCY
+    # Authenticated but already at/below the ceiling: respected, never raised.
+    assert _active_scan_concurrency(1, authenticated=True) == 1
+    assert _active_scan_concurrency(_AUTH_SAFE_CONCURRENCY, authenticated=True) == _AUTH_SAFE_CONCURRENCY
+    # Unauthenticated: the configured concurrency is used as-is (no session to protect).
+    assert _active_scan_concurrency(5, authenticated=False) == 5
+    assert _active_scan_concurrency(64, authenticated=False) == 64
+
+
+def test_make_client_caps_global_concurrency_when_authenticated() -> None:
+    """The HttpClient's global semaphore bounds every phase (crawl, discovery, active scan), so an
+    authenticated scan must cap it to keep a fragile server-side session alive. _make_client applies
+    the cap only when asked (cap_concurrency=True); the deliberately-anonymous clients keep their
+    configured concurrency."""
+    from dastcore.cli import _AUTH_SAFE_CONCURRENCY, _Budget, _make_client
+    from dastcore.config import AuthConfig, FormLoginConfig, RateLimitConfig, ScanConfig, ScopeConfig
+    from dastcore.core.session import SessionManager
+
+    config = ScanConfig(
+        target="http://127.0.0.1:8080/",  # type: ignore[arg-type]
+        scope=ScopeConfig(allow_domains=["127.0.0.1"]),
+        rate_limit=RateLimitConfig(requests_per_second=25, max_concurrency=10),
+        auth=AuthConfig(
+            type="form",
+            form=FormLoginConfig(
+                login_url="http://127.0.0.1:8080/login.php",
+                credentials={"login": "bee", "password": "bug"},
+            ),
+        ),
+        i_have_authorization=True,
+    )
+    budget = _Budget(max_requests=None, time_budget_s=None)
+    session = SessionManager(config.auth)
+
+    # Authenticated + cap requested: the global semaphore is gated to the safe ceiling.
+    capped = _make_client(config, budget, session, cap_concurrency=True)
+    assert capped._semaphore._value == _AUTH_SAFE_CONCURRENCY
+    # Same config, but this is an anonymous helper client: it keeps the configured concurrency.
+    uncapped = _make_client(config, budget, cap_concurrency=False)
+    assert uncapped._semaphore._value == 10

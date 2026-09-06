@@ -558,7 +558,9 @@ async def _open_authenticated_client(
     stack: AsyncExitStack, config: ScanConfig, auth: AuthConfig, budget: _Budget
 ) -> HttpClient:
     session = SessionManager(auth) if auth.type != "none" else None
-    client = await stack.enter_async_context(_make_client(config, budget, session))
+    client = await stack.enter_async_context(
+        _make_client(config, budget, session, cap_concurrency=auth.type != "none")
+    )
     if session is not None and session.can_relogin:
         if not await session.ensure_logged_in(client, initial=True):
             raise SessionLoginError(f"El login inicial falló para una identidad ({auth.type}).")
@@ -572,8 +574,20 @@ def _make_client(
     user_agent: str = "",
     proxy: str = "",
     attribution: dict[str, str] | None = None,
+    cap_concurrency: bool = False,
 ) -> HttpClient:
     rl = config.rate_limit
+    if cap_concurrency and rl.max_concurrency > _AUTH_SAFE_CONCURRENCY:
+        # Authenticated scan: the HttpClient's global semaphore bounds EVERY phase (crawl, discovery,
+        # active scan). A single server-side session drops under a concurrent burst, so gate the whole
+        # scan to a session-safe concurrency (see _AUTH_SAFE_CONCURRENCY). Copy, never mutate the shared
+        # config — other clients (the deliberately-anonymous ones) must keep the configured value.
+        rl = rl.model_copy(update={"max_concurrency": _AUTH_SAFE_CONCURRENCY})
+        _scan_log.info(
+            "Escaneo autenticado: concurrencia global limitada a %d (config: %d) para no tirar la sesión",
+            _AUTH_SAFE_CONCURRENCY,
+            config.rate_limit.max_concurrency,
+        )
     governor = None
     if rl.per_host_rps or rl.per_endpoint_daily_cap or rl.jitter_ms:
         from dastcore.core.rate_governor import RateGovernor
@@ -586,9 +600,9 @@ def _make_client(
         )
     return HttpClient(
         config.scope,
-        rate_limit=config.rate_limit,
-        timeout=config.rate_limit.timeout,
-        max_retries=config.rate_limit.max_retries,
+        rate_limit=rl,
+        timeout=rl.timeout,
+        max_retries=rl.max_retries,
         session=session,
         max_requests=budget.max_requests,
         time_budget_s=budget.time_budget_s,
@@ -1028,6 +1042,23 @@ async def _discover_scan_roots(
 # bounds every phase() so one hung check can't freeze the whole scan. The core active scan is exempt.
 _PHASE_TIMEOUT_S: float = 180.0
 
+# Global concurrency ceiling for *authenticated* scans. A single server-side session (a PHP session,
+# a single-worker dev server, most deliberately-vulnerable training apps) drops or corrupts the login
+# under a concurrent burst — the scan then runs logged-out and misses everything behind auth. This is
+# applied to the HttpClient's global semaphore (so it gates EVERY phase: crawl, discovery, active
+# scan), and the active scanner's worker pool is matched to it. Calibrated against bWAPP: concurrency
+# 5 dropped the session and found 0 injections; 3 held it and found SQLi + XSS. Unauthenticated scans
+# are unaffected and keep the configured concurrency. Correctness (not missing vulns) beats speed
+# here; 3 is still concurrent, and a user can drop lower but not raise above it on an authed scan.
+_AUTH_SAFE_CONCURRENCY: int = 3
+
+
+def _active_scan_concurrency(configured: int, *, authenticated: bool) -> int:
+    """The active-scan worker count, matched to the (capped) global concurrency for authed scans."""
+    if authenticated and configured > _AUTH_SAFE_CONCURRENCY:
+        return _AUTH_SAFE_CONCURRENCY
+    return configured
+
 
 async def _run_scan(
     config: ScanConfig,
@@ -1147,7 +1178,8 @@ async def _run_scan(
         await oast.start()
     try:
         async with _make_client(
-            config, budget, session, user_agent=user_agent, proxy=proxy, attribution=attribution
+            config, budget, session, user_agent=user_agent, proxy=proxy, attribution=attribution,
+            cap_concurrency=config.auth.type != "none",  # gentle global concurrency to keep the session alive
         ) as client:
             if session is not None and session.can_relogin:
                 if not await session.ensure_logged_in(client, initial=True):
@@ -1571,11 +1603,17 @@ async def _run_scan(
                 extra_findings.extend(await phase("jwt-alg-confusion", check_jwt_algorithm_confusion(client, target, jwt)))
                 extra_findings.extend(await phase("jwt-key-ssrf", check_jwt_key_url_ssrf(client, target, jwt, oast)))
 
+            # Match the scanner's worker pool to the (possibly capped) global concurrency so an
+            # authenticated scan doesn't spin up workers that just block on the client semaphore.
+            # _make_client already logged the cap; the client's global semaphore enforces it on top.
+            active_concurrency = _active_scan_concurrency(
+                config.rate_limit.max_concurrency, authenticated=config.auth.type != "none"
+            )
             scanner = Scanner(
                 client,
                 rules,
                 oast=oast,
-                concurrency=config.rate_limit.max_concurrency,
+                concurrency=active_concurrency,
                 stored_scan=stored_scan,
                 waf_evasion=waf_evasion,
                 ai_payloads=ai_payloads,
@@ -1694,22 +1732,39 @@ async def _run_scan(
     finally:
         if oast is not None:
             await oast.stop()
-        if sink is not None:
-            sink.close()
+        # NOTE: the sink stays open past the active scan — authz and the coverage advisory are produced
+        # below and must also be streamed to the incremental log, so it stays a complete mirror of the
+        # final set (a crash after authz would otherwise silently drop its BOLA findings from the log).
 
     authz_findings: list[Finding] = []
-    if config.identities and not budget_hit:  # authz opens fresh clients; skip once the budget is spent
-        progress.status("Pruebas de autorización (BOLA/BFLA)…")
-        try:
-            authz_findings = await _run_authz(config, list(discovered.values()), budget, graphql_url=graphql_url)
-        except BudgetExceededError:
-            budget_hit = True
-        except Exception as exc:  # noqa: BLE001 — authz failing must not sink a completed scan
-            _scan_log.warning("Fase 'authz' omitida por un error: %s: %s", type(exc).__name__, exc, exc_info=True)
-            failed_phases.append("authz")
+    try:
+        if config.identities and not budget_hit:  # authz opens fresh clients; skip once the budget is spent
+            progress.status("Pruebas de autorización (BOLA/BFLA)…")
+            try:
+                authz_findings = await _run_authz(config, list(discovered.values()), budget, graphql_url=graphql_url)
+            except BudgetExceededError:
+                budget_hit = True
+            except Exception as exc:  # noqa: BLE001 — authz failing must not sink a completed scan
+                _scan_log.warning("Fase 'authz' omitida por un error: %s: %s", type(exc).__name__, exc, exc_info=True)
+                failed_phases.append("authz")
 
-    if failed_phases:  # tell the report the coverage was partial (and which checks were skipped)
-        extra_findings.append(_coverage_finding(target, failed_phases))
+        coverage_findings: list[Finding] = []
+        if failed_phases:  # tell the report the coverage was partial (and which checks were skipped)
+            coverage_findings.append(_coverage_finding(target, failed_phases))
+            extra_findings.extend(coverage_findings)
+
+        # Stream the findings produced after the active scan (authz + coverage) so the incremental log
+        # is a complete mirror of the final set — same contract as phase(): persist + surface live.
+        late_findings = authz_findings + coverage_findings
+        if late_findings:
+            if sink is not None:
+                sink.write(late_findings)
+            if on_finding is not None:
+                for finding in late_findings:
+                    on_finding(finding)
+    finally:
+        if sink is not None:
+            sink.close()
 
     # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
     final_findings = cross_correlate(active_passive + extra_findings + dom_findings + authz_findings)
@@ -1763,7 +1818,10 @@ async def _run_retest(
     try:
         async with AsyncExitStack() as stack:
             client = await _open_authenticated_client(stack, config, config.auth, budget)
-            scanner = Scanner(client, rules, oast=oast, concurrency=config.rate_limit.max_concurrency)
+            concurrency = _active_scan_concurrency(
+                config.rate_limit.max_concurrency, authenticated=config.auth.type != "none"
+            )
+            scanner = Scanner(client, rules, oast=oast, concurrency=concurrency)
             return await scanner.scan(base_requests)
     finally:
         if oast is not None:

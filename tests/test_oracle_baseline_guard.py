@@ -38,19 +38,29 @@ def test_echoed_payload_is_still_skipped() -> None:
 
 def test_baseline_diffing_is_bounded_on_large_bodies() -> None:
     # Regression (bWAPP): difflib over full large bodies with autojunk off froze the whole scan.
-    # Baseline diffing must be bounded now — a ~1MB mostly-repetitive HTML body profiles near-instantly.
+    # Baseline diffing must be bounded now — it only ever looks at the first _MAX_DIFF_LEN chars.
     import time
 
     from dastcore.core.models import HttpResponse
-    from dastcore.validation.baseline import build_baseline, similarity_ratio
+    from dastcore.validation.baseline import _MAX_DIFF_LEN, build_baseline, similarity_ratio
 
     def r(text: str) -> HttpResponse:
         return HttpResponse(status_code=200, headers={}, text=text, elapsed_ms=1.0, url="http://x/")
 
-    big_a = "<div class='row'>item</div>\n" * 40000 + "sid-AAAAAA"  # ~1.1 MB
-    big_b = "<div class='row'>item</div>\n" * 40000 + "sid-BBBBBB"
+    # Deterministic proof the cap is in effect: two ~1MB bodies that are byte-identical through the
+    # first _MAX_DIFF_LEN chars and differ ONLY afterwards must compare as identical — the differing
+    # suffix is past the cap, so it is never diffed. (Uncapped, difflib would see the difference and
+    # grind over the whole ~1MB, returning a ratio < 1.0 after seconds/minutes of O(n*m) work.)
+    shared = "<div class='row'>item</div>\n" * 40000  # ~1.1 MB, well past the cap
+    assert len(shared) > _MAX_DIFF_LEN
+    big_a = shared + "UNIQUE-AAAAAA" * 500
+    big_b = shared + "UNIQUE-BBBBBB" * 500
     t0 = time.perf_counter()
     build_baseline([r(big_a), r(big_b)])
-    similarity_ratio(big_a, big_b)
+    ratio = similarity_ratio(big_a, big_b)
     elapsed = time.perf_counter() - t0
-    assert elapsed < 3.0, f"baseline diffing took {elapsed:.1f}s — not bounded (would hang the scan)"
+    assert ratio == 1.0, "diffing looked past _MAX_DIFF_LEN — the cap is not bounding the input"
+    # Secondary hang guard, generous so it never flakes on a loaded CI box: a truly unbounded O(n*m)
+    # difflib over these ~1MB repetitive bodies takes many seconds to minutes, so any small bound
+    # separates "capped" from "hung". The deterministic ratio check above is the real assertion.
+    assert elapsed < 15.0, f"baseline diffing took {elapsed:.1f}s — not bounded (would hang the scan)"

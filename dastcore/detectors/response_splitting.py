@@ -38,6 +38,12 @@ async def _send(client: HttpClient, request: HttpRequest) -> HttpResponse | None
         )
     except (OutOfScopeError, BudgetExceededError, httpx.HTTPError):
         return None
+    except httpx.InvalidURL:
+        # httpx refuses to send a URL carrying a raw CR/LF (InvalidURL is NOT an HTTPError subclass).
+        # That means this payload can't be delivered as-is through the client — skip it instead of
+        # letting the exception crash the whole response-splitting phase (which would falsely report
+        # the scan coverage as partial). Points where the CR/LF survives are still tested normally.
+        return None
 
 
 def _header_value(response: HttpResponse, name: str) -> str | None:
