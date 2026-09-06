@@ -274,6 +274,7 @@ class HttpClient:
         data: dict[str, str] | None = None,
         json: dict | list | None = None,
         files: dict | None = None,
+        content: str | bytes | None = None,
         timeout: float | None = None,
         retries: int | None = None,
     ) -> HttpResponse:
@@ -331,6 +332,7 @@ class HttpClient:
                         data=data,
                         json=json,
                         files=files,
+                        content=content,
                         **extra,
                     )
                     elapsed_ms = (time.monotonic() - start) * 1000
@@ -379,6 +381,7 @@ class HttpClient:
         data: dict[str, str] | None = None,
         json: dict | list | None = None,
         files: dict | None = None,
+        content: str | bytes | None = None,
         timeout: float | None = None,
         retries: int | None = None,
         _allow_relogin: bool = True,
@@ -396,7 +399,7 @@ class HttpClient:
 
         response = await self._send_once(
             method, url, params=params, headers=send_headers, cookies=cookies, data=data, json=json, files=files,
-            timeout=timeout, retries=retries,
+            content=content, timeout=timeout, retries=retries,
         )
 
         if self._session is not None and self._session.can_relogin:
@@ -413,6 +416,7 @@ class HttpClient:
                         data=data,
                         json=json,
                         files=files,
+                        content=content,
                         timeout=timeout,
                         retries=retries,
                         _allow_relogin=False,
