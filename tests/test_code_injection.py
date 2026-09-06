@@ -37,6 +37,26 @@ def _vuln_app():
     return app
 
 
+def _eval_whole(text: str) -> str:
+    """Stand-in for a direct eval() sink (PHP eval, Python eval): compute the value only when it is a
+    bare arithmetic expression. Delimited/marked payloads are invalid standalone code, so they are echoed
+    unchanged — exactly how bWAPP's phpi.php behaves (and why the ${}/<%= %> syntaxes miss it)."""
+    m = re.fullmatch(r"\s*(\d+)\*(\d+)\s*", text)
+    return str(int(m.group(1)) * int(m.group(2))) if m else text
+
+
+def _raw_eval_app():
+    from flask import Flask, Response, request
+
+    app = Flask(__name__)
+
+    @app.get("/eval")
+    def ev() -> Response:
+        return Response(f"<p><i>{_eval_whole(request.args.get('code', ''))}</i></p>", mimetype="text/html")
+
+    return app
+
+
 def _safe_app():
     from flask import Flask, Response, request
 
@@ -66,6 +86,13 @@ def vuln_url() -> Iterator[str]:
 
 
 @pytest.fixture(scope="module")
+def raw_eval_url() -> Iterator[str]:
+    url, server = _serve(_raw_eval_app())
+    yield url
+    server.shutdown()
+
+
+@pytest.fixture(scope="module")
 def safe_url() -> Iterator[str]:
     url, server = _serve(_safe_app())
     yield url
@@ -88,7 +115,19 @@ async def test_expression_language_is_flagged(vuln_url: str) -> None:
     assert findings[0].severity == "critical"
 
 
+async def test_direct_eval_sink_is_flagged(raw_eval_url: str) -> None:
+    # A sink that eval()s the whole value (no template delimiters) — the ${}/<%= %> syntaxes miss it,
+    # the raw-arithmetic check catches it (double-confirmed with two independent products). bWAPP phpi.php.
+    req = HttpRequest(method="GET", url=f"{raw_eval_url}/eval", params={"code": "1"})
+    async with HttpClient(_scope()) as client:
+        findings = await run_code_injection_checks(client, [req])
+    assert len(findings) == 1
+    assert findings[0].rule_id == "code-injection" and findings[0].cwe == "CWE-94"
+    assert findings[0].severity == "critical"
+
+
 async def test_reflected_only_page_is_not_flagged(safe_url: str) -> None:
+    # Also guards the raw-eval path: a page that echoes "a*b" verbatim (never the product) is not a sink.
     async with HttpClient(_scope()) as client:
         findings = await run_code_injection_checks(client, [_req(safe_url)])
     assert findings == []

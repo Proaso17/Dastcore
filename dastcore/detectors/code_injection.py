@@ -85,6 +85,32 @@ def _finding(
     )
 
 
+async def _try_raw_eval(client: HttpClient, point) -> Finding | None:
+    """Detect a *direct* eval()/assert() sink that runs the whole value as code (PHP ``eval``, Python
+    ``eval``, Ruby ``eval``, Node ``eval``) — no template delimiters, so the ``${}``/``<%= %>`` syntaxes
+    above miss it. The payload is bare arithmetic ``a*b``; a hit is the *product* present while the literal
+    ``a*b`` is absent (a plain reflection keeps the expression, only execution yields the product). A
+    SECOND, independent product must also compute, so a number that merely happened to be on the page can
+    never false-positive. bWAPP ``phpi.php`` is the canonical case."""
+    a, b = 1000 + secrets.randbelow(9000), 1000 + secrets.randbelow(9000)
+    raw, prod = f"{a}*{b}", str(a * b)
+    resp = await _send(client, build_mutated_request(point, raw))
+    if resp is None or prod not in resp.text or raw in resp.text:
+        return None
+    # Confirm with a different product so a coincidental number on the page can't trigger a finding.
+    c, d = 1000 + secrets.randbelow(9000), 1000 + secrets.randbelow(9000)
+    raw2, prod2 = f"{c}*{d}", str(c * d)
+    if prod2 == prod:  # astronomically unlikely, but a distinct value is the whole point
+        return None
+    resp2 = await _send(client, build_mutated_request(point, raw2))
+    if resp2 is None or prod2 not in resp2.text or raw2 in resp2.text:
+        return None
+    return _finding(
+        point, build_mutated_request(point, raw2), resp2, "code-injection",
+        "Server-side code injection (eval directo)", "CWE-94", prod2,
+    )
+
+
 async def run_code_injection_checks(client: HttpClient, requests: list[HttpRequest]) -> list[Finding]:
     """Try EL / interpolation / ERB expression syntaxes and report the points that evaluate them."""
     findings: list[Finding] = []
@@ -102,6 +128,7 @@ async def run_code_injection_checks(client: HttpClient, requests: list[HttpReque
             product = str(a * b)
             tok = secrets.token_hex(4)
             left, right = f"cl{tok}", f"cr{tok}"
+            hit = False
             for op, close, rule_id, name, cwe in _SYNTAXES:
                 payload = f"{left}{op}{a}*{b}{close}{right}"
                 resp = await _send(client, build_mutated_request(point, payload))
@@ -109,5 +136,11 @@ async def run_code_injection_checks(client: HttpClient, requests: list[HttpReque
                     findings.append(
                         _finding(point, build_mutated_request(point, payload), resp, rule_id, name, cwe, product)
                     )
+                    hit = True
                     break
+            if hit:
+                continue
+            raw_finding = await _try_raw_eval(client, point)  # direct eval() sink (no delimiters)
+            if raw_finding is not None:
+                findings.append(raw_finding)
     return findings

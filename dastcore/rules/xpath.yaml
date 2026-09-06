@@ -25,6 +25,11 @@ oracle:
         - "XPST\\d{4}"
         - "unterminated (?:string|expression)"
         - "javax\\.xml\\.xpath"
+        # PHP / libxml XPath APIs name themselves in the error, so these appear ONLY when an XPath
+        # expression built from input failed to compile — a precise, low-FP signal (bWAPP xmli_*).
+        - "SimpleXMLElement::xpath\\(\\)"
+        - "DOMXPath::(?:query|evaluate)\\(\\)"
+        - "xmlXPathEval\\b"
 confirm_reproducible: true
 remediation: >-
   Don't build XPath expressions from user input. Use parameterized/precompiled
