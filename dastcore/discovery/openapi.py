@@ -90,6 +90,7 @@ def _build_request(base: str, path: str, method: str, operation: dict, path_item
             if isinstance(example, dict):
                 json_body = example
 
+    xml_endpoint = False
     request_body = operation.get("requestBody")  # OpenAPI 3.x
     if isinstance(request_body, dict):
         content = request_body.get("content", {})
@@ -103,12 +104,23 @@ def _build_request(base: str, path: str, method: str, operation: dict, path_item
             example = _example_from_schema(form_schema)
             if isinstance(example, dict):
                 body_data = {k: str(v) for k, v in example.items()}
+        elif any(ct in content for ct in ("application/xml", "text/xml")):
+            xml_endpoint = True  # XML-bodied endpoint: no JSON/form to fuzz, but the XXE detector should probe it
 
+    # Swagger 2.0 declares body media types with ``consumes``.
+    consumes = operation.get("consumes") or path_item.get("consumes") or []
+    if any("xml" in str(c).lower() for c in consumes):
+        xml_endpoint = True
+
+    # Mark an XML endpoint by its content type so the in-band XXE detector recognises it (it sends its
+    # own external-entity document as the raw body — the request needs no XML body of its own here).
+    headers = {"Content-Type": "application/xml"} if xml_endpoint else {}
     url = urljoin(base.rstrip("/") + "/", concrete_path.lstrip("/"))
     return HttpRequest(
         method=method.upper(),  # type: ignore[arg-type]
         url=url,
         params=query,
+        headers=headers,
         data=body_data,
         json_body=json_body,
     )

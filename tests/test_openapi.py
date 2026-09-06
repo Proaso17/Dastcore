@@ -81,3 +81,34 @@ async def test_fetch_and_parse_openapi_from_target(vuln_app_url: str) -> None:
     assert any(u.endswith("/api/orders/101") for u in urls), urls
     assert any(u.endswith("/admin/stats") for u in urls)
     assert any(u.endswith("/api/internal/config") for u in urls)
+
+
+def test_openapi_xml_body_is_marked_for_xxe_probing() -> None:
+    # An endpoint declaring an XML request body has no JSON/form to fuzz, but the in-band XXE detector
+    # must still see it — so it's tagged with an application/xml content type.
+    spec = {
+        "openapi": "3.0.0",
+        "paths": {
+            "/api/import": {
+                "post": {
+                    "requestBody": {"content": {"application/xml": {"schema": {"type": "object"}}}}
+                }
+            }
+        },
+    }
+    requests = parse_openapi(spec, "http://t")
+    assert len(requests) == 1
+    req = requests[0]
+    assert req.method == "POST" and req.url == "http://t/api/import"
+    assert req.headers.get("Content-Type") == "application/xml"
+
+
+def test_swagger2_consumes_xml_is_marked() -> None:
+    spec = {
+        "swagger": "2.0",
+        "paths": {
+            "/soap": {"post": {"consumes": ["text/xml"], "parameters": []}},
+        },
+    }
+    requests = parse_openapi(spec, "http://t")
+    assert requests[0].headers.get("Content-Type") == "application/xml"
