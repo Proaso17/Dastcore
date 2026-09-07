@@ -10,6 +10,7 @@ value seen.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import deque
 from urllib.parse import parse_qsl, urljoin, urlsplit
@@ -19,8 +20,22 @@ from selectolax.parser import HTMLParser, Node
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import HttpRequest
+from dastcore.validation.baseline import normalize_body
 
 _SITEMAP_LOC = re.compile(r"<loc>\s*(.*?)\s*</loc>", re.IGNORECASE | re.DOTALL)
+
+# Cap the body length that feeds the content fingerprint — the template/structure that identifies a
+# location lives near the top, and this keeps fingerprinting cheap on huge pages.
+_FINGERPRINT_CAP = 20000
+
+
+def _content_fingerprint(text: str) -> str:
+    """A location's identity by CONTENT, not URL (Burp-style). ``normalize_body`` masks the volatile bits
+    — CSRF tokens, nonces, timestamps, UUIDs, long ids — so two pages that differ only by a per-request
+    token in the URL/body hash the SAME, and a soft-404/catch-all that answers every path identically is
+    recognised as one location. This stops token-in-URL crawl explosion and de-dups pages reached by
+    different links."""
+    return hashlib.sha1(normalize_body(text[:_FINGERPRINT_CAP]).encode("utf-8", "ignore")).hexdigest()
 
 # URL paths that end an authenticated session. Following them mid-crawl logs the scanner out, so every
 # request after that hits the login page and the whole authenticated scan finds nothing. Never crawl them.
@@ -44,6 +59,7 @@ class HttpCrawler:
     async def crawl(self, start_url: str) -> list[HttpRequest]:
         seen_urls: set[str] = set()
         seen_signatures: set[str] = set()
+        seen_fingerprints: set[str] = set()
         discovered: list[HttpRequest] = []
         queue: deque[str] = deque([start_url])
 
@@ -70,9 +86,18 @@ class HttpCrawler:
             except httpx.HTTPError:
                 continue  # transient network error on this page — skip it, keep crawling the rest
 
+            is_html = "html" in response.headers.get("content-type", "")
+            if is_html:
+                # Same normalized content as a page already crawled (token-in-URL, a dup reached via a
+                # different link, or a catch-all) → one location: don't re-record it or re-walk its links.
+                fingerprint = _content_fingerprint(response.text)
+                if fingerprint in seen_fingerprints:
+                    continue
+                seen_fingerprints.add(fingerprint)
+
             self._record(self._page_request(url), discovered, seen_signatures)
 
-            if "html" not in response.headers.get("content-type", ""):
+            if not is_html:
                 continue
 
             tree = HTMLParser(response.text)

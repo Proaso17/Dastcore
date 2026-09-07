@@ -98,7 +98,9 @@ async def test_crawler_skips_pages_that_error_and_keeps_going() -> None:
         async def get(self, url: str) -> HttpResponse:
             if url.endswith("/bad"):
                 raise _httpx.ConnectError("boom")
-            body = '<a href="/bad">x</a><a href="/good">y</a>'
+            # Per-URL content (the h1) so each page is a distinct location — otherwise byte-identical
+            # bodies are (correctly) deduped as one location by the content-fingerprint.
+            body = f'<h1>page {url}</h1><a href="/bad">x</a><a href="/good">y</a>'
             return HttpResponse(method="GET", status_code=200, headers={"content-type": "text/html"}, text=body, url=url)
 
     discovered = await HttpCrawler(_FlakyClient(), use_robots=False).crawl("http://t.test/")  # type: ignore[arg-type]
