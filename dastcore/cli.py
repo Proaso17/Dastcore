@@ -1470,7 +1470,7 @@ async def _run_scan(
                     progress.status(f"Crawleando (headless / SPA) {root}…")
                     try:
                         headless_reqs, root_dom = await _run_headless(
-                            config, client, root, max_pages, user_agent, proxy, interactive=interactive
+                            config, client, root, max_pages, user_agent, proxy, interactive=interactive, oast=oast
                         )
                     except httpx.HTTPError:
                         continue  # a flaky host must not abort the whole multi-host scan
@@ -1948,7 +1948,7 @@ async def _supabase_local_storage(auth: AuthConfig) -> dict[str, str]:
 
 async def _run_headless(
     config: ScanConfig, client: HttpClient, target: str, max_pages: int, user_agent: str = "", proxy: str = "",
-    interactive: bool = False,
+    interactive: bool = False, oast: OastProvider | None = None,
 ) -> tuple[list[HttpRequest], list[Finding]]:
     """Render with a headless browser: crawl JS/XHR + probe DOM-XSS, reusing the auth session.
 
@@ -1974,6 +1974,8 @@ async def _run_headless(
         dom_findings = await engine.scan_dom_xss([target, *page_urls])
         # CSTI (AngularJS/Vue) rides the same headless render over reflected query params.
         dom_findings += await engine.scan_csti(discovered)
+        # Blind/stored XSS: spray collaborator beacons and render so stored/reflected payloads execute.
+        dom_findings += await engine.scan_blind_xss_oob(discovered, oast)
         return discovered, dom_findings
 
 

