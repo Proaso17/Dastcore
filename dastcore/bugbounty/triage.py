@@ -37,6 +37,7 @@ _VRT_BY_FAMILY: dict[str, tuple[str, str]] = {
     "sqli": ("Server-Side Injection - SQL Injection", "P1"),
     "cmdi": ("Server-Side Injection - Remote Code Execution", "P1"),
     "code-injection": ("Server-Side Injection - Remote Code Execution", "P1"),
+    "xslt": ("Server-Side Injection - XSLT Injection", "P2"),
     "ssi": ("Server-Side Injection - Remote Code Execution", "P1"),
     "ssti": ("Server-Side Injection - Server-Side Template Injection", "P1"),
     "deserialization": ("Server-Side Injection - Insecure Deserialization", "P1"),

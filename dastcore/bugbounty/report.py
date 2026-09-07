@@ -20,6 +20,7 @@ _IMPACT_BY_FAMILY: dict[str, str] = {
     "nosqli": "Permite manipular la consulta a la base de datos, evadiendo autenticación o filtrando datos de otras cuentas.",
     "cmdi": "Permite ejecutar comandos arbitrarios del sistema operativo en el servidor (ejecución remota de código).",
     "code-injection": "Permite ejecutar código/expresiones arbitrarias en el servidor (ejecución remota de código).",
+    "xslt": "Permite controlar la transformación XSLT del servidor: lectura de ficheros (document/unparsed-text), funciones de extensión y en algunos procesadores ejecución de código.",
     "ssi": "Permite ejecutar comandos del sistema vía Server-Side Includes (ejecución remota de código).",
     "ssti": "Permite evaluar expresiones en el motor de plantillas del servidor, típicamente escalable a ejecución de código.",
     "deserialization": "Permite deserializar datos no confiables, un gadget de ejecución remota de código.",
