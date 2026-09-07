@@ -714,6 +714,35 @@ async def _prove_impact_isolated(client: HttpClient, findings: list[Finding]) ->
     return []
 
 
+def _session_instability_finding(target: str, relogins: int) -> Finding:
+    """Advisory: the authenticated session dropped and was re-established many times during the scan, so
+    the target's session is unstable under load — coverage may be degraded for requests caught logged-out
+    before a re-login. Surfacing it explains partial results (the silent failure mode bWAPP exposed)."""
+    request = HttpRequest(method="GET", url=target)
+    return Finding(
+        id="scan-session-instability",
+        rule_id="scan-coverage",
+        name=f"Sesión inestable: el login se rehízo {relogins} veces durante el escaneo",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(
+            type="response_match",
+            data=(f"la sesión autenticada cayó y se restableció {relogins} veces (re-login automático). El "
+                  "objetivo tira la sesión bajo carga o con un timeout corto.")[:300],
+            confidence="high",
+        )],
+        request=request,
+        response=HttpResponse(status_code=0, url=target),
+        remediation=(
+            "El objetivo pierde la sesión con frecuencia, lo que puede dejar comprobaciones ejecutadas sin "
+            "autenticar (cobertura parcial). Baja la concurrencia (--concurrency 1), amplía el timeout de "
+            "sesión del servidor para el escaneo, o usa credenciales/token de vida más larga."
+        ),
+    )
+
+
 def _coverage_finding(target: str, failed: list[str]) -> Finding:
     """An info advisory that some checks were skipped, so the report reflects partial coverage."""
     names = ", ".join(sorted(set(failed)))
@@ -1062,6 +1091,10 @@ _ACTIVE_SCAN_BUDGET_RESERVE: float = 0.4
 
 # Confidence ordering for the --min-confidence gate (low=Tentative, medium=Firm, high=Certain).
 _CONFIDENCE_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+# Re-logins over a scan above which the target's session is deemed unstable and an advisory is emitted.
+# A stable session needs ~0–1 re-logins for a whole scan; 5+ means it drops under load / times out short.
+_SESSION_INSTABILITY_RELOGINS: int = 5
 
 
 def _active_scan_concurrency(configured: int, *, authenticated: bool) -> int:
@@ -1772,6 +1805,10 @@ async def _run_scan(
         coverage_findings: list[Finding] = []
         if failed_phases:  # tell the report the coverage was partial (and which checks were skipped)
             coverage_findings.append(_coverage_finding(target, failed_phases))
+        if session is not None and session.total_relogins >= _SESSION_INSTABILITY_RELOGINS:
+            # The target kept dropping the session — surface it so the user knows coverage may be degraded.
+            coverage_findings.append(_session_instability_finding(target, session.total_relogins))
+        if coverage_findings:
             extra_findings.extend(coverage_findings)
 
         # Stream the findings produced after the active scan (authz + coverage) so the incremental log

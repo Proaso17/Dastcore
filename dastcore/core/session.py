@@ -63,7 +63,8 @@ class SessionManager:
             self.headers["Authorization"] = f"Bearer {auth.bearer_token}"
 
         self._epoch = 0
-        self._relogin_count = 0
+        self._relogin_count = 0  # consecutive re-logins without a working request between (budget guard)
+        self._total_relogins = 0  # cumulative re-logins over the whole scan — a session-instability signal
         self._lock = asyncio.Lock()
         # Static material is "established" the moment we have any of it; dynamic flows
         # only become established once their first login succeeds.
@@ -77,6 +78,13 @@ class SessionManager:
     @property
     def can_relogin(self) -> bool:
         return self._auth.type in ("form", "oauth2", "oauth2_pkce", "macro")
+
+    @property
+    def total_relogins(self) -> int:
+        """How many times the session dropped and was re-established over the whole scan. A high count
+        means the target's session is unstable (drops under load / short timeout), which can silently
+        degrade coverage — the scanner surfaces it as an advisory."""
+        return self._total_relogins
 
     @property
     def is_established(self) -> bool:
@@ -182,6 +190,7 @@ class SessionManager:
                 self._established = True
                 if not initial:
                     self._relogin_count += 1
+                    self._total_relogins += 1
             return success
 
     async def _perform_login(self, client: HttpClient) -> bool:

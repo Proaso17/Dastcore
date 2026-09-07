@@ -81,3 +81,26 @@ async def test_relogin_budget_is_consecutive_not_total() -> None:
     assert await sm2.ensure_logged_in(None) is True   # 1 -> 2  # type: ignore[arg-type]
     assert await sm2.ensure_logged_in(None) is True   # 2 -> 3  # type: ignore[arg-type]
     assert await sm2.ensure_logged_in(None) is False  # 3 >= 3 -> exhausted  # type: ignore[arg-type]
+
+
+async def test_total_relogins_is_cumulative() -> None:
+    """total_relogins counts every re-login over the scan (a session-instability signal) and, unlike the
+    consecutive-budget counter, is NOT reset by a successful request."""
+    async def ok_login(_client: object) -> bool:
+        return True
+
+    sm = _form_session_budget(20)
+    sm._perform_login = ok_login  # type: ignore[assignment]
+    for _ in range(6):
+        assert await sm.ensure_logged_in(None) is True  # type: ignore[arg-type]
+        sm.note_success()  # resets the consecutive-budget counter...
+    assert sm._relogin_count == 0        # ...so the budget counter is back to 0
+    assert sm.total_relogins == 6        # ...but the cumulative instability signal keeps climbing
+
+
+def test_session_instability_advisory() -> None:
+    from dastcore.cli import _session_instability_finding
+
+    f = _session_instability_finding("http://t/", 7)
+    assert f.rule_id == "scan-coverage" and f.severity == "info"
+    assert "7" in f.name and "7" in f.evidence[0].data
