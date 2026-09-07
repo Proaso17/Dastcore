@@ -6,9 +6,10 @@ A new injection detector is meant to be addable by writing a YAML file here
 
 from __future__ import annotations
 
+import base64
 import copy
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import yaml
 from pydantic import BaseModel, Field
@@ -106,9 +107,42 @@ def inband_payloads(rule: Rule) -> list[Payload]:
     return [Payload(value=value, family=rule.family, oob=False) for value in rule.payloads]
 
 
+def _apply_wrap(value: str, wrap: tuple[str, ...]) -> str:
+    """Encode ``value`` through each layer in ``wrap`` (left-to-right), so a payload lands *inside* the
+    decoding the server applies to an encoded parameter (a nested insertion point)."""
+    for codec in wrap:
+        if codec == "b64":
+            value = base64.b64encode(value.encode("utf-8", "surrogatepass")).decode("ascii")
+        elif codec == "url":
+            value = quote(value, safe="")
+    return value
+
+
+def _place(request: HttpRequest, location: InjectionLocation, name: str, value: str) -> HttpRequest:
+    """Add/set ``name=value`` at ``location`` without disturbing the parameter's original location — the
+    move that tests whether the server reads the parameter from an alternative place (filter/WAF bypass)."""
+    if location == "query":
+        return request.model_copy(update={"params": {**request.params, name: value}})
+    if location == "body":
+        return request.model_copy(update={"data": {**(request.data or {}), name: value}})
+    if location == "cookie":
+        return request.model_copy(update={"cookies": {**request.cookies, name: value}})
+    if location == "header":
+        return request.model_copy(update={"headers": {**request.headers, name: value}})
+    raise ValueError(f"Cannot move an insertion point into location: {location}")
+
+
 def build_mutated_request(point: InjectionPoint, payload_value: str) -> HttpRequest:
-    """Returns a copy of the point's request_template with exactly this one parameter replaced."""
+    """Returns a copy of the point's request_template with exactly this one parameter replaced.
+
+    Honors two Burp-style variants when the point declares them: ``wrap`` encodes the payload for a
+    *nested* insertion point, and ``place_in`` relocates it to another location for a *moved* one.
+    """
     request = point.request_template
+    payload_value = _apply_wrap(payload_value, point.wrap)
+
+    if point.place_in is not None:  # moved insertion point: put the payload in an alternative location
+        return _place(request, point.place_in, point.name, payload_value)
 
     if point.location == "query":
         params = dict(request.params)

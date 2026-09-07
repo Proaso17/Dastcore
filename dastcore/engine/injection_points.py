@@ -8,6 +8,7 @@ disturbing the other parameters.
 
 from __future__ import annotations
 
+import base64
 import re
 from urllib.parse import urlsplit
 
@@ -71,7 +72,49 @@ def _path_points(request: HttpRequest) -> list[InjectionPoint]:
     return points
 
 
-def extract_injection_points(request: HttpRequest, *, include_headers: bool = True) -> list[InjectionPoint]:
+# Thorough (Burp-style) extra insertion points are bounded so a param-heavy request can't explode volume.
+_MAX_THOROUGH = 30
+_B64 = re.compile(r"^[A-Za-z0-9+/]{12,}={0,2}$")  # long enough that a coincidental match is unlikely
+
+
+def _b64_scalar(value: str) -> str | None:
+    """If ``value`` is base64 of printable text, return the decoded text — the server likely base64-decodes
+    it, so we fuzz *inside* it. A false guess only wastes a request (the payload still needs an oracle to
+    fire), never creates a false positive."""
+    s = value.strip()
+    if len(s) % 4 != 0 or not _B64.match(s):
+        return None
+    try:
+        decoded = base64.b64decode(s, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return decoded if decoded.isprintable() and len(decoded) >= 2 and decoded != s else None
+
+
+def _thorough_points(request: HttpRequest, base_points: list[InjectionPoint]) -> list[InjectionPoint]:
+    """Burp-style *nested* (fuzz inside an encoding) and *moved* (relocate to another location to slip a
+    filter/WAF) insertion points, derived from the plain ones."""
+    body_bearing = request.method in ("POST", "PUT", "PATCH")
+    extra: list[InjectionPoint] = []
+    for p in base_points:
+        if p.location not in ("query", "body"):
+            continue
+        decoded = _b64_scalar(p.base_value)
+        if decoded is not None:  # nested: the value is base64 — inject inside it, re-encoding on mutation
+            extra.append(InjectionPoint(
+                location=p.location, name=p.name, base_value=decoded, request_template=request, wrap=("b64",)))
+        if p.location == "body":  # moved: a body param is also read from the query on most frameworks
+            extra.append(InjectionPoint(
+                location=p.location, name=p.name, base_value=p.base_value, request_template=request, place_in="query"))
+        elif p.location == "query" and body_bearing:  # moved: a query param also tried in the body
+            extra.append(InjectionPoint(
+                location=p.location, name=p.name, base_value=p.base_value, request_template=request, place_in="body"))
+    return extra[:_MAX_THOROUGH]
+
+
+def extract_injection_points(
+    request: HttpRequest, *, include_headers: bool = True, thorough: bool = False
+) -> list[InjectionPoint]:
     points: list[InjectionPoint] = []
 
     for name, value in request.params.items():
@@ -100,5 +143,8 @@ def extract_injection_points(request: HttpRequest, *, include_headers: bool = Tr
                 location="header", name="Host", base_value=urlsplit(request.url).netloc, request_template=request
             )
         )
+
+    if thorough:  # Burp-style moved + nested insertion points (filter/WAF bypass, encoded params)
+        points.extend(_thorough_points(request, points))
 
     return points

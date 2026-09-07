@@ -31,6 +31,7 @@ from dastcore.detectors.exposure import check_source_map
 from dastcore.detectors.fingerprint import looks_blocked
 from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
+from dastcore.engine.prioritize import prioritize_requests
 from dastcore.engine.oast import OastInteraction, OastProvider, substitute_oast
 from dastcore.engine.rule_engine import (
     Rule,
@@ -183,7 +184,7 @@ class Scanner:
                     samples.append(extra)
         baseline = build_baseline(samples)
 
-        for point in extract_injection_points(request):
+        for point in extract_injection_points(request, thorough=True):
             for rule in self._rules:
                 if rule.is_oob or point.location not in rule.inject_into:
                     continue
@@ -215,6 +216,9 @@ class Scanner:
         `on_request_done` is invoked (on the event loop) after each request finishes,
         with that request and its findings — used to drive progress and resume state.
         """
+        # Audit the highest-value requests first, so a --time-budget / --max-requests cap is spent on the
+        # juiciest targets rather than whatever the crawler happened to enqueue first (Burp-style queue).
+        requests = prioritize_requests(requests)
         semaphore = asyncio.Semaphore(self._concurrency)
 
         async def _worker(request: HttpRequest) -> list[Finding]:

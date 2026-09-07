@@ -101,3 +101,47 @@ def test_build_mutated_request_replaces_path_segment() -> None:
                  if p.location == "path" and p.base_value == "123")
     mutated = build_mutated_request(point, "../../etc/passwd")
     assert mutated.url == "http://x/api/orders/../../etc/passwd/status"  # traversal payload keeps its slashes
+
+
+def test_thorough_off_by_default_no_extra_points() -> None:
+    # A base64-looking query param on a POST: plain extraction must NOT add moved/nested points.
+    req = HttpRequest(method="POST", url="http://x/a?t=dXNlcmlkLTQy", params={"t": "dXNlcmlkLTQy"})
+    plain = extract_injection_points(req, include_headers=False)
+    assert all(p.place_in is None and p.wrap == () for p in plain)
+
+
+def test_thorough_adds_nested_base64_point() -> None:
+    import base64
+
+    from dastcore.engine.rule_engine import build_mutated_request
+
+    tok = base64.b64encode(b"userid-42").decode()
+    req = HttpRequest(method="GET", url=f"http://x/a?t={tok}", params={"t": tok})
+    points = extract_injection_points(req, include_headers=False, thorough=True)
+    nested = [p for p in points if p.wrap == ("b64",)]
+    assert len(nested) == 1
+    assert nested[0].location == "query" and nested[0].name == "t" and nested[0].base_value == "userid-42"
+    # Mutating re-encodes: the payload lands base64'd inside the param (fuzzing inside the decoding).
+    mutated = build_mutated_request(nested[0], "' OR 1=1-- -")
+    assert base64.b64decode(mutated.params["t"]).decode() == "' OR 1=1-- -"
+
+
+def test_thorough_adds_moved_points_cross_location() -> None:
+    from dastcore.engine.rule_engine import build_mutated_request
+
+    req = HttpRequest(method="POST", url="http://x/a?q=hi", params={"q": "hi"}, data={"name": "bob"})
+    points = extract_injection_points(req, include_headers=False, thorough=True)
+    moved = {(p.name, p.place_in) for p in points if p.place_in is not None}
+    assert ("q", "body") in moved   # a query param also tried in the body (body-bearing method)
+    assert ("name", "query") in moved  # a body param also tried in the query
+    # A moved query->body point places the payload in the body while leaving the original query param.
+    qmoved = next(p for p in points if p.name == "q" and p.place_in == "body")
+    mutated = build_mutated_request(qmoved, "XSS")
+    assert (mutated.data or {}).get("q") == "XSS" and mutated.params.get("q") == "hi"
+
+
+def test_get_query_param_not_moved_to_body() -> None:
+    # Moving a query param into the body only makes sense on body-bearing methods.
+    req = HttpRequest(method="GET", url="http://x/a?q=hi", params={"q": "hi"})
+    points = extract_injection_points(req, include_headers=False, thorough=True)
+    assert not any(p.place_in == "body" for p in points)

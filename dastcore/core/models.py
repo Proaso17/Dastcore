@@ -88,6 +88,14 @@ class InjectionPoint(BaseModel):
     name: str
     base_value: str = ""
     request_template: HttpRequest
+    # "Moved" insertion point (Burp-style): place the payload in *this* location instead of the
+    # parameter's original one — a query param also tried in the body, etc. — to slip past a filter/WAF
+    # that only inspects one location. None means place it where the parameter already lives.
+    place_in: InjectionLocation | None = None
+    # "Nested" insertion point: encoding layers to wrap the payload in before placing it, so a value
+    # that arrives encoded (e.g. base64) is fuzzed *inside* the decoding the server applies. Applied
+    # left-to-right, e.g. ("b64",) base64-encodes the payload. Empty means place the payload verbatim.
+    wrap: tuple[str, ...] = ()
 
 
 class Payload(BaseModel):
