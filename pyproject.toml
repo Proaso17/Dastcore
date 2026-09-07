@@ -47,6 +47,7 @@ dependencies = [
     "jinja2>=3.1.3",
     "selectolax>=0.3.17",
     "beautifulsoup4>=4.12.3",
+    "esprima>=4.0.1",  # pure-Python JS parser for static DOM-XSS taint analysis
 ]
 
 [project.optional-dependencies]

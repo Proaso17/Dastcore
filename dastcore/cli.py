@@ -67,6 +67,7 @@ from dastcore.detectors.cache_poison import run_cache_poisoning_checks
 from dastcore.detectors.code_injection import run_code_injection_checks
 from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.deserialization_active import run_deserialization_checks
+from dastcore.detectors.dom_xss_static import run_dom_xss_static_checks
 from dastcore.detectors.file_upload import run_file_upload_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
@@ -1694,6 +1695,7 @@ async def _run_scan(
             extra_findings.extend(await phase("nosql", run_nosql_checks(client, all_requests)))
             extra_findings.extend(await phase("mass-assignment", run_mass_assignment_checks(client, all_requests)))
             extra_findings.extend(await phase("js-secrets", run_js_secret_scan(client, all_requests)))
+            extra_findings.extend(await phase("dom-xss-static", run_dom_xss_static_checks(client, all_requests)))
             extra_findings.extend(
                 await phase(
                     "subdomain-takeover",
