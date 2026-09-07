@@ -146,6 +146,11 @@ class HttpClient:
         self._response_count = 0
         self._blocked_count = 0
         self._deadline: float | None = None
+        # Budget reservation: while discovery runs, tighten the effective time/request budget by this
+        # fraction so crawling/dirbusting can't consume it all and starve the active scan (Burp reserves
+        # audit budget the same way). 0 = no reservation (the whole budget is a single shared pool).
+        self._reserve_active = 0.0
+        self._in_discovery = False
         # Browser-like default headers so the scanner isn't blocked on its User-Agent alone. A caller can
         # pass ``user_agent`` (e.g. their real browser's, to pair with a cf_clearance cookie) to match it.
         default_headers = dict(_BROWSER_HEADERS)
@@ -232,11 +237,25 @@ class HttpClient:
         elapsed = time.monotonic() - self._first_send_at
         return self._sent_count / elapsed if elapsed > 0 else 0.0
 
+    def begin_discovery_phase(self, reserve_fraction: float) -> None:
+        """Reserve ``reserve_fraction`` of the scan budget for the later active scan: while discovery
+        runs, the effective time/request budget is tightened by this fraction so crawling/dirbusting
+        can't spend it all. Call :meth:`end_discovery_phase` once discovery is done (a no-op when no
+        ``--time-budget`` / ``--max-requests`` is set — there is then nothing to run out of)."""
+        self._reserve_active = max(0.0, min(0.9, reserve_fraction))
+        self._in_discovery = True
+
+    def end_discovery_phase(self) -> None:
+        """Lift the discovery reservation so the active scan can use the full remaining budget."""
+        self._in_discovery = False
+
     def budget_exceeded(self) -> bool:
-        """True once the request count or the time budget has been reached."""
-        if self._max_requests is not None and self._request_count >= self._max_requests:
+        """True once the request count or the time budget has been reached. During the discovery phase the
+        limits are tightened by the reserved fraction so a slice is guaranteed to remain for the active scan."""
+        reserve = self._reserve_active if self._in_discovery else 0.0
+        if self._max_requests is not None and self._request_count >= self._max_requests * (1.0 - reserve):
             return True
-        if self._deadline is not None and time.monotonic() >= self._deadline:
+        if self._deadline is not None and time.monotonic() >= self._deadline - (self._time_budget_s or 0.0) * reserve:
             return True
         return False
 

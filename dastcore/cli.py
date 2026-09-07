@@ -1054,6 +1054,12 @@ _PHASE_TIMEOUT_S: float = 180.0
 # here; 3 is still concurrent, and a user can drop lower but not raise above it on an authed scan.
 _AUTH_SAFE_CONCURRENCY: int = 3
 
+# Fraction of the --time-budget / --max-requests held back from discovery (crawl/dirbust/historical) and
+# guaranteed to the active audit. Discovery can otherwise consume the whole budget and leave nothing to
+# scan — the exact starvation the audit-queue prioritisation only partly mitigated. Only bites when a
+# budget is set; ~40% still leaves the majority for discovery on generous budgets.
+_ACTIVE_SCAN_BUDGET_RESERVE: float = 0.4
+
 
 def _active_scan_concurrency(configured: int, *, authenticated: bool) -> int:
     """The active-scan worker count, matched to the (capped) global concurrency for authed scans."""
@@ -1186,6 +1192,10 @@ async def _run_scan(
             if session is not None and session.can_relogin:
                 if not await session.ensure_logged_in(client, initial=True):
                     raise SessionLoginError("El login inicial falló: revisa credenciales / URL de login.")
+
+            # Reserve a slice of the --time-budget / --max-requests for the active scan, so crawling and
+            # dirbusting can't spend it all and leave nothing to actually audit (no-op without a budget).
+            client.begin_discovery_phase(_ACTIVE_SCAN_BUDGET_RESERVE)
 
             # Full-surface scanning: expand the single target into every in-scope host we can find,
             # then crawl + brute-force paths on each. Both stages are opt-in and scope-enforced.
@@ -1582,6 +1592,10 @@ async def _run_scan(
                 extra_findings.extend(await phase("graphql-introspection", check_graphql_introspection(client, graphql_url)))
                 extra_findings.extend(await phase("graphql-checks", run_graphql_checks(client, graphql_url)))
                 extra_findings.extend(await phase("graphql-arg-injection", check_graphql_arg_injection(client, graphql_url)))
+
+            # Discovery is done — release the reserved budget so the active audit (detectors + the core
+            # injection scan below) can use the full remaining time/requests instead of a tightened slice.
+            client.end_discovery_phase()
 
             progress.status("Probando ficheros sensibles…")
             for root in scan_roots:
