@@ -1060,6 +1060,9 @@ _AUTH_SAFE_CONCURRENCY: int = 3
 # budget is set; ~40% still leaves the majority for discovery on generous budgets.
 _ACTIVE_SCAN_BUDGET_RESERVE: float = 0.4
 
+# Confidence ordering for the --min-confidence gate (low=Tentative, medium=Firm, high=Certain).
+_CONFIDENCE_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
 
 def _active_scan_concurrency(configured: int, *, authenticated: bool) -> int:
     """The active-scan worker count, matched to the (capped) global concurrency for authed scans."""
@@ -2354,6 +2357,13 @@ def scan(
         help="Umbral de severidad que hace fallar el proceso (exit 2) para CI/CD: "
         "info | low | medium | high | critical | none.",
     ),
+    min_confidence: str = typer.Option(
+        "low",
+        "--min-confidence",
+        help="Confianza mínima para que un hallazgo cuente en el gate --fail-on: low | medium | high. "
+        "Con 'medium'/'high' los hallazgos tentativos (un solo indicio) no hacen fallar el build "
+        "(siguen en el informe JSON/HTML). Equivale al filtro de confianza de Burp.",
+    ),
     notify_webhook: str = typer.Option(
         "", "--notify-webhook",
         help="Vigilancia continua: envía a este webhook los hallazgos NUEVOS respecto a --baseline (Slack/Discord/genérico).",
@@ -2484,6 +2494,7 @@ def scan(
     output_format = _pick(ctx, "output_format", output_format, scan_file.format).lower()
     output_path = _pick(ctx, "output_path", output_path, scan_file.output)
     fail_on = _pick(ctx, "fail_on", fail_on, scan_file.fail_on).lower()
+    min_confidence = min_confidence.lower()
     proxy = _pick(ctx, "proxy", proxy, scan_file.proxy)
     user_agent = _pick(ctx, "user_agent", user_agent, scan_file.user_agent)
     if _is_default_source(ctx, "bug_bounty") and scan_file.bug_bounty is not None:
@@ -2517,6 +2528,9 @@ def scan(
     valid_fail_on = ("info", "low", "medium", "high", "critical", "none")
     if fail_on not in valid_fail_on:
         console.print(f"[bold red]--fail-on inválido:[/bold red] {fail_on!r} (usa {' | '.join(valid_fail_on)}).")
+        raise typer.Exit(code=1)
+    if min_confidence not in ("low", "medium", "high"):
+        console.print(f"[bold red]--min-confidence inválido:[/bold red] {min_confidence!r} (usa low | medium | high).")
         raise typer.Exit(code=1)
 
     audience = audience.lower()
@@ -2721,6 +2735,7 @@ def scan(
         output_format=output_format,
         output_path=config.output.path or "",
         fail_on=fail_on,
+        min_confidence=min_confidence,
         quiet=quiet,
         target=str(config.target),
         duration_s=time.monotonic() - started_at,
@@ -2871,6 +2886,7 @@ def _emit_report_and_gate(
     output_format: str,
     output_path: str,
     fail_on: str,
+    min_confidence: str = "low",
     quiet: bool,
     target: str,
     duration_s: float,
@@ -2897,6 +2913,10 @@ def _emit_report_and_gate(
     active = [f for f in findings if not f.suppressed]
     suppressed = [f for f in findings if f.suppressed]
     gated = active if gate_findings is None else [f for f in gate_findings if not f.suppressed]
+    if min_confidence != "low":
+        # Tentative findings (confidence below the bar) stay in the JSON/HTML report but don't trip the
+        # --fail-on gate — the operator chose to fail CI only on findings proven to at least this level.
+        gated = [f for f in gated if _CONFIDENCE_RANK.get(f.confidence, 0) >= _CONFIDENCE_RANK[min_confidence]]
 
     if output_format == "pdf":
         from dastcore.report.pdf import render_pdf
