@@ -165,6 +165,13 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
     lines.append("Plan (prioridad): " + " → ".join(item.focus for item in plan.items) + ".")
     for item in plan.items:
         lines.append(f"  • {item.focus}: {item.why}")
+    if plan.priority_families:
+        lines.append(
+            "Ataque priorizado (active scan): " + ", ".join(plan.priority_families[:8])
+            + (" …" if len(plan.priority_families) > 8 else "")
+            + " — estas clases se prueban primero (cola de requests y orden de reglas) para gastar el "
+              "presupuesto donde es más probable que haya bug."
+        )
     if plan.focus_hosts and len(plan.focus_hosts) > 1:
         lines.append("Orden de hosts: " + ", ".join(plan.focus_hosts[:6]) + (" …" if len(plan.focus_hosts) > 6 else "") + ".")
     lines.extend(f"  ⚠ {note}" for note in plan.notes)

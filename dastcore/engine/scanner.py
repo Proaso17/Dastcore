@@ -31,8 +31,8 @@ from dastcore.detectors.exposure import check_source_map
 from dastcore.detectors.fingerprint import looks_blocked
 from dastcore.detectors.passive import run_passive_checks
 from dastcore.engine.injection_points import extract_injection_points
-from dastcore.engine.prioritize import prioritize_requests
 from dastcore.engine.oast import OastInteraction, OastProvider, substitute_oast
+from dastcore.engine.prioritize import prioritize_requests, prioritize_rules
 from dastcore.engine.rule_engine import (
     Rule,
     build_mutated_request,
@@ -116,9 +116,14 @@ class Scanner:
         waf_evasion: bool = False,
         ai_payloads: AiPayloadGenerator | None = None,
         ai_payload_budget: int = 15,
+        priority_families: tuple[str, ...] = (),
     ) -> None:
         self._http = http_client
-        self._rules = rules
+        # Adaptive planner steer: attack the target's priority families first within each request, so a
+        # --time-budget that runs out mid-request has already probed the likeliest classes. Empty → order
+        # unchanged (identical to before for every caller that doesn't pass a plan).
+        self._priority_families = priority_families
+        self._rules = prioritize_rules(rules, priority_families)
         self._oast = oast
         self._concurrency = max(1, concurrency)
         self._active_checks = active_checks
@@ -218,7 +223,8 @@ class Scanner:
         """
         # Audit the highest-value requests first, so a --time-budget / --max-requests cap is spent on the
         # juiciest targets rather than whatever the crawler happened to enqueue first (Burp-style queue).
-        requests = prioritize_requests(requests)
+        # The planner's priority families pull forward requests that expose the target's likely vuln classes.
+        requests = prioritize_requests(requests, self._priority_families)
         semaphore = asyncio.Semaphore(self._concurrency)
 
         async def _worker(request: HttpRequest) -> list[Finding]:

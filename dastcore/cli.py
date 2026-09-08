@@ -1778,6 +1778,10 @@ async def _run_scan(
                 stored_scan=stored_scan,
                 waf_evasion=waf_evasion,
                 ai_payloads=ai_payloads,
+                # Adaptive planner (part 3): steer the active scan toward what the target IS — the priority
+                # families reorder both the request queue and the per-request rule order, so under a budget
+                # the relevant vuln classes are probed first. The brain reorders the attack, not just explains it.
+                priority_families=_scan_plan.priority_families,
             )
             if mine_params:
                 # Find undocumented query params on the discovered endpoints — each is a new injection point.
