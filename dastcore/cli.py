@@ -215,7 +215,13 @@ _PROFILES: dict[str, dict[str, object]] = {
     "quick": {"engine": "http", "max_pages": 40, "oast": "off"},
     "full": {"engine": "both", "max_pages": 200, "oast": "off"},
     "api": {"engine": "http", "max_pages": 80, "oast": "off"},
+    # "deep" = todo en uno: descubrimiento de superficie (subdominios + puertos + vhosts + rutas) Y toda la
+    # detección (headless/SPA + OAST para clases ciegas + minado de params + prueba de impacto) en un solo
+    # comando. Además del engine/oast de aquí, activa esos toggles abajo (a menos que el usuario los fije).
+    "deep": {"engine": "both", "max_pages": 300, "oast": "interactsh"},
 }
+# Toggles booleanos que el perfil "deep" enciende (si el usuario no los pasó explícitamente).
+_DEEP_PROFILE_TOGGLES = ("discover", "discover_ports", "discover_vhosts", "prove_impact", "mine_params")
 
 
 _ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -2146,7 +2152,10 @@ def scan(
         help="Confirma explícitamente que tienes autorización para escanear el objetivo.",
     ),
     profile: str = typer.Option(
-        "", "--profile", help="Perfil de escaneo: quick | full | api. Los flags explícitos siempre ganan."
+        "", "--profile",
+        help="Perfil de escaneo: quick | full | api | deep. 'deep' = todo en uno (subdominios + puertos + "
+        "vhosts + rutas + headless/SPA + OAST + mine-params + prove-impact) en un comando. Los flags "
+        "explícitos siempre ganan.",
     ),
     resume_file: str = typer.Option(
         "", "--resume", help="Archivo de estado para reanudar un escaneo interrumpido (crea/actualiza el archivo)."
@@ -2523,6 +2532,16 @@ def scan(
     max_pages = _resolve_layered(ctx, "max_pages", max_pages, scan_file.max_pages, preset.get("max_pages"))
     oast_mode = _resolve_layered(ctx, "oast_mode", oast_mode, scan_file.oast, preset.get("oast")).lower()
     oast_server = _pick(ctx, "oast_server", oast_server, scan_file.oast_server)
+
+    # "deep": un solo comando lo hace todo — enciende el descubrimiento de superficie completo y la
+    # detección intrusiva, salvo los toggles que el usuario haya fijado explícitamente.
+    if profile == "deep":
+        deep_on = {name: True for name in _DEEP_PROFILE_TOGGLES if _is_default_source(ctx, name)}
+        discover = deep_on.get("discover", discover)
+        discover_ports = deep_on.get("discover_ports", discover_ports)
+        discover_vhosts = deep_on.get("discover_vhosts", discover_vhosts)
+        prove_impact = deep_on.get("prove_impact", prove_impact)
+        mine_params = deep_on.get("mine_params", mine_params)
     requests_per_second = _pick(ctx, "requests_per_second", requests_per_second, scan_file.rps)
     concurrency = _pick(ctx, "concurrency", concurrency, scan_file.concurrency)
     max_requests = _pick(ctx, "max_requests", max_requests, scan_file.max_requests)

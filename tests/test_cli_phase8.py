@@ -12,9 +12,22 @@ runner = CliRunner()
 
 
 def test_profiles_exist() -> None:
-    assert set(_PROFILES) == {"quick", "full", "api"}
+    assert set(_PROFILES) == {"quick", "full", "api", "deep"}
     assert _PROFILES["quick"]["engine"] == "http"
     assert _PROFILES["full"]["engine"] == "both"
+    assert _PROFILES["deep"]["engine"] == "both" and _PROFILES["deep"]["oast"] == "interactsh"
+
+
+def test_deep_profile_runs_the_full_pipeline_in_one_command(vuln_app_url: str) -> None:
+    # "deep" = todo en uno; explicit --engine http / --oast off keep the test fast+offline while proving
+    # the profile is a valid, wired one-command scan (its discover/prove-impact toggles turn on internally).
+    result = runner.invoke(app, [
+        "scan", vuln_app_url, "--i-have-authorization", "--profile", "deep",
+        "--engine", "http", "--oast", "off", "--discover-depth", "light",
+        "--max-pages", "5", "--rps", "80", "--fail-on", "none",
+    ])
+    assert result.exit_code == 0, result.stdout
+    assert "Resumen del escaneo" in result.stdout
 
 
 def test_invalid_profile_rejected(vuln_app_url: str) -> None:
