@@ -39,6 +39,7 @@ from dastcore.ai.payload_gen import AiPayloadGenerator, build_payload_generator
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint, infer_write_endpoints
 from dastcore.analysis import prove_findings_impact
+from dastcore.analysis.planner import ScanPlan, TargetProfile, order_hosts, plan_scan, render_plan
 from dastcore.config import (
     AuthConfig,
     FormLoginConfig,
@@ -746,6 +747,88 @@ def _session_instability_finding(target: str, relogins: int) -> Finding:
             "El objetivo pierde la sesión con frecuencia, lo que puede dejar comprobaciones ejecutadas sin "
             "autenticar (cobertura parcial). Baja la concurrencia (--concurrency 1), amplía el timeout de "
             "sesión del servidor para el escaneo, o usa credenciales/token de vida más larga."
+        ),
+    )
+
+
+_TECH_KEYWORDS: dict[str, str] = {
+    "wordpress": "WordPress", "drupal": "Drupal", "joomla": "Joomla", "laravel": "Laravel", "symfony": "Symfony",
+    "php": "PHP", "asp.net": "ASP.NET", "iis": "IIS", "spring": "Spring", "tomcat": "Java", "java": "Java",
+    "express": "Express", "node": "Node.js", "next.js": "Next.js", "django": "Django", "flask": "Flask",
+    "rails": "Ruby on Rails", "nginx": "nginx", "apache": "Apache",
+}
+_LANG_OF_TECH: list[tuple[str, tuple[str, ...]]] = [
+    ("php", ("PHP", "Laravel", "Symfony", "WordPress", "Drupal", "Joomla")),
+    ("java", ("Java", "Spring")),
+    ("dotnet", ("ASP.NET", "IIS")),
+    ("node", ("Node.js", "Express", "Next.js")),
+    ("python", ("Django", "Flask")),
+    ("ruby", ("Ruby on Rails",)),
+]
+_LOGIN_PATH_HINT = ("login", "signin", "sign-in", "wp-admin", "wp-login", "/admin", "/auth", "sso", "session")
+
+
+def _has_login_signal(discovered: dict[str, HttpRequest]) -> bool:
+    """A discovered login/auth surface: a login-ish path, or a form/param with a password field."""
+    from urllib.parse import urlsplit
+
+    for req in discovered.values():
+        path = (urlsplit(req.url).path or "").lower()
+        if any(hint in path for hint in _LOGIN_PATH_HINT):
+            return True
+        keys = " ".join([*(req.data or {}), *req.params]).lower()
+        if any(p in keys for p in ("password", "passwd", "pwd", "contrase")):
+            return True
+    return False
+
+
+def _build_target_profile(
+    scan_roots: list[str], extra_findings: list[Finding], discovered: dict[str, HttpRequest],
+    graphql_url: str, supabase: bool, auth: AuthConfig,
+) -> TargetProfile:
+    """Assemble what recon learned into a TargetProfile the planner can reason over (deterministic)."""
+    from urllib.parse import urlsplit
+
+    blob, waf, is_spa = "", False, False
+    for f in extra_findings:
+        rid = (f.rule_id or "").lower()
+        text = (f.name or "") + " " + " ".join(e.data for e in f.evidence)
+        if "tech-fingerprint" in rid or "fingerprint" in rid:
+            blob += " " + text
+        if "waf" in rid:
+            waf = True
+        if "spa" in rid or "single-page" in text.lower():
+            is_spa = True
+    low = blob.lower()
+    tech = {tag for kw, tag in _TECH_KEYWORDS.items() if kw in low}
+    languages = {lang for lang, tags in _LANG_OF_TECH if tech & set(tags)}
+    cms = next((c for c in ("WordPress", "Drupal", "Joomla") if c in tech), "").lower()
+    api_kind = "graphql" if graphql_url else ("rest" if any(r.json_body is not None for r in discovered.values()) else "none")
+    hosts = tuple(dict.fromkeys(urlsplit(r).hostname or r for r in scan_roots))
+    return TargetProfile(
+        tech=frozenset(tech), languages=frozenset(languages), cms=cms, is_spa=is_spa,
+        has_login=auth.type in ("form", "oauth2", "oauth2_pkce") or _has_login_signal(discovered),
+        api_kind=api_kind, backend="supabase" if supabase else "none", waf=waf, hosts=hosts,
+    )
+
+
+def _scan_plan_finding(target: str, profile: TargetProfile, plan: ScanPlan) -> Finding:
+    """Surface the planner's reasoning as an info advisory — the visible 'thinking' about the target."""
+    request = HttpRequest(method="GET", url=target)
+    return Finding(
+        id="scan-plan",
+        rule_id="scan-plan",
+        name="Plan de escaneo adaptativo (priorizado según el objetivo)",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="static", data=render_plan(profile, plan)[:2000], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target),
+        remediation=(
+            "Informativo: dastcore dedujo qué es el objetivo (tecnología, CMS, API, panel de login, subdominios) y "
+            "priorizó las clases de vulnerabilidad y los hosts más relevantes. Guía el foco del escaneo."
         ),
     )
 
@@ -1573,6 +1656,7 @@ async def _run_scan(
                 for req in await phase("openapi-ingest", fetch_and_parse_openapi(client, openapi_url, target)):
                     discovered.setdefault(req.signature(), req)
 
+            supa_prof = SupabaseProfile()  # empty unless the target is a Supabase project (below)
             if supabase_frontend or supabase_tables or is_supabase_project(target):
                 # A Supabase project's OpenAPI schema is service_role-only, so the table list can't be
                 # read from the API. Enumerate it autonomously — pg_graphql introspection + a PostgREST
@@ -1644,6 +1728,10 @@ async def _run_scan(
             for root in scan_roots:
                 extra_findings.extend(await phase("sensitive-files", probe_sensitive_files(client, root)))
 
+            # Adaptive planner (part 1): audit the juiciest hosts first (admin./api./staging.) — a light,
+            # standalone signal, so a budgeted scan spends where the risk is before the marketing site.
+            scan_roots = list(order_hosts(scan_roots))
+
             progress.status("Fingerprint de tecnología + WAF…")
             for root in scan_roots:
                 extra_findings.extend(await phase("fingerprint-waf", fingerprint_and_waf(client, root)))
@@ -1651,6 +1739,20 @@ async def _run_scan(
                 extra_findings.extend(await phase("dangerous-methods", check_dangerous_methods(client, root)))
                 extra_findings.extend(await phase("spa-awareness", run_spa_check(client, root, engine)))
                 extra_findings.extend(await phase("tls-info", run_tls_checks(root)))
+
+            # Adaptive planner (part 2): now that recon has run, decide the strategy from what the target IS
+            # (technology, CMS, SPA, API kind, auth panel, WAF) and surface the reasoning as an advisory.
+            _target_profile = _build_target_profile(
+                scan_roots, extra_findings, discovered, graphql_url, bool(supa_prof.tables), config.auth
+            )
+            _scan_plan = plan_scan(_target_profile)
+            _plan_finding = _scan_plan_finding(target, _target_profile, _scan_plan)
+            extra_findings.append(_plan_finding)
+            if sink is not None:  # stream it like phase() does, so the incremental log mirrors the final set
+                sink.write([_plan_finding])
+            if on_finding is not None:
+                on_finding(_plan_finding)
+            _scan_log.info("Plan de escaneo adaptativo:\n%s", render_plan(_target_profile, _scan_plan))
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
                 jwt = config.auth.bearer_token
                 extra_findings.extend(await phase("jwt-none", check_jwt_none_acceptance(client, target, jwt)))
