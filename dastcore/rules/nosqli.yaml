@@ -11,6 +11,15 @@ payloads:
   - '{"$ne": null}'
   - "[$ne]="
   - "', $where: '1==1"
+# Tried only when the planner marks nosqli a priority (e.g. a Node/Mongo stack). More operator- and
+# type-confusion forms, so a driver that mis-parses one of them surfaces a Mongo/BSON/Cast error — which
+# the SAME error-based oracle below confirms. Data forms, not operators, so no query actually runs here.
+intensive_payloads:
+  - "[$gt]="                       # query-string operator injection (?key[$gt]=)
+  - "[$regex]=.*"                  # regex operator via query string
+  - '{"$gt": ""}'                  # always-true comparison operator
+  - '{"$where": "1"}'              # server-side JS predicate -> "$where" / unknown-operator error
+  - "'; return true; //"           # break out of a $where JS string
 oracle:
   type: any_of
   checks:

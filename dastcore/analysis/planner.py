@@ -169,8 +169,9 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
         lines.append(
             "Ataque priorizado (active scan): " + ", ".join(plan.priority_families[:8])
             + (" …" if len(plan.priority_families) > 8 else "")
-            + " — estas clases se prueban primero (cola de requests y orden de reglas) para gastar el "
-              "presupuesto donde es más probable que haya bug."
+            + " — estas clases se prueban primero (cola de requests y orden de reglas) y con MÁS intensidad "
+              "(payloads intensivos + evasión de WAF automática), gastando el presupuesto donde es más "
+              "probable que haya bug. Cada payload extra lo sigue confirmando el oráculo (cero falsos positivos)."
         )
     if plan.focus_hosts and len(plan.focus_hosts) > 1:
         lines.append("Orden de hosts: " + ", ".join(plan.focus_hosts[:6]) + (" …" if len(plan.focus_hosts) > 6 else "") + ".")

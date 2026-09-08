@@ -54,7 +54,7 @@ EXPECTED: dict[str, str | None] = {
     "/b/xss-escaped": None,  # reflected but HTML-escaped
     "/b/xss-json": None,  # reflected raw but in a JSON body (can't execute)
     "/b/xss-comment": None,  # reflected inside an HTML comment (inert)
-    "/b/xss-textarea": None,  # reflected inside <textarea> (only </textarea> breaks out)
+    "/b/xss-textarea": None,  # reflected inside <textarea>, HTML-escaped (a </textarea> breakout stays inert)
     "/b/xss-attr-safe": None,  # reflected in a quoted attribute, but escaped (no breakout)
     "/b/reflect-safe": None,  # echoes input (escaped), no error, no boolean behaviour
     "/b/static": None,  # identical response for any input (boolean/differential trap)
@@ -323,7 +323,9 @@ def create_app() -> Flask:
 
     @app.get("/b/xss-textarea")
     def xss_textarea() -> Response:
-        return Response(f"<textarea>{request.args.get('name', '')}</textarea>", mimetype="text/html")
+        # A correctly-coded textarea reflection ESCAPES its input. Raw reflection here would be a real XSS
+        # (a `</textarea>` breakout escapes the context and executes), so a decoy must escape to be safe.
+        return Response(f"<textarea>{html.escape(request.args.get('name', ''))}</textarea>", mimetype="text/html")
 
     @app.get("/b/xss-attr-safe")
     def xss_attr_safe() -> Response:

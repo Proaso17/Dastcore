@@ -123,6 +123,7 @@ class Scanner:
         # --time-budget that runs out mid-request has already probed the likeliest classes. Empty → order
         # unchanged (identical to before for every caller that doesn't pass a plan).
         self._priority_families = priority_families
+        self._priority_set = frozenset(priority_families)  # O(1) membership for the per-rule intensity check
         self._rules = prioritize_rules(rules, priority_families)
         self._oast = oast
         self._concurrency = max(1, concurrency)
@@ -268,12 +269,20 @@ class Scanner:
             return []
         return await self._correlate_oob(pending_oob)
 
+    def _is_priority(self, family: str) -> bool:
+        """True if the adaptive planner flagged this family as a priority for the target — the trigger to
+        raise intensity (extra intensive_payloads, and WAF evasion even without the global --waf-evasion)."""
+        return family in self._priority_set
+
     async def _try_rule(self, rule: Rule, point, baseline: BaselineProfile) -> Finding | None:
         base_response = baseline.primary
         # Timing checks are confirmed separately (proportional delay), so strip them from
         # the in-band evaluation — a declared payload should never be judged by timing here.
         inband_oracle = _oracle_without_timing(rule.oracle)
-        for payload in inband_payloads(rule):
+        # Intensity: when the planner says this family matters for the target, also fire the rule's
+        # intensive_payloads and push past a WAF on block — all still oracle-gated, so zero new FPs.
+        intensive = self._is_priority(rule.family)
+        for payload in inband_payloads(rule, intensive=intensive):
             request = build_mutated_request(point, payload.value)
             response = await self._send(request)
             if response is None:
@@ -285,10 +294,11 @@ class Scanner:
             )
             note: str | None = None
 
-            # If the raw payload was blocked and nothing fired, try to evade the WAF and confirm.
-            # Two complementary strategies: rewrite the payload bytes (tampers), then — as an
-            # alternative — keep the payload and reshape the request (HPP / relocation).
-            if not evidence and self._waf_evasion and looks_blocked(response) is not None:
+            # If the raw payload was blocked and nothing fired, try to evade the WAF and confirm. Two
+            # complementary strategies: rewrite the payload bytes (tampers), then — as an alternative —
+            # keep the payload and reshape the request (HPP / relocation). Enabled globally by
+            # --waf-evasion, or automatically for a priority family (the target likely IS vulnerable here).
+            if not evidence and (self._waf_evasion or intensive) and looks_blocked(response) is not None:
                 evaded = await self._try_waf_evasion(inband_oracle, point, value, base_response, baseline, rule.family)
                 if evaded is None:
                     evaded = await self._try_waf_reshape(inband_oracle, point, value, base_response, baseline)
@@ -345,7 +355,7 @@ class Scanner:
         context = (
             f"HTML context={info.context}; {'escaped/inert' if info.escaped and not info.reflected else 'raw/verbatim'}"
         )
-        tried = [p.value for p in inband_payloads(rule)]
+        tried = [p.value for p in inband_payloads(rule, intensive=self._is_priority(rule.family))]
         try:
             payloads = await self._ai_payloads.suggest(rule.family, context, excerpt, tried)
         except Exception:  # noqa: BLE001 — a failed suggestion just means no AI payloads
@@ -571,7 +581,7 @@ class Scanner:
             for point in points:
                 if point.location not in rule.inject_into:
                     continue
-                for template in oob_payload_templates(rule):
+                for template in oob_payload_templates(rule, intensive=self._is_priority(rule.family)):
                     handle = self._oast.new_handle()
                     value = substitute_oast(template, handle)
                     mutated_request = build_mutated_request(point, value)

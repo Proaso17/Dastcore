@@ -101,3 +101,40 @@ async def test_accuracy_benchmark(benchmark_url: str) -> None:
     # Regression gate: no false positives, and near-perfect recall.
     assert false_positives == [], f"false positives on decoys: {false_positives}"
     assert recall >= 0.9, f"recall {recall:.2f} too low; missed: {false_negatives}"
+
+
+async def test_intensity_keeps_zero_false_positives(benchmark_url: str) -> None:
+    """The adaptive-planner intensity boost must not cost precision. Run the same benchmark with EVERY
+    active family marked a priority (so every rule's intensive_payloads fire and WAF evasion is on), and
+    require the decoys to stay clean. This is the honest guard for the feature's core promise: more
+    payloads, never more false positives — because every one is still confirmed by the rule's oracle."""
+    scope = ScopeConfig(allow_domains=["127.0.0.1"])
+    rate = RateLimitConfig(requests_per_second=100, max_concurrency=20)
+    oast = LocalOastServer()
+    await oast.start()
+    try:
+        async with HttpClient(scope, rate_limit=rate) as client:
+            discovered = await HttpCrawler(client).crawl(f"{benchmark_url}/")
+            scanner = Scanner(
+                client, load_rules(), oast=oast, oob_poll_attempts=6,
+                priority_families=tuple(sorted(_ACTIVE_FAMILIES)),  # intensity ON for all families
+            )
+            findings = await scanner.scan(discovered)
+    finally:
+        await oast.stop()
+
+    detected: dict[str, set[str]] = defaultdict(set)
+    for finding in findings:
+        if finding.family in _ACTIVE_FAMILIES:
+            detected[urlsplit(finding.request.url).path].add(finding.family)
+
+    false_positives = [
+        (path, sorted(detected[path])) for path, expected in EXPECTED.items()
+        if expected is None and detected.get(path)
+    ]
+    tp = sum(1 for path, expected in EXPECTED.items() if expected is not None and expected in detected.get(path, set()))
+    positives = sum(1 for v in EXPECTED.values() if v is not None)
+    recall = tp / positives if positives else 1.0
+
+    assert false_positives == [], f"intensity introduced false positives on decoys: {false_positives}"
+    assert recall >= 0.9, f"intensity dropped recall to {recall:.2f}"  # intensity must never lose coverage

