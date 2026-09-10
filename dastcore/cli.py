@@ -1281,6 +1281,31 @@ async def _discover_scan_roots(
 # bounds every phase() so one hung check can't freeze the whole scan. The core active scan is exempt.
 _PHASE_TIMEOUT_S: float = 180.0
 
+# Wall-clock cap for each discovery stage that runs *inline* (not via phase()): subdomain enumeration and
+# historical-URL mining. These do their own network I/O and, on a pathological target (a wildcard/ISP-hijack
+# domain that answers every name, a stalled archive), could otherwise run for hours with no cap — the exact
+# hang seen in the wild. On timeout the stage is abandoned and the scan continues with whatever it gathered.
+_DISCOVERY_PHASE_TIMEOUT_S: float = 300.0
+
+
+async def _bounded_discovery(coro: Awaitable[Any], *, timeout: float, label: str, default: Any) -> Any:
+    """Run an inline discovery stage under a wall-clock cap. On timeout (or error) log it and return
+    ``default`` so a stalled stage degrades to partial coverage instead of freezing the whole scan.
+    A budget soft-stop still bubbles up (it ends the scan cleanly)."""
+    try:
+        return await asyncio.wait_for(coro, timeout)
+    except BudgetExceededError:
+        raise
+    except TimeoutError:
+        _scan_log.warning(
+            "Descubrimiento '%s' superó el límite de %.0fs y se cortó; se continúa con lo obtenido.",
+            label, timeout,
+        )
+        return default
+    except Exception as exc:  # noqa: BLE001 — a discovery stage failing must never abort the scan
+        _scan_log.warning("Descubrimiento '%s' falló (%s: %s); se continúa.", label, type(exc).__name__, exc)
+        return default
+
 # Global concurrency ceiling for *authenticated* scans. A single server-side session (a PHP session,
 # a single-worker dev server, most deliberately-vulnerable training apps) drops or corrupts the login
 # under a concurrent burst — the scan then runs logged-out and misses everything behind auth. This is
@@ -1454,7 +1479,11 @@ async def _run_scan(
                     progress.status("Minando URLs históricas (Wayback · Common Crawl · urlscan · OTX)…")
                     hist_hosts: set[str] = set()
                     reqs: list[HttpRequest] = []
-                    for hist_url in await gather_historical_urls(_base_domain(thost)):  # passive: hits the archive
+                    hist_urls = await _bounded_discovery(
+                        gather_historical_urls(_base_domain(thost)),  # passive: hits the archive, not the target
+                        timeout=_DISCOVERY_PHASE_TIMEOUT_S, label="histórico", default=[],
+                    )
+                    for hist_url in hist_urls:
                         req = url_to_request(hist_url)
                         if req is None or not client.is_in_scope(req.url):  # scope-gate before anything is scanned
                             continue
@@ -1469,10 +1498,13 @@ async def _run_scan(
                         surface["historical"] = {"endpoints": len(historical_requests), "hosts": sorted(hist_hosts)}
 
             if discover_subdomains or seed_host_pool:
-                scan_roots = await _discover_scan_roots(
-                    client, target, discover_depth, progress, subdomain_wordlist,
-                    seeds=seed_host_pool, recursion=subdomain_recursion, auto=discover_subdomains,
-                    permute=use_permutations,
+                scan_roots = await _bounded_discovery(
+                    _discover_scan_roots(
+                        client, target, discover_depth, progress, subdomain_wordlist,
+                        seeds=seed_host_pool, recursion=subdomain_recursion, auto=discover_subdomains,
+                        permute=use_permutations,
+                    ),
+                    timeout=_DISCOVERY_PHASE_TIMEOUT_S, label="subdominios", default=[target],
                 )
             for historical_req in historical_requests:  # historical endpoints (with their params) get scanned
                 discovered.setdefault(historical_req.signature(), historical_req)

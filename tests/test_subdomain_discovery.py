@@ -161,6 +161,89 @@ async def test_manual_seed_host_is_always_probed_and_scanned() -> None:
     assert "secret.example.com" in found  # the manual seed was included, probed and discovered
 
 
+async def test_wildcard_disables_recursion() -> None:
+    # Under a wildcard (every name resolves), recursing would re-enumerate the whole wordlist per noise
+    # host and explode. A distinct child reachable ONLY by recursion must therefore NOT be discovered.
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+
+    async def resolver(host: str) -> list[str]:
+        return ["10.0.0.9"]  # everything resolves -> wildcard root
+
+    default = _page(200, "WELCOME default catch-all page " * 5)
+    distinct = {
+        "admin.example.com": _page(200, "ADMIN PANEL distinct body much longer than the default " * 8),
+        "secret.admin.example.com": _page(200, "NESTED SECRET distinct body much longer than default " * 8),
+    }
+
+    async def prober(host: str):
+        return (f"http://{host}/", distinct.get(host, default))
+
+    async with HttpClient(scope) as client:
+        disc = SubdomainDiscoverer(
+            client, wordlist=["admin", "secret"], resolver=resolver, prober=prober,
+            use_passive=False, use_external=False, recursion_depth=2,
+        )
+        found = {h.host for h in await disc.discover("example.com")}
+
+    assert "admin.example.com" in found          # the distinct level-0 host is still found
+    assert "secret.admin.example.com" not in found  # ...but recursion into it is disabled under wildcard
+
+
+async def test_wildcard_caps_bruteforce_probes() -> None:
+    # Under a wildcard, a big wordlist must not turn into one HTTP probe per word: the brute-force guesses
+    # are capped (observed/seed hosts aside), so the sweep stays bounded instead of running for hours.
+    from dastcore.discovery.subdomains import _WILDCARD_PROBE_CAP
+
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+    wordlist = [f"w{i}" for i in range(200)]  # far more than the cap
+    probed: list[str] = []
+
+    async def resolver(host: str) -> list[str]:
+        return ["10.0.0.9"]  # wildcard
+
+    default = _page(200, "same catch-all page for every host " * 5)
+
+    async def prober(host: str):
+        probed.append(host)
+        return (f"http://{host}/", default)  # everything is the catch-all -> nothing is a real host
+
+    async with HttpClient(scope) as client:
+        disc = SubdomainDiscoverer(
+            client, wordlist=wordlist, resolver=resolver, prober=prober, use_passive=False, use_external=False,
+        )
+        found = await disc.discover("example.com")
+
+    assert found == []                                   # all guesses were just the catch-all page
+    assert len(probed) <= _WILDCARD_PROBE_CAP + 10       # capped (apex + cap + a few baselines), not 200+
+
+
+async def test_wildcard_still_probes_observed_hosts() -> None:
+    # A passively-observed host is real evidence, not a guess: it must survive the wildcard probe cap and
+    # be discovered even when the wordlist is huge and all-noise.
+    scope = ScopeConfig(allow_domains=["example.com"], allow_subdomains=True)
+
+    async def resolver(host: str) -> list[str]:
+        return ["10.0.0.9"]  # wildcard
+
+    default = _page(200, "catch-all " * 10)
+    real = _page(200, "REAL internal app, a body quite unlike the catch-all default page " * 6)
+
+    async def prober(host: str):
+        return (f"http://{host}/", real if host == "hidden.example.com" else default)
+
+    async def gather(domain: str) -> set[str]:
+        return {"hidden.example.com"}  # observed via a passive source
+
+    async with HttpClient(scope) as client:
+        disc = SubdomainDiscoverer(
+            client, wordlist=[f"w{i}" for i in range(150)], resolver=resolver, prober=prober,
+            use_passive=True, use_external=False, passive_gather=gather,
+        )
+        found = {h.host for h in await disc.discover("example.com")}
+
+    assert "hidden.example.com" in found  # observed host kept despite the cap; distinct from the catch-all
+
+
 def test_generate_permutations() -> None:
     from dastcore.discovery.permutations import generate_permutations
 

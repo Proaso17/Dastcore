@@ -86,6 +86,22 @@ def _same_page(a: HttpResponse, b: HttpResponse) -> bool:
     return abs(la - lb) <= max(64, int(0.03 * max(la, lb, 1)))
 
 
+def _matches_any(resp: HttpResponse, baselines: list[HttpResponse]) -> bool:
+    """True if ``resp`` looks like any of the sampled wildcard catch-all pages. Sampling several random
+    hosts (not one) absorbs a catch-all that varies a little per hostname — e.g. an ISP NXDOMAIN-hijack or
+    parking page that echoes the name — so such pages aren't mistaken for distinct, real hosts."""
+    return any(_same_page(resp, b) for b in baselines)
+
+
+# Under a wildcard/catch-all domain, DNS resolves *every* name, so a wordlist brute-force can't be
+# confirmed by DNS and explodes into a probe for every word. These bound that: only this many brute-force
+# guesses are HTTP-probed (passively-observed and seed hosts are always kept, on top), and the catch-all
+# page is characterised from this many random samples. Recursion and permutations are disabled entirely
+# under a wildcard (every generated name would "resolve", multiplying the noise) — see ``discover``.
+_WILDCARD_PROBE_CAP = 75
+_WILDCARD_BASELINE_SAMPLES = 3
+
+
 class SubdomainDiscoverer:
     def __init__(
         self,
@@ -116,6 +132,7 @@ class SubdomainDiscoverer:
         # The multi-source gather is queried once for the root domain; injectable for offline tests.
         self._passive_gather = passive_gather
         self._root = ""
+        self._wildcard_root = False  # set in discover(): the root answers every name (wildcard/ISP hijack)
         self._passive_root: set[str] = set()
         self._probe_timeout = probe_timeout  # short per-probe timeout so a slow host doesn't drag
         # Manual seeds: known hosts to always probe+scan (and recurse into), regardless of the wordlist.
@@ -160,29 +177,43 @@ class SubdomainDiscoverer:
         domain = domain.strip().lower().lstrip("*.").rstrip(".")
         if not domain:
             return []
-        candidates: set[str] = {domain} | {f"{word}.{domain}" for word in self._wordlist}
+        # Priority hosts are real, observed names (seeds + passively gathered + external tools) — worth
+        # probing even under a wildcard, unlike the wordlist guesses (which DNS can't confirm there).
+        priority: set[str] = {domain}
         if self._use_external:
-            candidates |= await self._external_subfinder(domain)
+            priority |= await self._external_subfinder(domain)
         if self._passive_root and domain == self._root:
-            candidates |= self._passive_root  # multi-source passive hits (incl. crt.sh), gathered for the root
-        return await self._resolve_and_probe(candidates, domain, always_keep={domain})
+            priority |= self._passive_root  # multi-source passive hits (incl. crt.sh), gathered for the root
+        candidates: set[str] = priority | {f"{word}.{domain}" for word in self._wordlist}
+        return await self._resolve_and_probe(candidates, domain, always_keep={domain}, priority=priority)
 
     async def _resolve_and_probe(
-        self, candidates: set[str], domain: str, *, always_keep: set[str] | None = None
+        self, candidates: set[str], domain: str, *, always_keep: set[str] | None = None,
+        priority: set[str] | None = None,
     ) -> list[DiscoveredHost]:
         """Scope-gate, DNS-resolve and HTTP-probe a set of candidate hosts. ``always_keep`` hosts are
-        probed even if DNS wouldn't resolve them (the queried root, a manual seed)."""
+        probed even if DNS wouldn't resolve them (the queried root, a manual seed); ``priority`` hosts
+        (observed, not guessed) survive the wildcard probe cap."""
         always_keep = always_keep or set()
+        priority = priority or set()
         # Scope is the hard gate: never resolve or probe a host we aren't authorised for.
         in_scope = sorted(host for host in candidates if self._client.is_asset_in_scope(host))
         if not in_scope:
             return []
 
-        wildcard = bool(await self._resolver(f"dc{secrets.token_hex(10)}.{domain}"))
+        # Reuse the root's wildcard verdict (detected once in discover) to avoid a second DNS probe;
+        # re-detect only for a different domain (rare — recursion is off under a wildcard root anyway).
+        wildcard = self._wildcard_root if domain == self._root else bool(
+            await self._resolver(f"dc{secrets.token_hex(10)}.{domain}")
+        )
         semaphore = asyncio.Semaphore(self._concurrency)
 
         if wildcard:
-            resolved = in_scope  # DNS answers everything; the HTTP probe/baseline decides reality
+            # DNS answers everything, so DNS can't filter and a full wordlist probe would explode. Probe
+            # the observed/priority hosts plus a bounded slice of the remaining guesses; the HTTP baseline
+            # decides reality. Keeps the passively-discovered real hosts, drops the brute-force blow-up.
+            rest = [h for h in in_scope if h not in priority]
+            resolved = sorted(priority & set(in_scope)) + rest[:_WILDCARD_PROBE_CAP]
         else:
             async def _resolves(host: str) -> str | None:
                 async with semaphore:
@@ -190,10 +221,13 @@ class SubdomainDiscoverer:
 
             resolved = [host for host in await asyncio.gather(*(_resolves(h) for h in in_scope)) if host]
 
-        baseline: HttpResponse | None = None
+        baselines: list[HttpResponse] = []
         if wildcard:
-            probed_baseline = await self._prober(f"dc{secrets.token_hex(10)}.{domain}")
-            baseline = probed_baseline[1] if probed_baseline else None
+            # Characterise the catch-all page from several random hosts (it may vary a little per name).
+            samples = await asyncio.gather(
+                *(self._prober(f"dc{secrets.token_hex(10)}.{domain}") for _ in range(_WILDCARD_BASELINE_SAMPLES))
+            )
+            baselines = [probed[1] for probed in samples if probed is not None]
 
         async def _check(host: str) -> DiscoveredHost | None:
             async with semaphore:
@@ -201,7 +235,7 @@ class SubdomainDiscoverer:
             if probed is None:
                 return None
             url, resp = probed
-            if wildcard and baseline is not None and _same_page(resp, baseline):
+            if wildcard and baselines and _matches_any(resp, baselines):
                 return None  # just the wildcard default page, not a distinct host
             return DiscoveredHost(host=host, url=url, status_code=resp.status_code)
 
@@ -212,6 +246,10 @@ class SubdomainDiscoverer:
         subdomains are themselves enumerated up to ``recursion_depth``, so nested hosts aren't missed."""
         domain = domain.strip().lower().lstrip("*.").rstrip(".")
         self._root = domain
+        # Is the root a wildcard/catch-all (every name resolves — a real wildcard, or an ISP NXDOMAIN
+        # hijack)? Detect once here so _resolve_and_probe can reuse it, and so recursion/permutations —
+        # which would each generate names that all "resolve" and multiply the probe explosion — are off.
+        self._wildcard_root = bool(await self._resolver(f"dc{secrets.token_hex(10)}.{domain}")) if domain else False
         # Multi-source passive gathering: one query per source for the root domain (CT logs, passive DNS,
         # URL archives, cert SANs, + premium if keyed). Results are scope-gated/validated like everything
         # else, so a passive host that doesn't resolve or answer is dropped.
@@ -241,11 +279,15 @@ class SubdomainDiscoverer:
             visited.add(base)
             for host in await self._enumerate_and_probe(base):
                 found.setdefault(host.host, host)
-                if depth < self._recursion_depth and host.host != base and host.host not in visited:
+                # Recurse only on a non-wildcard domain: under a wildcard every child name resolves, so
+                # recursion would re-enumerate the whole wordlist per noise host (the 3h blow-up we fixed).
+                if (not self._wildcard_root and depth < self._recursion_depth
+                        and host.host != base and host.host not in visited):
                     queue.append((host.host, depth + 1))
 
         # Permutation wave: mutate the found subdomains and probe the new candidates (same scope gate).
-        if self._use_permutations and self._permutation_words and domain and found:
+        # Skipped under a wildcard root — every permuted name would "resolve" and just add noise.
+        if self._use_permutations and not self._wildcard_root and self._permutation_words and domain and found:
             from dastcore.discovery.permutations import generate_permutations
 
             candidates = generate_permutations(set(found), domain, self._permutation_words)
