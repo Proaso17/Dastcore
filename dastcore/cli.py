@@ -102,7 +102,7 @@ from dastcore.detectors.ssrf_metadata import run_cloud_ssrf_checks
 from dastcore.detectors.ssti_error import run_ssti_error_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.user_enum import run_user_enumeration_checks
-from dastcore.detectors.weak_credentials import run_weak_credentials_check
+from dastcore.detectors.weak_credentials import WeakCredentials, find_weak_credentials
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
 from dastcore.detectors.xslt_injection import run_xslt_injection_checks
 from dastcore.detectors.xxe_inband import run_xxe_inband_checks
@@ -146,7 +146,7 @@ from dastcore.discovery.tls_info import run_tls_checks
 from dastcore.discovery.vhosts import VhostDiscoverer, vhost_findings
 from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
-from dastcore.engine.rule_engine import load_rules
+from dastcore.engine.rule_engine import Rule, load_rules
 from dastcore.engine.scanner import Scanner
 from dastcore.report import render_defectdojo, render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate, cross_correlate, deduplicate
@@ -575,6 +575,124 @@ async def _open_authenticated_client(
         if not await session.ensure_logged_in(client, initial=True):
             raise SessionLoginError(f"El login inicial falló para una identidad ({auth.type}).")
     return client
+
+
+_AUTH_PIVOT_MAX_PAGES = 50  # bound the authenticated re-crawl; the scan's budget + scope still apply on top
+
+
+async def _scan_authenticated_surface(
+    config: ScanConfig,
+    budget: _Budget,
+    creds: WeakCredentials,
+    *,
+    scan_roots: list[str],
+    known_signatures: set[str],
+    rules: list[Rule],
+    oast: OastProvider | None,
+    priority_families: tuple[str, ...],
+    max_pages: int,
+    concurrency: int,
+) -> list[Finding]:
+    """Auto-pivot: log in with the discovered weak credentials and scan the surface they unlock.
+
+    Crawls the in-scope roots *authenticated*, keeps only the requests the unauthenticated discovery never
+    saw (the surface behind the login), and runs the in-band active scan over them. This turns a "default
+    credentials work" finding into its real blast radius — what an attacker actually reaches, and can
+    inject into, once logged in. Bounded by ``_AUTH_PIVOT_MAX_PAGES``, and scope- and budget-enforced like
+    every other phase. Returns the authenticated findings plus a ``scan-auth-pivot`` advisory.
+    """
+    base_form = config.auth.form
+    assert base_form is not None  # the caller only pivots when a form login endpoint is configured
+    pivot_form = base_form.model_copy(
+        update={"credentials": {creds.user_field: creds.username, creds.pass_field: creds.password}}
+    )
+    pivot_auth = config.auth.model_copy(update={"type": "form", "form": pivot_form})
+    pivot_config = config.model_copy(update={"auth": pivot_auth})
+
+    findings: list[Finding] = []
+    internal: dict[str, HttpRequest] = {}
+    async with AsyncExitStack() as stack:
+        try:
+            client = await _open_authenticated_client(stack, pivot_config, pivot_auth, budget)
+        except Exception as exc:  # noqa: BLE001 — if the discovered creds don't re-establish a session, no pivot
+            _scan_log.warning("Auto-pivot autenticado: el login con las credenciales descubiertas falló: %s", exc)
+            return []
+        crawl_cap = min(max_pages, _AUTH_PIVOT_MAX_PAGES)
+        for root in scan_roots:
+            for req in await HttpCrawler(client, max_pages=crawl_cap).crawl(root):
+                sig = req.signature()
+                if sig not in known_signatures and sig not in internal:
+                    internal[sig] = req  # only the surface the anonymous discovery never reached
+        if internal:
+            scanner = Scanner(
+                client, rules, oast=oast, concurrency=concurrency, priority_families=priority_families
+            )
+            findings.extend(await scanner.scan_inband(list(internal.values())))
+    _scan_log.info(
+        "Auto-pivot autenticado (%s=%s): %d endpoints internos nuevos, %d hallazgos",
+        creds.user_field, creds.username, len(internal), len(findings),
+    )
+    findings.append(_auth_pivot_finding(str(config.target), creds, len(internal), len(findings)))
+    return findings
+
+
+def _auth_pivot_finding(target: str, creds: WeakCredentials, new_surface: int, new_findings: int) -> Finding:
+    """Advisory documenting that the scan logged in with the discovered weak creds and what it reached."""
+    request = HttpRequest(method="GET", url=target)
+    detail = (
+        f"Auto-pivot autenticado: dastcore inició sesión con las credenciales débiles descubiertas "
+        f"({creds.user_field}={creds.username}) y exploró la superficie tras el login. Endpoints internos "
+        f"nuevos: {new_surface}; hallazgos de inyección autenticados: {new_findings}."
+    )
+    return Finding(
+        id="scan-auth-pivot",
+        rule_id="scan-auth-pivot",
+        name="Pivot autenticado con credenciales descubiertas (alcance real)",
+        severity="info",
+        cwe="CWE-287",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="differential", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target),
+        remediation=(
+            "El hallazgo de credenciales débiles no es teórico: con ellas se alcanza la superficie interna "
+            "de arriba. Elimina las credenciales por defecto y revisa los hallazgos autenticados asociados."
+        ),
+    )
+
+
+async def _weak_credentials_and_pivot(
+    config: ScanConfig,
+    budget: _Budget,
+    *,
+    scan_roots: list[str],
+    known_signatures: set[str],
+    rules: list[Rule],
+    oast: OastProvider | None,
+    priority_families: tuple[str, ...],
+    max_pages: int,
+    concurrency: int,
+    pivot: bool,
+) -> list[Finding]:
+    """Probe the login for default credentials from a *fresh* (anonymous) session; if a pair works, report
+    it and — when ``pivot`` (the planner flagged authenticated coverage) — auto-scan the surface it unlocks.
+    Skips the pivot when the working pair is the very session the main scan already used (nothing new)."""
+    assert config.auth.form is not None
+    async with _make_client(config, budget) as fresh_client:  # empty jar: weak creds must be tested anonymously
+        weak = await find_weak_credentials(fresh_client, config.auth.form)
+    if weak is None:
+        return []
+    findings = [weak.finding]
+    discovered_creds = {weak.user_field: weak.username, weak.pass_field: weak.password}
+    already_used = discovered_creds == dict(config.auth.form.credentials)
+    if pivot and not already_used:
+        findings.extend(await _scan_authenticated_surface(
+            config, budget, weak, scan_roots=scan_roots, known_signatures=known_signatures,
+            rules=rules, oast=oast, priority_families=priority_families, max_pages=max_pages,
+            concurrency=concurrency,
+        ))
+    return findings
 
 
 def _make_client(
@@ -1838,8 +1956,16 @@ async def _run_scan(
                     extra_findings.extend(await phase("session-fixation", check_session_fixation(fresh_client, config.auth.form)))
             if test_weak_creds and config.auth.form is not None:
                 progress.status("Probando credenciales por defecto…")
-                async with _make_client(config, budget) as fresh_client:
-                    extra_findings.extend(await phase("weak-credentials", run_weak_credentials_check(fresh_client, config.auth.form)))
+                # If default creds work, auto-pivot: log in with them and scan the surface they unlock —
+                # the real blast radius (gated by the planner's push_auth intent). See _weak_credentials_and_pivot.
+                extra_findings.extend(await phase("weak-credentials", _weak_credentials_and_pivot(
+                    config, budget,
+                    scan_roots=scan_roots,
+                    known_signatures=set(discovered.keys()),
+                    rules=rules, oast=oast, priority_families=_scan_plan.priority_families,
+                    max_pages=max_pages, concurrency=active_concurrency,
+                    pivot=_scan_plan.push_auth,
+                )))
             if test_race:
                 progress.status("Probando race conditions (single-packet)…")
                 extra_findings.extend(await phase("race", run_race_checks(client, all_requests)))

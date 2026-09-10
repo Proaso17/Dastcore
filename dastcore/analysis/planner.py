@@ -126,8 +126,9 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
     if profile.has_login:
         plan.push_auth = True
         add("Panel de autenticación", ("weak-creds", "jwt", "session"),
-            "Panel de login detectado: prueba credenciales débiles, ataques a JWT y session fixation; escanea "
-            "AUTENTICADO para desbloquear la superficie tras el login (aquí viven BOLA/BFLA)")
+            "Panel de login detectado: prueba credenciales débiles, ataques a JWT y session fixation; si unas "
+            "credenciales por defecto funcionan, AUTO-PIVOTA (inicia sesión y escanea la superficie interna que "
+            "desbloquean — el alcance real); aquí viven BOLA/BFLA")
 
     if profile.waf:
         plan.notes.append("WAF/CDN delante: activa evasión (--waf-evasion) y usa insertion points 'moved'; "

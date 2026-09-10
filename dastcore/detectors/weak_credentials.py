@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import secrets
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import httpx
@@ -19,6 +20,18 @@ import httpx
 from dastcore.config import FormLoginConfig
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
+
+
+@dataclass(frozen=True)
+class WeakCredentials:
+    """A default credential pair that actually authenticated, plus the ready-to-report finding. Exposed
+    so the caller can *pivot*: log in with these and scan the surface they unlock (the real blast radius)."""
+
+    user_field: str
+    pass_field: str
+    username: str
+    password: str
+    finding: Finding
 
 _SESSION_NAME = re.compile(r"(session|sess|sid|jsessionid|phpsessid|connect\.sid|laravel_session|auth|token)", re.I)
 _NOT_SESSION = re.compile(r"(csrf|xsrf|_ga|_gid|consent|locale|lang|theme|timezone)", re.I)
@@ -113,8 +126,9 @@ def _finding(cfg: FormLoginConfig, u_field: str, p_field: str, user: str, passwo
     )
 
 
-async def run_weak_credentials_check(client: HttpClient, cfg: FormLoginConfig) -> list[Finding]:
-    """Probe the login endpoint for accepted default credentials (bounded, strong-signal only)."""
+async def find_weak_credentials(client: HttpClient, cfg: FormLoginConfig) -> WeakCredentials | None:
+    """Probe the login endpoint for accepted default credentials (bounded, strong-signal only). Returns
+    the working pair (with its finding) so the caller can pivot into an authenticated scan, or None."""
     field_pairs: list[tuple[str, str]] = []
     if len(cfg.credentials) >= 2:  # the operator told us the real field names
         keys = list(cfg.credentials)
@@ -139,5 +153,14 @@ async def run_weak_credentials_check(client: HttpClient, cfg: FormLoginConfig) -
             confirm = await _login(client, cfg, {u_field: user, p_field: password})  # reproducible
             attempts += 1
             if confirm is not None and _accepted(confirm, bad):
-                return [_finding(cfg, u_field, p_field, user, password)]  # one working set is proof enough
-    return []
+                return WeakCredentials(  # one working set is proof enough
+                    user_field=u_field, pass_field=p_field, username=user, password=password,
+                    finding=_finding(cfg, u_field, p_field, user, password),
+                )
+    return None
+
+
+async def run_weak_credentials_check(client: HttpClient, cfg: FormLoginConfig) -> list[Finding]:
+    """Probe the login endpoint for accepted default credentials; report the finding, if any."""
+    result = await find_weak_credentials(client, cfg)
+    return [result.finding] if result is not None else []
