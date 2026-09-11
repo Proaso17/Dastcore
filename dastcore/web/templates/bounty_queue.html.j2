@@ -1,0 +1,105 @@
+{% extends "base.html.j2" %}
+{% block title %}dastcore · cola de revisión{% endblock %}
+{% block body %}
+<style>
+  .qstatus { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+    padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .q-pending { color: var(--med); border-color: color-mix(in srgb, var(--med) 45%, var(--border)); }
+  .q-approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+  .q-submitted { color: var(--accent); border-color: var(--accent); }
+  .q-dismissed { color: var(--faint); }
+  .q-ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+  .q-block { color: var(--med); border-color: color-mix(in srgb, var(--med) 45%, var(--border)); }
+  .cand-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .cand-head strong { font-size: 14.5px; }
+  .cand-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .cand-actions form { margin: 0; }
+  .cand-meta { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; word-break: break-all; }
+</style>
+
+<div class="panel legal">
+  El bot <strong>caza y propone</strong>; tú decides. Nada se envía automáticamente: revisa cada candidato,
+  valida su PoC y <strong>apruébalo</strong> o <strong>descártalo</strong>. Aprobar solo marca que lo validaste —
+  el envío al programa lo haces tú.
+</div>
+
+<div class="panel">
+  <div class="bounty-head">
+    <h2 style="margin:0">Cola de revisión</h2>
+    <div class="platforms">
+      {% for s in ["pending", "approved", "submitted", "dismissed", "all"] %}
+        <a class="pltab {{ 'active' if status == s else '' }}" href="/bounty?status={{ s }}&platform={{ platform }}">
+          {{ s }}{% if s != "all" %} {{ counts.get(s, 0) }}{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+  <p class="hint" style="margin:10px 0 0">
+    Formato del borrador:
+    {% for p in platforms %}
+      <a class="pltab {{ 'active' if p == platform else '' }}" href="/bounty?status={{ status }}&platform={{ p }}">{{ p }}</a>
+    {% endfor %}
+  </p>
+  <p class="hint" style="margin:10px 0 0">
+    Cola en <code>{{ review_db }}</code> — llénala con
+    <code>dastcore bounty run &lt;program.yaml&gt; --queue-db {{ review_db }}</code>
+    (o <code>bounty watch</code> para monitorización continua).
+  </p>
+</div>
+
+{% if not packs %}
+  <div class="panel"><p class="empty">No hay candidatos en este estado. Lanza una caza para llenar la cola.</p></div>
+{% endif %}
+
+{% for pack in packs %}
+  {% set c = pack.candidate %}
+  <div class="panel">
+    <div class="cand-head">
+      <span class="badge sev-{{ c.finding.severity }}">{{ c.vrt_priority or "—" }}</span>
+      <strong>{{ c.finding.name }}</strong>
+      <span class="qstatus q-{{ c.status }}">{{ c.status }}</span>
+      {% if pack.ready_to_submit %}
+        <span class="qstatus q-ready">listo para revisar</span>
+      {% else %}
+        <span class="qstatus q-block">necesita verificación</span>
+      {% endif %}
+    </div>
+    <p class="cand-meta">
+      {{ c.vrt_category }} · {{ c.variants }} variante(s) ·
+      <code>{{ c.finding.request.method }} {{ c.finding.request.url }}</code>
+    </p>
+
+    {% if pack.blockers %}
+      <ul class="nextsteps">
+        {% for b in pack.blockers %}<li>{{ b }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+
+    <details class="fix">
+      <summary>Ver evidence pack · borrador {{ pack.platform }}</summary>
+      <div class="fix-body"><pre class="draft">{{ pack.draft }}</pre></div>
+    </details>
+
+    <div class="cand-actions">
+      <form method="post" action="/bounty/status">
+        <input type="hidden" name="program" value="{{ c.program }}">
+        <input type="hidden" name="signature" value="{{ c.signature }}">
+        <input type="hidden" name="status" value="approved">
+        <button type="submit">Aprobar</button>
+      </form>
+      <form method="post" action="/bounty/status">
+        <input type="hidden" name="program" value="{{ c.program }}">
+        <input type="hidden" name="signature" value="{{ c.signature }}">
+        <input type="hidden" name="status" value="submitted">
+        <button type="submit" class="ghost">Marqué como enviado</button>
+      </form>
+      <form method="post" action="/bounty/status">
+        <input type="hidden" name="program" value="{{ c.program }}">
+        <input type="hidden" name="signature" value="{{ c.signature }}">
+        <input type="hidden" name="status" value="dismissed">
+        <button type="submit" class="danger">Descartar</button>
+      </form>
+    </div>
+  </div>
+{% endfor %}
+{% endblock %}

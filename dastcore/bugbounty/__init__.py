@@ -6,6 +6,7 @@ limits the program imposes, and the recon seeds. It maps cleanly onto the existi
 """
 
 from dastcore.bugbounty.bot import BotCycleResult, BountyBot
+from dastcore.bugbounty.evidence import EvidencePack, build_evidence_pack
 from dastcore.bugbounty.importer import ImportResult, parse_program_policy
 from dastcore.bugbounty.loader import load_program
 from dastcore.bugbounty.program import Program, ProgramLimits, ProgramScope
@@ -13,7 +14,7 @@ from dastcore.bugbounty.queue import QueuedCandidate, ReviewQueue
 from dastcore.bugbounty.triage import BountyFinding, triage_for_bounty
 
 __all__ = [
-    "BotCycleResult", "BountyBot", "BountyFinding", "ImportResult", "Program", "ProgramLimits",
-    "ProgramScope", "QueuedCandidate", "ReviewQueue", "load_program", "parse_program_policy",
-    "triage_for_bounty",
+    "BotCycleResult", "BountyBot", "BountyFinding", "EvidencePack", "ImportResult", "Program",
+    "ProgramLimits", "ProgramScope", "QueuedCandidate", "ReviewQueue", "build_evidence_pack",
+    "load_program", "parse_program_policy", "triage_for_bounty",
 ]

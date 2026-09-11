@@ -146,3 +146,51 @@ async def test_bounty_report_page_renders_a_draft(app_client) -> None:
     assert "Crear informe para reportar" in page.text
     assert "SQL Injection" in page.text and "P1" in page.text
     assert "Steps To Reproduce" in page.text  # the HackerOne draft layout is rendered
+
+
+def _seed_queue(tmp_path):
+    """Seed the review queue the web app will open (sibling of its db), with one triaged candidate."""
+    from dastcore.bugbounty import ReviewQueue, triage_for_bounty
+
+    db_path = tmp_path / "db.sqlite"
+    queue = ReviewQueue(db_path.with_name("review_queue.db"))
+    bf = triage_for_bounty([_sqli_finding()])[0]
+    queue.upsert_candidate("acme", bf, now=1.0)
+    queue.close()
+    return db_path, bf.signature
+
+
+async def test_bounty_queue_page_lists_candidates_with_evidence(tmp_path) -> None:
+    db_path, _sig = _seed_queue(tmp_path)
+    app = create_app(db_path=db_path)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        page = await client.get("/bounty")
+        nav = await client.get("/")
+    assert page.status_code == 200
+    assert "Cola de revisión" in page.text
+    assert "SQL Injection" in page.text and "P1" in page.text        # candidate + VRT priority
+    assert "Steps To Reproduce" in page.text                          # evidence pack draft is embedded
+    assert "pending 1" in page.text.replace("\n", " ").lower() or "pending 1" in page.text.lower()
+    assert 'href="/bounty"' in nav.text                               # nav links the review queue
+
+
+async def test_bounty_queue_status_action_is_the_human_gate(tmp_path) -> None:
+    db_path, signature = _seed_queue(tmp_path)
+    app = create_app(db_path=db_path)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        moved = await client.post(
+            "/bounty/status",
+            data={"program": "acme", "signature": signature, "status": "dismissed"},
+            follow_redirects=False,
+        )
+        assert moved.status_code == 303  # redirects back to the queue
+        dismissed = await client.get("/bounty?status=dismissed")
+        pending = await client.get("/bounty?status=pending")
+    assert "SQL Injection" in dismissed.text                          # now in the dismissed bucket
+    assert "No hay candidatos" in pending.text                        # and no longer pending
+    # The queue on disk reflects the human decision.
+    from dastcore.bugbounty import ReviewQueue
+
+    q = ReviewQueue(db_path.with_name("review_queue.db"))
+    assert q.get("acme", signature).status == "dismissed"
+    q.close()

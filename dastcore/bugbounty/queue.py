@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -64,7 +65,10 @@ class ReviewQueue:
         path = Path(db_path)
         if path.parent and not path.parent.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path))
+        # check_same_thread=False + a lock: the same queue is read/written from the CLI and from the web
+        # app's threadpool workers (the review UI). The lock serialises access across those threads.
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_SCHEMA)
         self._conn.commit()
@@ -78,37 +82,40 @@ class ReviewQueue:
         """
         finding_json = bf.finding.model_dump_json()
         passes = 1 if bf.checklist.passes else 0
-        existing = self._conn.execute(
-            "SELECT 1 FROM candidates WHERE program = ? AND signature = ?", (program, bf.signature)
-        ).fetchone()
-        if existing is None:
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT 1 FROM candidates WHERE program = ? AND signature = ?", (program, bf.signature)
+            ).fetchone()
+            if existing is None:
+                self._conn.execute(
+                    "INSERT INTO candidates (program, signature, finding, vrt_category, vrt_priority, "
+                    "priority_score, variants, checklist_passes, status, first_seen, last_seen) "
+                    "VALUES (?,?,?,?,?,?,?,?,'pending',?,?)",
+                    (program, bf.signature, finding_json, bf.vrt_category, bf.vrt_priority,
+                     bf.priority_score, bf.variants, passes, now, now),
+                )
+                self._conn.commit()
+                return True
             self._conn.execute(
-                "INSERT INTO candidates (program, signature, finding, vrt_category, vrt_priority, "
-                "priority_score, variants, checklist_passes, status, first_seen, last_seen) "
-                "VALUES (?,?,?,?,?,?,?,?,'pending',?,?)",
-                (program, bf.signature, finding_json, bf.vrt_category, bf.vrt_priority,
-                 bf.priority_score, bf.variants, passes, now, now),
+                "UPDATE candidates SET finding = ?, vrt_category = ?, vrt_priority = ?, priority_score = ?, "
+                "variants = ?, checklist_passes = ?, last_seen = ? WHERE program = ? AND signature = ?",
+                (finding_json, bf.vrt_category, bf.vrt_priority, bf.priority_score, bf.variants, passes, now,
+                 program, bf.signature),
             )
             self._conn.commit()
-            return True
-        self._conn.execute(
-            "UPDATE candidates SET finding = ?, vrt_category = ?, vrt_priority = ?, priority_score = ?, "
-            "variants = ?, checklist_passes = ?, last_seen = ? WHERE program = ? AND signature = ?",
-            (finding_json, bf.vrt_category, bf.vrt_priority, bf.priority_score, bf.variants, passes, now,
-             program, bf.signature),
-        )
-        self._conn.commit()
-        return False
+            return False
 
     def set_status(self, program: str, signature: str, status: CandidateStatus) -> bool:
         """Human action: move a candidate to a new status. Returns True if a row changed."""
         if status not in _STATUSES:
             raise ValueError(f"invalid candidate status: {status!r} (must be one of {sorted(_STATUSES)})")
-        cur = self._conn.execute(
-            "UPDATE candidates SET status = ? WHERE program = ? AND signature = ?", (status, program, signature)
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE candidates SET status = ? WHERE program = ? AND signature = ?",
+                (status, program, signature),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
 
     def _row_to_candidate(self, row: sqlite3.Row) -> QueuedCandidate:
         return QueuedCandidate(
@@ -136,15 +143,17 @@ class ReviewQueue:
             clauses.append("status = ?")
             args.append(status)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        rows = self._conn.execute(
-            f"SELECT * FROM candidates{where} ORDER BY priority_score DESC, last_seen DESC", args
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM candidates{where} ORDER BY priority_score DESC, last_seen DESC", args
+            ).fetchall()
         return [self._row_to_candidate(row) for row in rows]
 
     def get(self, program: str, signature: str) -> QueuedCandidate | None:
-        row = self._conn.execute(
-            "SELECT * FROM candidates WHERE program = ? AND signature = ?", (program, signature)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM candidates WHERE program = ? AND signature = ?", (program, signature)
+            ).fetchone()
         return self._row_to_candidate(row) if row is not None else None
 
     def pending(self, program: str | None = None) -> list[QueuedCandidate]:
@@ -155,9 +164,10 @@ class ReviewQueue:
         """How many candidates sit in each status (0-filled for every status)."""
         where = " WHERE program = ?" if program is not None else ""
         args = (program,) if program is not None else ()
-        rows = self._conn.execute(
-            f"SELECT status, COUNT(*) AS n FROM candidates{where} GROUP BY status", args
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT status, COUNT(*) AS n FROM candidates{where} GROUP BY status", args
+            ).fetchall()
         counts = dict.fromkeys(_STATUSES, 0)
         for row in rows:
             counts[row["status"]] = row["n"]

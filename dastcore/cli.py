@@ -4225,6 +4225,88 @@ def bounty_watch(
     queue.close()
 
 
+def _resolve_candidate(queue, handle: str, needle: str):  # noqa: ANN001 — ReviewQueue
+    """Find the unique queued candidate whose signature contains ``needle`` (a short prefix is enough)."""
+    matches = [c for c in queue.candidates(handle) if needle in c.signature]
+    if not matches:
+        console.print(f"[red]Ningún candidato coincide con '{needle}' en el programa '{handle}'.[/red]")
+        raise typer.Exit(code=1)
+    if len(matches) > 1:
+        console.print(f"[red]'{needle}' es ambiguo ({len(matches)} coincidencias):[/red]")
+        for c in matches[:10]:
+            console.print(f"  · {c.signature}")
+        raise typer.Exit(code=1)
+    return matches[0]
+
+
+@bounty_app.command("show")
+def bounty_show(
+    handle: str = typer.Argument(..., help="Handle del programa."),
+    signature: str = typer.Argument(..., help="Firma del candidato (basta un prefijo único)."),
+    platform: str = typer.Option("generic", "--platform", help="Formato del borrador: generic | hackerone | bugcrowd."),
+    queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db", help="SQLite de la cola de revisión."),
+) -> None:
+    """Muestra el evidence pack de un candidato: borrador por plataforma + si está listo o qué le falta."""
+    from dastcore.bugbounty import ReviewQueue, build_evidence_pack
+
+    queue = ReviewQueue(queue_db)
+    candidate = _resolve_candidate(queue, handle, signature)
+    pack = build_evidence_pack(candidate, program=None, platform=platform)
+    queue.close()
+    badge = "[green]LISTO PARA REVISAR[/green]" if pack.ready_to_submit else "[yellow]NECESITA VERIFICACIÓN MANUAL[/yellow]"
+    console.print(f"\n{badge} · estado actual: [bold]{candidate.status}[/bold] · {candidate.variants} variante(s)")
+    if pack.blockers:
+        console.print("[yellow]Bloqueos:[/yellow]")
+        for b in pack.blockers:
+            console.print(f"  · {b}")
+    console.print(Panel(pack.draft, title=f"Borrador ({platform})", border_style="cyan", expand=False))
+    console.print(
+        "[dim]Si lo validas, apruébalo con [/dim]"
+        f"[bold]dastcore bounty approve {handle} {candidate.signature}[/bold][dim]; "
+        "o descártalo con bounty dismiss. El bot nunca envía.[/dim]"
+    )
+
+
+def _bounty_set_status(handle: str, signature: str, status: str, queue_db: str) -> None:
+    from dastcore.bugbounty import ReviewQueue
+
+    queue = ReviewQueue(queue_db)
+    candidate = _resolve_candidate(queue, handle, signature)
+    queue.set_status(handle, candidate.signature, status)  # type: ignore[arg-type]
+    queue.close()
+    console.print(f"[green]✓[/green] {candidate.signature} → [bold]{status}[/bold]")
+
+
+@bounty_app.command("approve")
+def bounty_approve(
+    handle: str = typer.Argument(..., help="Handle del programa."),
+    signature: str = typer.Argument(..., help="Firma del candidato (prefijo único)."),
+    queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db"),
+) -> None:
+    """Marca un candidato como APROBADO (lo validaste; el borrador está listo para enviar TÚ)."""
+    _bounty_set_status(handle, signature, "approved", queue_db)
+
+
+@bounty_app.command("dismiss")
+def bounty_dismiss(
+    handle: str = typer.Argument(..., help="Handle del programa."),
+    signature: str = typer.Argument(..., help="Firma del candidato (prefijo único)."),
+    queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db"),
+) -> None:
+    """Descarta un candidato (falso positivo / no reportable). No vuelve a salir como pendiente."""
+    _bounty_set_status(handle, signature, "dismissed", queue_db)
+
+
+@bounty_app.command("submitted")
+def bounty_submitted(
+    handle: str = typer.Argument(..., help="Handle del programa."),
+    signature: str = typer.Argument(..., help="Firma del candidato (prefijo único)."),
+    queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db"),
+) -> None:
+    """Registra que TÚ ya lo enviaste al programa (deja constancia; el bot nunca envía por su cuenta)."""
+    _bounty_set_status(handle, signature, "submitted", queue_db)
+
+
 @app.command("benchmark")
 def benchmark_cmd(
     output_format: str = typer.Option("text", "--output", "-o", help="text | json | md."),

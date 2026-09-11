@@ -21,9 +21,10 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 
 from dastcore.analysis import correlate_chains
-from dastcore.bugbounty import triage_for_bounty
+from dastcore.bugbounty import build_evidence_pack, triage_for_bounty
 from dastcore.bugbounty.importer import parse_program_policy
 from dastcore.bugbounty.program import Program, ProgramLimits, ProgramScope
+from dastcore.bugbounty.queue import ReviewQueue
 from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
 from dastcore.core.models import Finding
 from dastcore.httpsec import add_csrf_protection, add_error_pages, add_security_headers
@@ -191,12 +192,18 @@ def _build_env() -> Environment:
     return env
 
 
-def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
-    """Build the dashboard app backed by a SQLite store at ``db_path``."""
+def create_app(db_path: str | Path = "dastcore.db", review_db: str | Path | None = None) -> FastAPI:
+    """Build the dashboard app backed by a SQLite store at ``db_path``.
+
+    ``review_db`` is the BountyBot review queue the web UI reviews (shared with the CLI bot). It defaults
+    to a sibling ``review_queue.db`` — point ``dastcore bounty run/watch --queue-db`` at the same file to
+    review, approve and dismiss its candidates here."""
     store = Store(db_path)
     store.mark_interrupted_running()  # a scan can't survive a restart
     manager = ScanManager(store)
     scheduler = Scheduler(store, manager)
+    review_path = Path(review_db) if review_db else Path(db_path).with_name("review_queue.db")
+    review_queue = ReviewQueue(review_path)
     env = _build_env()
 
     @asynccontextmanager
@@ -217,6 +224,8 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
     app.state.store = store
     app.state.manager = manager
     app.state.scheduler = scheduler
+    app.state.review_queue = review_queue
+    app.state.review_db = str(review_path)
 
     def render(name: str, **ctx: object) -> HTMLResponse:
         return HTMLResponse(env.get_template(name).render(**ctx))
@@ -785,5 +794,35 @@ def create_app(db_path: str | Path = "dastcore.db") -> FastAPI:
             return HTMLResponse("<h1>404</h1><p>El programa ya no existe.</p>", status_code=404)
         new_id = manager.start_hunt(row.program, scan.profile or "standard", db_path, program_id=scan.program_id)
         return RedirectResponse(url=f"/scans/{new_id}", status_code=303)
+
+    @app.get("/bounty", response_class=HTMLResponse)
+    def bounty_queue_page(status: str = "pending", platform: str = "hackerone") -> HTMLResponse:
+        """The BountyBot review queue: every candidate the bot filed, each with its evidence pack, ready
+        for a human to approve/dismiss/record-submitted. The bot never submits — this page is the gate."""
+        chosen = None if status == "all" else status
+        platform = platform if platform in PLATFORMS else "hackerone"
+        candidates = review_queue.candidates(status=chosen)
+        packs = [build_evidence_pack(c, None, platform) for c in candidates]
+        return render(
+            "bounty_queue.html.j2",
+            packs=packs,
+            counts=review_queue.counts(),
+            status=status,
+            platform=platform,
+            platforms=PLATFORMS,
+            review_db=app.state.review_db,
+        )
+
+    @app.post("/bounty/status")
+    def bounty_set_status(
+        program: str = Form(...), signature: str = Form(...), status: str = Form(...)
+    ) -> Response:
+        """Human gate action: move a candidate to approved / dismissed / submitted. The only way a
+        candidate ever leaves 'pending' — there is no automated submission path anywhere."""
+        try:
+            review_queue.set_status(program, signature, status)  # type: ignore[arg-type]
+        except ValueError:
+            pass  # an unknown status is ignored; the queue only accepts its defined states
+        return RedirectResponse(url="/bounty", status_code=303)
 
     return app
