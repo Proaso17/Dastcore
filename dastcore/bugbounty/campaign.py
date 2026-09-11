@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from dastcore.bugbounty.program import Program
-from dastcore.cli import _Budget, _run_scan
+from dastcore.cli import _Budget, _make_client, _run_scan
 from dastcore.core.models import Finding
 from dastcore.core.scope import ScopeChecker
 from dastcore.recon import Asset, AssetStore, ReconOptions, run_recon
@@ -78,6 +78,7 @@ async def run_campaign(
     discover_vhosts: bool = False,
     osint: bool = False,
     screenshots: bool = False,
+    dedupe_assets: bool = False,
 ) -> CampaignResult:
     """Discover the program's live in-scope surface and scan it. Recon-only if scanning is forbidden.
 
@@ -114,6 +115,29 @@ async def run_campaign(
     tc = tier_counts(live)
     status(f"{len(assets)} activos descubiertos · {len(live)} vivos "
            f"(Tier 1: {tc[1]} · Tier 2: {tc[2]} · Tier 3: {tc[3]}). Analizando por prioridad…")
+
+    # Coordinator (XBOW-style, opt-in): fetch each homepage once, collapse identical-content deployments
+    # (hundreds of subdomains parked on one template page → scanned once), and hunt the most promising
+    # first. One extra GET per asset, scope- and rate-enforced; the payoff is not scanning the duplicates.
+    if dedupe_assets and len(live) > 1:
+        from dastcore.analysis import coordinate
+
+        async with _make_client(program.to_scan_config(live[0].url or "", authorized=authorized), _Budget(None, None)) as probe_client:  # noqa: E501
+            async def _probe(url: str) -> tuple[int, str] | None:
+                try:
+                    resp = await probe_client.get(url, retries=0)
+                except Exception:  # noqa: BLE001 — a failed probe just means "don't merge this one"
+                    return None
+                return (resp.status_code, resp.text) if resp is not None else None
+
+            coordination = await coordinate(live, _probe)
+        live = coordination.order
+        if coordination.skipped:
+            status(
+                f"Coordinador: {len(live)} objetivos únicos · {coordination.skipped} de contenido "
+                "duplicado colapsados (un representante por despliegue)."
+            )
+
     checkpoint = CampaignCheckpoint(checkpoint_path)
     budget = _Budget(None, None)
     scanned: list[str] = []

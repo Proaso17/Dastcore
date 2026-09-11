@@ -96,6 +96,7 @@ async def test_bot_passes_authorization_through_and_never_submits(tmp_path) -> N
     bot = BountyBot(store, queue, campaign_runner=fake)
     await bot.run_once(_program(), authorized=True, engine="both")
     assert fake.calls[0]["authorized"] is True and fake.calls[0]["engine"] == "both"
+    assert fake.calls[0]["dedupe_assets"] is True  # coordinator on by default (collapse duplicate surface)
     # The human gate: the bot exposes no submit path, and nothing it does reaches a terminal sent state.
     assert not hasattr(bot, "submit")
     assert queue.counts("acme")["submitted"] == 0

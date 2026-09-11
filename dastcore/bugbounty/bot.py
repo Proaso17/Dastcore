@@ -70,6 +70,7 @@ class BountyBot:
         discover_vhosts: bool = False,
         osint: bool = False,
         screenshots: bool = False,
+        dedupe_assets: bool = True,
     ) -> BotCycleResult:
         """Run one full cycle: campaign → triage → file candidates as ``pending``.
 
@@ -96,6 +97,7 @@ class BountyBot:
             discover_vhosts=discover_vhosts,
             osint=osint,
             screenshots=screenshots,
+            dedupe_assets=dedupe_assets,
         )
         new_hosts = sorted(
             {a.host for a in self._assets.all() if a.url and a.dedupe_key() not in before}

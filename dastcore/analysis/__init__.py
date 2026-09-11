@@ -5,6 +5,10 @@ so it cannot create false positives. If an extraction fails, the finding stands 
 """
 
 from dastcore.analysis.chains import AttackChain, ChainLeg, correlate_chains
+from dastcore.analysis.coordinator import Coordination, coordinate, score_target
 from dastcore.analysis.impact import prove_findings_impact
 
-__all__ = ["AttackChain", "ChainLeg", "correlate_chains", "prove_findings_impact"]
+__all__ = [
+    "AttackChain", "ChainLeg", "Coordination", "coordinate", "correlate_chains",
+    "prove_findings_impact", "score_target",
+]
