@@ -5,6 +5,7 @@ limits the program imposes, and the recon seeds. It maps cleanly onto the existi
 ``ScanConfig`` so the rest of dastcore (scanner, scope enforcement, gate) is reused unchanged.
 """
 
+from dastcore.bugbounty.ai_report import AiReportWriter, build_report_writer
 from dastcore.bugbounty.bot import BotCycleResult, BountyBot
 from dastcore.bugbounty.evidence import EvidencePack, build_evidence_pack
 from dastcore.bugbounty.importer import ImportResult, parse_program_policy
@@ -14,7 +15,7 @@ from dastcore.bugbounty.queue import QueuedCandidate, ReviewQueue
 from dastcore.bugbounty.triage import BountyFinding, triage_for_bounty
 
 __all__ = [
-    "BotCycleResult", "BountyBot", "BountyFinding", "EvidencePack", "ImportResult", "Program",
-    "ProgramLimits", "ProgramScope", "QueuedCandidate", "ReviewQueue", "build_evidence_pack",
-    "load_program", "parse_program_policy", "triage_for_bounty",
+    "AiReportWriter", "BotCycleResult", "BountyBot", "BountyFinding", "EvidencePack", "ImportResult",
+    "Program", "ProgramLimits", "ProgramScope", "QueuedCandidate", "ReviewQueue", "build_evidence_pack",
+    "build_report_writer", "load_program", "parse_program_policy", "triage_for_bounty",
 ]

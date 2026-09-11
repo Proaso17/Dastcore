@@ -4255,22 +4255,35 @@ def bounty_show(
     handle: str = typer.Argument(..., help="Handle del programa."),
     signature: str = typer.Argument(..., help="Firma del candidato (basta un prefijo único)."),
     platform: str = typer.Option("generic", "--platform", help="Formato del borrador: generic | hackerone | bugcrowd."),
+    polish: bool = typer.Option(
+        False, "--polish",
+        help="Pule la REDACCIÓN del borrador con un LLM (requiere ANTHROPIC_API_KEY; envía el hallazgo a "
+        "Anthropic). No cambia hechos ni el PoC; la IA no confirma ni envía nada.",
+    ),
     queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db", help="SQLite de la cola de revisión."),
 ) -> None:
     """Muestra el evidence pack de un candidato: borrador por plataforma + si está listo o qué le falta."""
-    from dastcore.bugbounty import ReviewQueue, build_evidence_pack
+    from dastcore.bugbounty import ReviewQueue, build_evidence_pack, build_report_writer
 
     queue = ReviewQueue(queue_db)
     candidate = _resolve_candidate(queue, handle, signature)
     pack = build_evidence_pack(candidate, program=None, platform=platform)
     queue.close()
+    draft = pack.draft
+    if polish:
+        writer = build_report_writer()
+        if writer is None:
+            console.print("[yellow]--polish ignorado: falta ANTHROPIC_API_KEY o el SDK 'anthropic'.[/yellow]")
+        else:
+            console.print("[dim]Puliendo la redacción con el LLM (los hechos no cambian)…[/dim]")
+            draft = asyncio.run(writer.polish_draft(pack.draft))
     badge = "[green]LISTO PARA REVISAR[/green]" if pack.ready_to_submit else "[yellow]NECESITA VERIFICACIÓN MANUAL[/yellow]"
     console.print(f"\n{badge} · estado actual: [bold]{candidate.status}[/bold] · {candidate.variants} variante(s)")
     if pack.blockers:
         console.print("[yellow]Bloqueos:[/yellow]")
         for b in pack.blockers:
             console.print(f"  · {b}")
-    console.print(Panel(pack.draft, title=f"Borrador ({platform})", border_style="cyan", expand=False))
+    console.print(Panel(draft, title=f"Borrador ({platform}){' · pulido por IA' if polish else ''}", border_style="cyan", expand=False))
     console.print(
         "[dim]Si lo validas, apruébalo con [/dim]"
         f"[bold]dastcore bounty approve {handle} {candidate.signature}[/bold][dim]; "
