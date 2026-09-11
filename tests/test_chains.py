@@ -49,6 +49,23 @@ def test_single_leg_present_forms_no_chain() -> None:
     assert correlate_chains([_finding("open-redirect")]) == []
 
 
+def test_user_enum_plus_idor_forms_pii_harvest() -> None:
+    chains = correlate_chains([_finding("user-enumeration"), _finding("authz-bola", family="authz")])
+    harvest = next(c for c in chains if c.id == "idor-pii-harvest")
+    assert harvest.severity == "critical"
+    assert {leg.rule_id for leg in harvest.legs} == {"user-enumeration", "authz-bola"}
+
+
+def test_reset_poisoning_plus_enum_forms_mass_ato() -> None:
+    chains = correlate_chains([_finding("password-reset-poisoning"), _finding("user-enumeration")])
+    assert any(c.id == "account-takeover-reset-enum" and c.severity == "critical" for c in chains)
+
+
+def test_user_enum_alone_forms_no_pii_harvest_chain() -> None:
+    # Enumeration on its own is not the harvest chain — the IDOR/BOLA leg must also be present.
+    assert not any(c.id == "idor-pii-harvest" for c in correlate_chains([_finding("user-enumeration")]))
+
+
 def test_authz_plus_forgeable_token_forms_privilege_escalation() -> None:
     chains = correlate_chains([_finding("authz-bola", severity="high"), _finding("jwt-alg-none", severity="high")])
     assert any(c.id == "privilege-escalation-authz-token" and c.severity == "critical" for c in chains)

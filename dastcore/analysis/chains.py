@@ -93,6 +93,42 @@ _CHAIN_RULES: tuple[_ChainRule, ...] = (
         ),
     ),
     _ChainRule(
+        id="idor-pii-harvest",
+        name="Extracción masiva de datos (enumeración de usuarios + IDOR/BOLA)",
+        severity="critical",
+        summary=(
+            "La enumeración de usuarios/identificadores da una lista de cuentas válidas; combinada con la "
+            "autorización rota a nivel de objeto (BOLA/IDOR), el atacante itera esos identificadores y extrae los "
+            "datos de TODAS las cuentas, no solo de una: filtración masiva de PII."
+        ),
+        legs=(
+            (
+                "Enumeración de usuarios/IDs",
+                frozenset({"user-enumeration"}),
+                frozenset(),
+            ),
+            (
+                "Autorización rota a nivel de objeto",
+                frozenset({"authz-bola", "authz-bfla", "graphql-bola", "graphql-field-authz"}),
+                frozenset({"authz"}),
+            ),
+        ),
+    ),
+    _ChainRule(
+        id="account-takeover-reset-enum",
+        name="Apropiación masiva de cuentas (envenenamiento de reset + enumeración)",
+        severity="critical",
+        summary=(
+            "El envenenamiento del correo de recuperación permite recibir el enlace/token de reseteo de otra cuenta; "
+            "con una lista de cuentas válidas obtenida por enumeración, el atacante lo dispara a escala: apropiación "
+            "de cuentas dirigida y masiva."
+        ),
+        legs=(
+            ("Envenenamiento del reset de contraseña", frozenset({"password-reset-poisoning"}), frozenset()),
+            ("Cuentas válidas conocidas", frozenset({"user-enumeration"}), frozenset()),
+        ),
+    ),
+    _ChainRule(
         id="session-hijack-xss-cookie",
         name="Robo de sesión (XSS + cookie/token expuestos)",
         severity="critical",

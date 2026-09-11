@@ -47,6 +47,29 @@
   </p>
 </div>
 
+{% if chains %}
+  <div class="panel">
+    <div class="chains-head">
+      <strong>⛓ Rutas de ataque encadenadas ({{ chains|length }})</strong>
+      <span class="muted">hallazgos confirmados que se combinan en algo peor — el impacto que paga de verdad</span>
+    </div>
+    {% for chain in chains %}
+      <div class="chain-card lead-{{ chain.severity }}">
+        <div class="chain-title">
+          <span class="badge sev-{{ chain.severity }}">{{ chain.severity }}</span>
+          <strong>{{ chain.name }}</strong>
+        </div>
+        <p class="chain-summary">{{ chain.summary }}</p>
+        <ol class="chain-legs">
+          {% for leg in chain.legs %}
+            <li><span class="leg-role">{{ leg.role }}</span> — <span class="leg-detail">{{ leg.name }} · {{ leg.location }}</span></li>
+          {% endfor %}
+        </ol>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
 {% if not packs %}
   <div class="panel"><p class="empty">No hay candidatos en este estado. Lanza una caza para llenar la cola.</p></div>
 {% endif %}

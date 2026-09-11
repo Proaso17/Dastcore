@@ -803,9 +803,12 @@ def create_app(db_path: str | Path = "dastcore.db", review_db: str | Path | None
         platform = platform if platform in PLATFORMS else "hackerone"
         candidates = review_queue.candidates(status=chosen)
         packs = [build_evidence_pack(c, None, platform) for c in candidates]
+        # Attack-path chains over ALL confirmed candidates (any status) — the multi-step impact story.
+        chains = correlate_chains([c.finding for c in review_queue.candidates()])
         return render(
             "bounty_queue.html.j2",
             packs=packs,
+            chains=chains,
             counts=review_queue.counts(),
             status=status,
             platform=platform,

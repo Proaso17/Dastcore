@@ -194,3 +194,28 @@ async def test_bounty_queue_status_action_is_the_human_gate(tmp_path) -> None:
     q = ReviewQueue(db_path.with_name("review_queue.db"))
     assert q.get("acme", signature).status == "dismissed"
     q.close()
+
+
+async def test_bounty_queue_surfaces_attack_chains(tmp_path) -> None:
+    from dastcore.bugbounty import ReviewQueue, triage_for_bounty
+
+    def _rid(rule_id: str, family: str, param: str) -> Finding:
+        req = HttpRequest(method="GET", url=f"http://api.acme.com/p?{param}=x", params={param: "x"})
+        point = InjectionPoint(location="query", name=param, base_value="x", request_template=req)
+        return Finding(
+            id=f"{rule_id}:{param}", rule_id=rule_id, name=rule_id, severity="high", cwe="CWE-0", owasp="x",
+            injection_point=point, evidence=[Evidence(type="differential", data="ok", confidence="high")],
+            request=req, response=HttpResponse(status_code=500), remediation="fix", family=family,
+        )
+
+    db_path = tmp_path / "db.sqlite"
+    queue = ReviewQueue(db_path.with_name("review_queue.db"))
+    for bf in triage_for_bounty([_rid("user-enumeration", "auth", "user"), _rid("authz-bola", "authz", "id")]):
+        queue.upsert_candidate("acme", bf, now=1.0)
+    queue.close()
+
+    app = create_app(db_path=db_path)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        page = await client.get("/bounty")
+    assert "Rutas de ataque encadenadas" in page.text
+    assert "Extracción masiva" in page.text  # the user-enum + IDOR chain is surfaced at the top

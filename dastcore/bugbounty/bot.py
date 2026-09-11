@@ -15,6 +15,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
+from dastcore.analysis.chains import correlate_chains
 from dastcore.bugbounty.campaign import CampaignResult, run_campaign
 from dastcore.bugbounty.program import Program
 from dastcore.bugbounty.queue import ReviewQueue
@@ -37,6 +38,7 @@ class BotCycleResult:
     new_candidates: int    # candidates not previously in the queue (genuinely new to review)
     pending: int           # total candidates awaiting human review for this program
     new_asset_hosts: list[str] = field(default_factory=list)  # hosts that appeared THIS cycle (monitoring)
+    chains: list[str] = field(default_factory=list)  # attack-path chains across the queue's confirmed findings
 
 
 class BountyBot:
@@ -105,6 +107,10 @@ class BountyBot:
         candidates = triage_for_bounty(result.findings, program)
         now = time.time()
         new = sum(1 for bf in candidates if self._queue.upsert_candidate(program.handle, bf, now))
+        # Attack-path chaining over the queue's confirmed findings (not just this cycle's): the high-impact,
+        # multi-step story programs pay a premium for and AI agents miss. Pure correlation → zero new FPs.
+        queued = self._queue.candidates(program.handle)
+        chains = [c.name for c in correlate_chains([qc.finding for qc in queued])]
         return BotCycleResult(
             assets=len(result.assets),
             scanned=len(result.scanned),
@@ -113,6 +119,7 @@ class BountyBot:
             new_candidates=new,
             pending=self._queue.counts(program.handle).get("pending", 0),
             new_asset_hosts=new_hosts,
+            chains=chains,
         )
 
     async def run_continuous(

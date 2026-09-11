@@ -4111,6 +4111,10 @@ def bounty_run(
         f"  [dim]({time.monotonic() - started:.0f}s)[/dim]"
     )
     _print_bounty_queue(queue.pending(program.handle))
+    if result.chains:
+        console.print("[bold]⛓ Rutas de ataque encadenadas (alto impacto):[/bold]")
+        for name in result.chains:
+            console.print(f"  [red]·[/red] {name}")
     console.print(
         "[dim]Revisa cada candidato y, cuando lo valides, muévelo con "
         "[/dim][bold]dastcore bounty queue[/bold][dim] (aprobar/descartar). El bot nunca envía.[/dim]"
@@ -4130,6 +4134,13 @@ def bounty_queue(
     queue = ReviewQueue(queue_db)
     chosen = None if status == "all" else status
     _print_bounty_queue(queue.candidates(handle, status=chosen))
+    from dastcore.analysis.chains import correlate_chains
+
+    chains = correlate_chains([c.finding for c in queue.candidates(handle)])
+    if chains:
+        console.print("[bold]⛓ Rutas de ataque encadenadas (alto impacto):[/bold]")
+        for chain in chains:
+            console.print(f"  [red]·[/red] {chain.name}")
     counts = queue.counts(handle)
     console.print(
         f"[dim]pending {counts['pending']} · approved {counts['approved']} · "

@@ -102,6 +102,29 @@ async def test_bot_passes_authorization_through_and_never_submits(tmp_path) -> N
     assert queue.counts("acme")["submitted"] == 0
 
 
+def _rid_finding(rule_id: str, family: str, host: str, param: str) -> Finding:
+    req = HttpRequest(method="GET", url=f"https://{host}/p?{param}=x", params={param: "x"})
+    point = InjectionPoint(location="query", name=param, base_value="x", request_template=req)
+    return Finding(
+        id=f"{rule_id}:{host}:{param}", rule_id=rule_id, name=rule_id, severity="high", cwe="CWE-0",
+        owasp="x", injection_point=point,
+        evidence=[Evidence(type="differential", data="confirmed", confidence="high")],
+        request=req, response=HttpResponse(status_code=500, url=req.url), remediation="fix", family=family,
+    )
+
+
+async def test_cycle_surfaces_attack_chains(tmp_path) -> None:
+    # user-enumeration + BOLA are each confirmed findings; the bot chains them into the high-impact
+    # "mass PII extraction" attack path (the multi-step story programs pay for). Zero-FP: only confirmed.
+    findings = [
+        _rid_finding("user-enumeration", "auth", "a.example.com", "user"),
+        _rid_finding("authz-bola", "authz", "a.example.com", "id"),
+    ]
+    bot, _queue = _bot(tmp_path, findings)
+    result = await bot.run_once(_program(), authorized=True)
+    assert any("Extracción masiva" in name for name in result.chains)
+
+
 async def test_run_continuous_detects_new_assets_and_alerts(tmp_path) -> None:
     # Cycle 1 sees only a.example.com; before cycle 2 recon discovers b.example.com. Continuous monitoring
     # must flag b as new on cycle 2 (and not re-flag a), and call on_cycle once per cycle — all without
