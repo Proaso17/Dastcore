@@ -4,6 +4,8 @@ runner is injected with a fake so this tests the wiring without a live scan."""
 
 from __future__ import annotations
 
+import time
+
 from dastcore.bugbounty.bot import BountyBot
 from dastcore.bugbounty.campaign import CampaignResult
 from dastcore.bugbounty.program import Program
@@ -23,17 +25,29 @@ def _finding(family: str, host: str, param: str) -> Finding:
     )
 
 
-class _FakeCampaign:
-    """Stands in for run_campaign: returns fixed findings and records the kwargs it was called with."""
+def _asset(host: str) -> Asset:
+    return Asset(host=host, url=f"https://{host}", source="crtsh")
 
-    def __init__(self, findings: list[Finding]) -> None:
+
+class _FakeCampaign:
+    """Stands in for run_campaign: upserts its assets into the store (as recon would), returns fixed
+    findings, and records the kwargs it was called with. ``asset_waves`` feeds a different surface per
+    cycle (the last wave repeats) so continuous monitoring can be driven deterministically."""
+
+    def __init__(self, findings: list[Finding], asset_waves: list[list[Asset]] | None = None) -> None:
         self.findings = findings
+        self.asset_waves = asset_waves or [[_asset("a.example.com")]]
         self.calls: list[dict] = []
 
     async def __call__(self, program: Program, **kwargs: object) -> CampaignResult:
+        wave = self.asset_waves[min(len(self.calls), len(self.asset_waves) - 1)]
         self.calls.append(kwargs)
+        store: AssetStore = kwargs["asset_store"]  # type: ignore[assignment]
+        now = time.time()
+        for asset in wave:
+            store.upsert(asset, now)
         return CampaignResult(
-            assets=[Asset(host="a.example.com")], findings=list(self.findings), scanned=["https://a.example.com/"]
+            assets=list(wave), findings=list(self.findings), scanned=[a.url for a in wave if a.url]  # type: ignore[misc]
         )
 
 
@@ -85,3 +99,28 @@ async def test_bot_passes_authorization_through_and_never_submits(tmp_path) -> N
     # The human gate: the bot exposes no submit path, and nothing it does reaches a terminal sent state.
     assert not hasattr(bot, "submit")
     assert queue.counts("acme")["submitted"] == 0
+
+
+async def test_run_continuous_detects_new_assets_and_alerts(tmp_path) -> None:
+    # Cycle 1 sees only a.example.com; before cycle 2 recon discovers b.example.com. Continuous monitoring
+    # must flag b as new on cycle 2 (and not re-flag a), and call on_cycle once per cycle — all without
+    # real wall-clock waits (sleep is injected as a no-op).
+    a, b = _asset("a.example.com"), _asset("b.example.com")
+    fake = _FakeCampaign([_finding("sqli", "a.example.com", "id")], asset_waves=[[a], [a, b]])
+    store = AssetStore(tmp_path / "assets.db")
+    queue = ReviewQueue(tmp_path / "queue.db")
+    bot = BountyBot(store, queue, campaign_runner=fake)
+
+    seen: list = []
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    results = await bot.run_continuous(
+        _program(), authorized=True, interval_s=3600, max_cycles=2, sleep=_no_sleep, on_cycle=seen.append
+    )
+    assert len(results) == 2
+    assert results[0].new_asset_hosts == ["a.example.com"]   # cycle 1: a just appeared
+    assert results[1].new_asset_hosts == ["b.example.com"]   # cycle 2: only b is new; a is already known
+    assert seen == results                                   # on_cycle fired once per cycle (drives alerts)
+    assert len(fake.calls) == 2

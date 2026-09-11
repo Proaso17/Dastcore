@@ -110,3 +110,15 @@ def test_store_dedupes_and_tracks_timestamps(tmp_path) -> None:
     ts = store._conn.execute("SELECT first_seen, last_seen FROM assets").fetchone()
     assert ts["first_seen"] == 1000.0 and ts["last_seen"] == 2000.0
     store.close()
+
+
+def test_new_since_returns_only_newly_seen_assets(tmp_path) -> None:
+    # The basis for continuous monitoring: after a later recon, new_since(t) is exactly what appeared.
+    store = AssetStore(tmp_path / "assets.db")
+    store.upsert(Asset(host="old.acme.com", url="https://old.acme.com", source="crtsh"), now=1000.0)
+    store.upsert(Asset(host="old.acme.com", url="https://old.acme.com", source="crtsh"), now=3000.0)  # re-seen
+    store.upsert(Asset(host="new.acme.com", url="https://new.acme.com", source="crtsh"), now=2000.0)  # appeared
+    fresh = {a.host for a in store.new_since(1500.0)}
+    assert fresh == {"new.acme.com"}  # 'old' was first seen at 1000 (< 1500), its re-sighting doesn't count
+    assert {a.host for a in store.new_since(0.0)} == {"old.acme.com", "new.acme.com"}
+    store.close()

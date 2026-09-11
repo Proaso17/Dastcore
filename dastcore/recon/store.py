@@ -83,5 +83,13 @@ class AssetStore:
         rows = self._conn.execute("SELECT * FROM assets WHERE url IS NOT NULL ORDER BY host").fetchall()
         return [self._row_to_asset(row) for row in rows]
 
+    def new_since(self, ts: float) -> list[Asset]:
+        """Assets first seen at or after ``ts`` — the attack surface that *appeared* since that time.
+        The basis for continuous monitoring: re-run recon, then ``new_since(last_run)`` is what's new."""
+        rows = self._conn.execute(
+            "SELECT * FROM assets WHERE first_seen >= ? ORDER BY first_seen, host", (ts,)
+        ).fetchall()
+        return [self._row_to_asset(row) for row in rows]
+
     def close(self) -> None:
         self._conn.close()

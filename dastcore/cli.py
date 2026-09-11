@@ -4138,6 +4138,93 @@ def bounty_queue(
     queue.close()
 
 
+@bounty_app.command("watch")
+def bounty_watch(
+    program_path: str = typer.Argument(..., help="program.yaml del programa autorizado."),
+    i_have_authorization: bool = typer.Option(
+        False, "--i-have-authorization", help="Confirmas autorización sobre el scope del programa."
+    ),
+    interval_minutes: float = typer.Option(60.0, "--interval", help="Minutos entre ciclos de recon+caza."),
+    cycles: int = typer.Option(0, "--cycles", help="Número de ciclos (0 = indefinido, hasta Ctrl+C)."),
+    engine: str = typer.Option("http", "--engine", help="Motor: http | headless | both."),
+    profile: str = typer.Option("standard", "--profile", help="Recon: passive | standard | deep."),
+    max_pages: int = typer.Option(200, "--max-pages", help="Máximo de páginas por host en el crawl."),
+    rescan_all: bool = typer.Option(
+        False, "--rescan-all", help="Re-escanea TODA la superficie cada ciclo (por defecto: solo lo nuevo)."
+    ),
+    assets_db: str = typer.Option(".dastcore/assets.db", "--assets-db", help="SQLite de la superficie (recon)."),
+    queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db", help="SQLite de la cola de revisión."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Silencia el feed de estado por ciclo."),
+) -> None:
+    """Monitorización continua: cada N minutos re-hace recon, caza SOLO los assets nuevos (salvo
+    --rescan-all) y los encola para tu revisión. Alerta de superficie y hallazgos nuevos. Nunca auto-envía."""
+    from dastcore.bugbounty import BountyBot, ReviewQueue, load_program
+    from dastcore.recon import AssetStore, ReconOptions
+
+    if not quiet:
+        _print_banner()
+    if not i_have_authorization:
+        console.print("\n[bold red]ABORTADO[/bold red]: se requiere [bold]--i-have-authorization[/bold].")
+        raise typer.Exit(code=1)
+    try:
+        program = load_program(program_path)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]No se pudo cargar el programa: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if not program.seeds:
+        console.print("[red]El programa no tiene 'seeds' de los que arrancar el recon.[/red]")
+        raise typer.Exit(code=1)
+    profile = profile if profile in ("passive", "standard", "deep") else "standard"
+    engine = engine if engine in ("http", "headless", "both") else "http"
+
+    store = AssetStore(assets_db)
+    queue = ReviewQueue(queue_db)
+    bot = BountyBot(store, queue)
+    # A persistent per-program checkpoint makes each cycle skip already-scanned assets, so only new surface
+    # is hunted after the first cycle. --rescan-all drops it (full re-scan every cycle, to catch regressions).
+    checkpoint = None if rescan_all else str(Path(assets_db).parent / f"{program.handle}.campaign.json")
+    cycle_n = {"i": 0}
+
+    def on_cycle(res) -> None:  # noqa: ANN001 — BotCycleResult
+        cycle_n["i"] += 1
+        if quiet:
+            return
+        alert = ""
+        if res.new_asset_hosts:
+            alert += f"  [bold yellow]⚠ {len(res.new_asset_hosts)} asset(s) nuevo(s):[/bold yellow] " + ", ".join(res.new_asset_hosts[:6])
+        if res.new_candidates:
+            alert += f"  [bold red]★ {res.new_candidates} candidato(s) nuevo(s)[/bold red]"
+        console.print(
+            f"[cyan]Ciclo {cycle_n['i']}[/cyan] · {res.assets} activos · {res.scanned} escaneados · "
+            f"{res.pending} pendientes{alert}"
+        )
+
+    console.print(
+        f"[cyan]BountyBot watch[/cyan] {program.handle} · cada {interval_minutes:g} min · "
+        f"recon {profile} → caza ({engine}){' · solo nuevo' if not rescan_all else ' · re-escaneo total'}"
+        f"{'' if cycles else '  [dim](Ctrl+C para parar)[/dim]'}"
+    )
+    try:
+        asyncio.run(
+            bot.run_continuous(
+                program,
+                authorized=i_have_authorization,
+                interval_s=interval_minutes * 60,
+                max_cycles=cycles or None,
+                on_cycle=on_cycle,
+                recon_opts=ReconOptions(profile=profile),
+                engine=engine,
+                max_pages=max_pages,
+                checkpoint_path=checkpoint,
+            )
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Watch detenido.[/yellow]")
+    store.close()
+    console.print(f"[dim]Cola en {queue_db} — revísala con [/dim][bold]dastcore bounty queue {program.handle}[/bold]")
+    queue.close()
+
+
 @app.command("benchmark")
 def benchmark_cmd(
     output_format: str = typer.Option("text", "--output", "-o", help="text | json | md."),
