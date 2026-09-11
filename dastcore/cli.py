@@ -188,6 +188,12 @@ baseline_app = typer.Typer(
 )
 app.add_typer(baseline_app, name="baseline")
 
+bounty_app = typer.Typer(
+    no_args_is_help=True,
+    help="BountyBot: caza autónoma de un programa autorizado → cola de revisión (nunca auto-envía).",
+)
+app.add_typer(bounty_app, name="bounty")
+
 _DEFAULT_BASELINE = ".dastcore/baseline.json"
 
 LEGAL_BANNER = (
@@ -4016,6 +4022,120 @@ def hunt(
         )
         Path(output_path).write_text(body, encoding="utf-8")
         console.print(f"[green]Reporte escrito en {output_path}[/green]")
+
+
+def _print_bounty_queue(rows: list) -> None:
+    """Render the review queue: highest-priority candidates first. Columns encode what to act on."""
+    from urllib.parse import urlsplit
+
+    if not rows:
+        console.print("[dim]La cola está vacía.[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("VRT", no_wrap=True)
+    table.add_column("Hallazgo")
+    table.add_column("Host", no_wrap=True)
+    table.add_column("Var", justify="right", no_wrap=True)
+    table.add_column("Estado", no_wrap=True)
+    table.add_column("Firma", style="dim")
+    _status_style = {"pending": "yellow", "approved": "green", "submitted": "cyan", "dismissed": "dim"}
+    for c in rows:
+        host = urlsplit(c.finding.request.url).hostname or "?"
+        gate = "" if c.checklist_passes else " [red]⚠ N/A[/red]"
+        table.add_row(
+            c.vrt_priority or "—",
+            (c.finding.name or c.finding.rule_id)[:44] + gate,
+            host,
+            str(c.variants),
+            f"[{_status_style.get(c.status, 'white')}]{c.status}[/]",
+            c.signature[:40],
+        )
+    console.print(table)
+
+
+@bounty_app.command("run")
+def bounty_run(
+    program_path: str = typer.Argument(..., help="program.yaml del programa autorizado."),
+    i_have_authorization: bool = typer.Option(
+        False, "--i-have-authorization", help="Confirmas autorización sobre el scope del programa."
+    ),
+    engine: str = typer.Option("http", "--engine", help="Motor: http | headless | both."),
+    profile: str = typer.Option("standard", "--profile", help="Recon: passive | standard | deep."),
+    max_pages: int = typer.Option(200, "--max-pages", help="Máximo de páginas por host en el crawl."),
+    resume_path: str = typer.Option("", "--resume", help="Fichero de checkpoint (reanuda un ciclo cortado)."),
+    assets_db: str = typer.Option(".dastcore/assets.db", "--assets-db", help="SQLite de la superficie (recon)."),
+    queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db", help="SQLite de la cola de revisión."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Silencia el feed de estado."),
+) -> None:
+    """Un ciclo de BountyBot: recon → escaneo → triage → cola de revisión (pending). Nunca auto-envía."""
+    from dastcore.bugbounty import BountyBot, ReviewQueue, load_program
+    from dastcore.recon import AssetStore, ReconOptions
+
+    if not quiet:
+        _print_banner()
+    if not i_have_authorization:
+        console.print("\n[bold red]ABORTADO[/bold red]: se requiere [bold]--i-have-authorization[/bold].")
+        raise typer.Exit(code=1)
+    try:
+        program = load_program(program_path)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]No se pudo cargar el programa: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if not program.seeds:
+        console.print("[red]El programa no tiene 'seeds' de los que arrancar el recon.[/red]")
+        raise typer.Exit(code=1)
+    profile = profile if profile in ("passive", "standard", "deep") else "standard"
+    engine = engine if engine in ("http", "headless", "both") else "http"
+
+    store = AssetStore(assets_db)
+    queue = ReviewQueue(queue_db)
+    bot = BountyBot(store, queue)
+    started = time.monotonic()
+    console.print(f"[cyan]BountyBot[/cyan] {program.handle} · recon {profile} → escaneo ({engine}) → cola…")
+    result = asyncio.run(
+        bot.run_once(
+            program,
+            authorized=i_have_authorization,
+            recon_opts=ReconOptions(profile=profile),
+            engine=engine,
+            max_pages=max_pages,
+            checkpoint_path=resume_path or None,
+            on_status=(None if quiet else (lambda s: console.print(f"[dim]{s}[/dim]"))),
+        )
+    )
+    store.close()
+    console.print(
+        f"[cyan]Ciclo:[/cyan] {result.assets} activos · {result.scanned} escaneados · "
+        f"{result.findings} hallazgos → {result.candidates} candidatos "
+        f"([green]{result.new_candidates} nuevos[/green]) · {result.pending} pendientes de revisión"
+        f"  [dim]({time.monotonic() - started:.0f}s)[/dim]"
+    )
+    _print_bounty_queue(queue.pending(program.handle))
+    console.print(
+        "[dim]Revisa cada candidato y, cuando lo valides, muévelo con "
+        "[/dim][bold]dastcore bounty queue[/bold][dim] (aprobar/descartar). El bot nunca envía.[/dim]"
+    )
+    queue.close()
+
+
+@bounty_app.command("queue")
+def bounty_queue(
+    handle: str = typer.Argument(None, help="Handle del programa (omítelo para ver todos)."),
+    status: str = typer.Option("pending", "--status", help="pending | approved | submitted | dismissed | all."),
+    queue_db: str = typer.Option(".dastcore/review_queue.db", "--queue-db", help="SQLite de la cola de revisión."),
+) -> None:
+    """Lista los candidatos de la cola de revisión (por defecto, los pendientes)."""
+    from dastcore.bugbounty import ReviewQueue
+
+    queue = ReviewQueue(queue_db)
+    chosen = None if status == "all" else status
+    _print_bounty_queue(queue.candidates(handle, status=chosen))
+    counts = queue.counts(handle)
+    console.print(
+        f"[dim]pending {counts['pending']} · approved {counts['approved']} · "
+        f"submitted {counts['submitted']} · dismissed {counts['dismissed']}[/dim]"
+    )
+    queue.close()
 
 
 @app.command("benchmark")
