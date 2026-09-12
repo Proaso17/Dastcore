@@ -890,6 +890,26 @@ _LANG_OF_TECH: list[tuple[str, tuple[str, ...]]] = [
     ("ruby", ("Ruby on Rails",)),
 ]
 _LOGIN_PATH_HINT = ("login", "signin", "sign-in", "wp-admin", "wp-login", "/admin", "/auth", "sso", "session")
+# Display tech tag → the planner's framework key (drives framework-specific playbooks).
+_FRAMEWORK_OF_TECH: dict[str, str] = {
+    "Next.js": "nextjs", "Laravel": "laravel", "Symfony": "symfony", "Ruby on Rails": "rails",
+    "Django": "django", "Flask": "flask", "Spring": "spring", "Express": "express", "ASP.NET": "aspnet",
+}
+_WAF_VENDORS = ("cloudflare", "akamai", "vercel", "imperva", "fastly", "sucuri", "cloudfront", "aws")
+_UPLOAD_PARAM = re.compile(r"upload|attachment|avatar", re.IGNORECASE)
+
+
+def _observed_auth_kind(auth: AuthConfig, extra_findings: list[Finding]) -> str:
+    """The authentication mechanism recon/config reveals, so the brain picks the right token/session attacks."""
+    if auth.type == "bearer" and auth.bearer_token and looks_like_jwt(auth.bearer_token):
+        return "jwt"
+    if auth.type in ("oauth2", "oauth2_pkce"):
+        return "oauth"
+    if auth.type in ("form", "cookie"):
+        return "session"
+    if any("jwt" in (f.rule_id or "").lower() for f in extra_findings):
+        return "jwt"  # a JWT-specific finding fired → the app uses JWTs
+    return ""
 
 
 def _has_login_signal(discovered: dict[str, HttpRequest]) -> bool:
@@ -913,7 +933,8 @@ def _build_target_profile(
     """Assemble what recon learned into a TargetProfile the planner can reason over (deterministic)."""
     from urllib.parse import urlsplit
 
-    blob, waf, is_spa = "", False, False
+    blob, waf, is_spa, waf_vendor, exposed_secrets = "", False, False, "", False
+    missing_headers: set[str] = set()
     for f in extra_findings:
         rid = (f.rule_id or "").lower()
         text = (f.name or "") + " " + " ".join(e.data for e in f.evidence)
@@ -921,18 +942,36 @@ def _build_target_profile(
             blob += " " + text
         if "waf" in rid:
             waf = True
+            waf_vendor = waf_vendor or next((v for v in _WAF_VENDORS if v in text.lower()), "")
         if "spa" in rid or "single-page" in text.lower():
             is_spa = True
+        if rid.startswith("passive-missing"):
+            missing_headers.add(rid)
+        if "secret" in rid or (f.family or "") in ("secret", "exposure"):
+            exposed_secrets = True
     low = blob.lower()
     tech = {tag for kw, tag in _TECH_KEYWORDS.items() if kw in low}
     languages = {lang for lang, tags in _LANG_OF_TECH if tech & set(tags)}
+    frameworks = {_FRAMEWORK_OF_TECH[t] for t in tech if t in _FRAMEWORK_OF_TECH}
     cms = next((c for c in ("WordPress", "Drupal", "Joomla") if c in tech), "").lower()
     api_kind = "graphql" if graphql_url else ("rest" if any(r.json_body is not None for r in discovered.values()) else "none")
     hosts = tuple(dict.fromkeys(urlsplit(r).hostname or r for r in scan_roots))
+    # The real injectable surface: every parameter name recon actually observed across the discovered requests.
+    param_names: set[str] = set()
+    for req in discovered.values():
+        param_names |= set(req.params) | set(req.data or {})
+        if isinstance(req.json_body, dict):
+            param_names |= {str(k) for k in req.json_body}
+    # Security posture from the header hardening: 3+ missing security headers = lax, some = mixed, none = hardened.
+    posture = "lax" if len(missing_headers) >= 3 else "mixed" if missing_headers else "hardened"
     return TargetProfile(
         tech=frozenset(tech), languages=frozenset(languages), cms=cms, is_spa=is_spa,
         has_login=auth.type in ("form", "oauth2", "oauth2_pkce") or _has_login_signal(discovered),
         api_kind=api_kind, backend="supabase" if supabase else "none", waf=waf, hosts=hosts,
+        frameworks=frozenset(frameworks), auth_kind=_observed_auth_kind(auth, extra_findings),
+        param_names=frozenset(param_names), endpoint_count=len(discovered),
+        has_file_upload=any(_UPLOAD_PARAM.search(n) for n in param_names),
+        exposed_secrets=exposed_secrets, security_posture=posture, waf_vendor=waf_vendor,
     )
 
 

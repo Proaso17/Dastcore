@@ -2,10 +2,14 @@
 
 Recon tells us WHAT a target is; this turns that into a prioritised strategy for WHERE to push, the way a
 pentester sizes up a target before attacking. It is a deterministic expert system: signals in a
-``TargetProfile`` (technology, CMS, SPA-vs-server-rendered, API kind, auth panel, WAF, subdomains) flow
-through encoded heuristics into a ``ScanPlan`` — an ordered set of moves, each with its reasoning. No LLM,
-no network: reproducible and auditable. The plan is both surfaced to the user (so the "thinking" is
-visible) and used to steer the scan (focus the juicy hosts first, emphasise the relevant vuln classes).
+``TargetProfile`` flow through encoded heuristics into a ``ScanPlan``. No LLM, no network: reproducible and
+auditable. The plan is surfaced to the user (so the "thinking" is visible) and used to steer the scan
+(focus the juicy hosts first, emphasise the relevant vuln classes, raise intensity on them).
+
+The decision is a **confidence score per family**, not a flat list: every signal that fires contributes a
+weighted vote with a cited reason, and the families are ranked by total score. So a PHP app where recon
+actually observed ``file``/``path`` parameters scores LFI above a generic SQLi prior — the brain reasons
+from evidence, not just stack priors, and every number is traceable (``family_scores`` + ``reasoning``).
 """
 
 from __future__ import annotations
@@ -29,6 +33,15 @@ class TargetProfile:
     backend: str = "none"                       # "supabase" | "none"
     waf: bool = False
     hosts: tuple[str, ...] = ()                 # discovered hostnames in scope
+    # --- deeper application analysis (all optional; the brain weighs whatever is present) ---
+    frameworks: frozenset[str] = frozenset()    # specific frameworks: nextjs/laravel/rails/django/flask/spring/express/aspnet
+    auth_kind: str = ""                         # "jwt" | "session" | "oauth" | "basic" | ""
+    param_names: frozenset[str] = frozenset()   # every parameter name recon actually observed — real injectable surface
+    endpoint_count: int = 0                     # size of the discovered surface
+    has_file_upload: bool = False               # an upload endpoint/param was seen
+    exposed_secrets: bool = False               # secrets/keys found in the JS bundle
+    security_posture: str = ""                  # "hardened" | "mixed" | "lax" | "" — from the security-header posture
+    waf_vendor: str = ""                        # "cloudflare" | "akamai" | "vercel" | "aws" | … (for targeted evasion)
 
 
 @dataclass
@@ -43,14 +56,17 @@ class PlanItem:
 @dataclass
 class ScanPlan:
     items: list[PlanItem] = field(default_factory=list)
-    priority_families: tuple[str, ...] = ()     # de-duplicated, highest-priority first
+    priority_families: tuple[str, ...] = ()     # ranked by confidence score, highest first
     focus_hosts: tuple[str, ...] = ()           # hosts to scan first (juicy subdomains before marketing)
     push_auth: bool = False                     # a login panel → try weak creds / steer to authenticated scan
     use_headless: bool = False                  # SPA → render with the browser
     notes: list[str] = field(default_factory=list)
+    family_scores: dict[str, float] = field(default_factory=dict)  # the per-family confidence (transparency)
+    reasoning: list[str] = field(default_factory=list)             # the visible "thinking": why each family ranks
 
 
-# Language → the vuln families that stack most exposes (a pentester's priors).
+# Language → the vuln families it most exposes (a pentester's priors). Order within a tuple is the prior
+# ranking; the scorer weights by position so a pure-language profile keeps this exact order.
 _LANG_FAMILIES: dict[str, tuple[str, ...]] = {
     "php": ("sqli", "lfi", "code-injection", "cmdi", "xxe"),
     "java": ("deserialization", "rce", "ssrf", "xxe", "sqli"),          # rce = Log4Shell (JNDI)
@@ -59,6 +75,62 @@ _LANG_FAMILIES: dict[str, tuple[str, ...]] = {
     "python": ("ssti", "sqli", "code-injection"),
     "ruby": ("ssti", "sqli", "code-injection"),
 }
+_LANG_BASE = 4.0  # weight of a language's top family; each next family in the tuple is worth 0.5 less
+
+# Framework-specific playbooks: the families + the concrete note a pentester would act on.
+_FRAMEWORK_FAMILIES: dict[str, tuple[str, ...]] = {
+    "nextjs": ("ssrf", "open_redirect"),
+    "laravel": ("sqli", "code-injection"),
+    "symfony": ("sqli", "code-injection"),
+    "rails": ("deserialization", "ssti", "sqli"),
+    "django": ("ssti", "sqli"),
+    "flask": ("ssti",),
+    "spring": ("rce", "ssrf", "deserialization"),
+    "express": ("nosqli", "proto_pollution", "ssti"),
+    "aspnet": ("deserialization", "sqli", "xxe"),
+}
+_FRAMEWORK_NOTE: dict[str, str] = {
+    "nextjs": "Next.js: SSRF en el optimizador de imágenes (/_next/image?url=), bypass de middleware, revisa /api/*.",
+    "laravel": "Laravel: APP_DEBUG filtra env/trazas (Ignition RCE CVE-2021-3129); revisa /telescope y /_ignition.",
+    "symfony": "Symfony: profiler/_fragment expuestos y deserialización; revisa /_profiler y /app_dev.php.",
+    "rails": "Rails: deserialización de Marshal/cookie, y render de input (SSTI/ERB); revisa rutas con :id.",
+    "django": "Django: SSTI si renderiza input y DEBUG=True expone settings/trazas; revisa /admin.",
+    "flask": "Flask: SSTI (Jinja2) si renderiza input; revisa el modo debug (consola Werkzeug).",
+    "spring": "Spring: Log4Shell (JNDI), Spring4Shell, actuator expuesto (/actuator/*), SSRF.",
+    "express": "Express/Node: NoSQLi en filtros Mongo, prototype pollution, SSTI si usa plantillas.",
+    "aspnet": "ASP.NET: deserialización (ViewState/BinaryFormatter); revisa endpoints .asmx/.svc.",
+}
+_FRAMEWORK_BASE = 3.0  # a detected framework is strong evidence — slightly under a full language stack
+
+# Parameter-name evidence → families. Observing a real param is stronger than a generic stack prior, so
+# these votes meaningfully reorder the ranking. Each distinct matching name votes once; capped per family.
+_PARAM_SIGNALS: list[tuple[re.Pattern[str], tuple[tuple[str, float], ...]]] = [
+    (re.compile(r"(?:^|[_\-.])(file|path|dir|folder|include|inc|page|template|tpl|doc|load|download)", re.I),
+     (("lfi", 1.5),)),
+    (re.compile(r"(?:^|[_\-.])(url|uri|redirect|redir|next|return|dest|destination|callback|continue|link)", re.I),
+     (("open_redirect", 1.2), ("ssrf", 0.8))),
+    (re.compile(r"(?:^|[_\-.])(id|uid|user|account|acct|order|object|owner|profile|customer)", re.I),
+     (("authz", 1.5), ("sqli", 0.5))),
+    (re.compile(r"(?:^|[_\-.])(cmd|exec|command|run|ping|shell|system)", re.I),
+     (("cmdi", 1.5),)),
+    (re.compile(r"(?:^|[_\-.])(query|search|keyword|filter|sort)", re.I),
+     (("sqli", 0.8), ("xss", 0.6))),
+    (re.compile(r"(?:^|[_\-.])(xml|import|feed|payload)", re.I),
+     (("xxe", 1.0),)),
+    (re.compile(r"(?:^|[_\-.])(name|comment|message|msg|subject|title|bio|desc)", re.I),
+     (("xss", 0.6),)),
+    (re.compile(r"(?:^|[_\-.])(upload|attachment|avatar|photo|image)", re.I),
+     (("upload", 1.0),)),
+]
+_PARAM_CAP = 4.0  # a single family can gain at most this much from parameter names (a huge API can't swamp)
+
+_AUTH_KIND_FAMILY: dict[str, tuple[str, float, str]] = {
+    "jwt": ("jwt", 3.0, "token JWT: prueba alg=none, confusión de algoritmo, kid/jwk injection, secreto débil"),
+    "session": ("session", 2.0, "sesión por cookie: session fixation, flags de cookie, fijación/rotación"),
+    "oauth": ("oauth", 2.5, "OAuth: redirect_uri abierto, robo de code/token, CSRF de state, scope creep"),
+    "basic": ("weak-creds", 1.5, "HTTP Basic: prueba credenciales débiles/por defecto"),
+}
+
 # Subdomain labels worth attacking before the marketing site.
 _JUICY_HOST = re.compile(
     r"(?:^|[.\-])(admin|api|internal|intranet|staging|stage|dev|test|qa|uat|beta|preprod|pre-?prod|"
@@ -79,70 +151,156 @@ def order_hosts(hosts: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def plan_scan(profile: TargetProfile) -> ScanPlan:
-    """Turn what the target IS into a prioritised strategy — the decision brain (deterministic)."""
+    """Turn what the target IS into a prioritised strategy — the decision brain (deterministic).
+
+    Families are ranked by a confidence score: each signal casts a weighted, reasoned vote. Insertion
+    order (first vote) breaks ties, so a pure-language profile keeps its prior ordering while observed
+    evidence (frameworks, real parameter names, auth kind) reshapes the ranking."""
     plan = ScanPlan()
-    families: list[str] = []
+    scores: dict[str, float] = {}
+    reasons: dict[str, list[str]] = {}
+
+    def bump(family: str, weight: float, reason: str) -> None:
+        scores[family] = round(scores.get(family, 0.0) + weight, 3)
+        reasons.setdefault(family, []).append(reason)
 
     def add(focus: str, fams: tuple[str, ...], why: str) -> None:
         plan.items.append(PlanItem(focus=focus, families=fams, why=why))
-        families.extend(fams)
 
-    # Server-side language → injection/RCE surface it typically exposes.
+    # Server-side language → the injection/RCE surface it typically exposes (weighted by prior rank).
     for lang in sorted(profile.languages):
         fams = _LANG_FAMILIES.get(lang)
         if fams:
-            add(f"Stack {lang}", fams, f"stack {lang}: prioriza {', '.join(fams)} (superficie típica de ese lenguaje)")
+            for index, fam in enumerate(fams):
+                bump(fam, _LANG_BASE - index * 0.5, f"stack {lang}")
+            add(f"Stack {lang}", fams,
+                f"stack {lang}: prioriza {', '.join(fams)} (superficie típica de ese lenguaje)")
+
+    # Specific frameworks → concrete, higher-signal playbooks.
+    for fw in sorted(profile.frameworks):
+        fams = _FRAMEWORK_FAMILIES.get(fw)
+        if fams:
+            for index, fam in enumerate(fams):
+                bump(fam, _FRAMEWORK_BASE - index * 0.5, f"framework {fw}")
+            note = _FRAMEWORK_NOTE.get(fw)
+            add(f"Framework {fw}", fams, note or f"framework {fw}: playbook específico")
+            if note:
+                plan.notes.append(note)
 
     # CMS-specific playbooks.
     if profile.cms == "wordpress":
+        for fam in ("rce", "sqli", "xss"):
+            bump(fam, 3.0 if fam == "rce" else 2.0, "CMS WordPress")
         add("WordPress", ("rce", "sqli", "xss"),
             "WordPress: revisa /wp-json y xmlrpc.php (SSRF/DoS/pingback), enumeración de usuarios (?author=N) y "
             "CVEs de plugins/temas (versión → CVE)")
     elif profile.cms == "drupal":
-        add("Drupal", ("sqli", "rce"),
-            "Drupal: Drupalgeddon (SQLi→RCE) y CVEs por versión")
+        bump("sqli", 3.0, "CMS Drupal")
+        bump("rce", 2.5, "CMS Drupal (Drupalgeddon)")
+        add("Drupal", ("sqli", "rce"), "Drupal: Drupalgeddon (SQLi→RCE) y CVEs por versión")
     elif profile.cms == "joomla":
+        bump("sqli", 3.0, "CMS Joomla")
+        bump("lfi", 2.0, "CMS Joomla")
         add("Joomla", ("sqli", "lfi"), "Joomla: SQLi/LFI conocidos y CVEs por versión")
 
     # Client-rendered SPA → the browser is where the bugs are.
     if profile.is_spa:
         plan.use_headless = True
+        bump("xss", 2.5, "SPA renderizada en cliente")
         add("SPA (cliente)", ("xss",),
             "SPA renderizada en cliente: DOM XSS + CSTI con el navegador headless, y secretos en el bundle JS")
 
     # API shape → authorization is the crown jewel.
     if profile.api_kind == "rest":
+        bump("authz", 3.5, "API REST")
+        bump("mass_assignment", 2.5, "API REST")
+        bump("sqli", 1.0, "API REST")
         add("API REST", ("authz", "mass_assignment", "sqli"),
             "API REST: BOLA/BFLA/IDOR (autorización a nivel de objeto/función) y mass assignment — el mayor riesgo real")
     elif profile.api_kind == "graphql":
+        bump("graphql", 3.5, "API GraphQL")
+        bump("authz", 2.5, "API GraphQL")
         add("GraphQL", ("graphql", "authz"),
             "GraphQL: introspección, sugerencia de campos, batching/aliasing (DoS) e inyección en argumentos")
 
     if profile.backend == "supabase":
+        bump("authz", 3.0, "backend Supabase (RLS)")
         add("Supabase", ("authz",),
             "Backend Supabase: mina tablas del bundle y prueba RLS/BOLA (lectura y escritura) con 2 identidades")
 
     # Auth panel → credentials and token attacks, and pivot to authenticated coverage.
     if profile.has_login:
         plan.push_auth = True
+        for fam, weight in (("weak-creds", 2.5), ("jwt", 1.5), ("session", 1.5)):
+            bump(fam, weight, "panel de login detectado")
         add("Panel de autenticación", ("weak-creds", "jwt", "session"),
             "Panel de login detectado: prueba credenciales débiles, ataques a JWT y session fixation; si unas "
             "credenciales por defecto funcionan, AUTO-PIVOTA (inicia sesión y escanea la superficie interna que "
             "desbloquean — el alcance real); aquí viven BOLA/BFLA")
 
+    # Observed auth mechanism → the precise token/session attacks.
+    spec = _AUTH_KIND_FAMILY.get(profile.auth_kind)
+    if spec is not None:
+        fam, weight, why = spec
+        bump(fam, weight, f"auth {profile.auth_kind}")
+        plan.notes.append(why)
+
+    # Real injectable surface: the parameter names recon actually observed (evidence beats priors).
+    param_gain: dict[str, float] = {}
+    param_hits: dict[str, set[str]] = {}
+    for name in sorted(profile.param_names):
+        for pattern, votes in _PARAM_SIGNALS:
+            if pattern.search(name):
+                for fam, weight in votes:
+                    param_gain[fam] = min(param_gain.get(fam, 0.0) + weight, _PARAM_CAP)
+                    param_hits.setdefault(fam, set()).add(name)
+    for fam, gain in param_gain.items():
+        sample = ", ".join(sorted(param_hits[fam])[:3])
+        bump(fam, round(gain, 3), f"params observados ({sample})")
+
+    if profile.has_file_upload:
+        bump("upload", 3.0, "endpoint/campo de subida de ficheros")
+        add("Subida de ficheros", ("upload",),
+            "Se observó subida de ficheros: prueba tipos/extensiones ejecutables y path traversal en el nombre")
+
+    # Security posture from the header hardening — where is the value likely to be.
+    if profile.security_posture == "lax":
+        for fam in ("sqli", "xss", "lfi"):
+            bump(fam, 0.8, "postura laxa (faltan cabeceras de seguridad)")
+        plan.notes.append("Postura laxa (faltan cabeceras de seguridad): app poco endurecida, la inyección es más "
+                          "probable — barrido amplio.")
+    elif profile.security_posture == "hardened":
+        bump("authz", 1.0, "postura endurecida (cabeceras completas)")
+        plan.notes.append("Postura endurecida (cabeceras completas): la inyección obvia es menos probable; el valor "
+                          "está en lógica de negocio y autorización (BOLA/BFLA).")
+
+    if profile.exposed_secrets:
+        plan.notes.append("Secretos/API keys expuestos en el bundle JS: valídalos y repórtalos; pueden abrir más superficie.")
+
     if profile.waf:
-        plan.notes.append("WAF/CDN delante: activa evasión (--waf-evasion) y usa insertion points 'moved'; "
+        vendor = f" ({profile.waf_vendor})" if profile.waf_vendor else ""
+        plan.notes.append(f"WAF/CDN delante{vendor}: activa evasión (--waf-evasion) y usa insertion points 'moved'; "
                           "los hallazgos pueden salir parciales si bloquea el escaneo.")
 
     plan.focus_hosts = order_hosts(profile.hosts)
     if any(_JUICY_HOST.search(_host_of(h)) for h in profile.hosts):
         plan.notes.append("Subdominios jugosos primero: se escanean antes admin./api./staging./dev. que el sitio de marketing.")
 
-    if not plan.items:
+    # Nothing distinctive learned → base coverage. (A client-only SPA already added its own item above, so
+    # this only fires for a genuinely featureless target.)
+    if not scores:
+        for fam, weight in (("sqli", 3.0), ("xss", 2.5), ("lfi", 2.0), ("open_redirect", 1.5)):
+            bump(fam, weight, "sin señales fuertes de stack/CMS")
         add("Genérico", ("sqli", "xss", "lfi", "open_redirect"),
             "Sin señales fuertes de stack/CMS: cobertura base (SQLi, XSS, LFI, open redirect) sobre toda la superficie")
 
-    plan.priority_families = tuple(dict.fromkeys(families))  # de-dup, keep first-seen (priority) order
+    # Rank by confidence; stable on ties (dict insertion order = first vote).
+    plan.priority_families = tuple(sorted(scores, key=lambda f: -scores[f]))
+    plan.family_scores = scores
+    plan.reasoning = [
+        f"{fam} ({scores[fam]:.1f}): " + "; ".join(dict.fromkeys(reasons[fam]))
+        for fam in plan.priority_families[:8]
+    ]
     return plan
 
 
@@ -151,6 +309,8 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
     ident = ", ".join(sorted(profile.tech)) or "sin fingerprint claro"
     lines = [f"Perfil del objetivo: {ident}."]
     shape = []
+    if profile.frameworks:
+        shape.append("/".join(sorted(profile.frameworks)))
     if profile.is_spa:
         shape.append("SPA")
     if profile.api_kind != "none":
@@ -159,13 +319,22 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
         shape.append(profile.backend)
     if profile.has_login:
         shape.append("panel de login")
+    if profile.auth_kind:
+        shape.append(f"auth {profile.auth_kind}")
+    if profile.endpoint_count:
+        shape.append(f"{profile.endpoint_count} endpoints")
+    if profile.security_posture:
+        shape.append(f"postura {profile.security_posture}")
     if profile.waf:
-        shape.append("WAF")
+        shape.append("WAF" + (f" {profile.waf_vendor}" if profile.waf_vendor else ""))
     if shape:
         lines.append("Forma: " + ", ".join(shape) + ".")
     lines.append("Plan (prioridad): " + " → ".join(item.focus for item in plan.items) + ".")
     for item in plan.items:
         lines.append(f"  • {item.focus}: {item.why}")
+    if plan.reasoning:
+        lines.append("Razonamiento (familia → puntuación → evidencia):")
+        lines.extend(f"  · {line}" for line in plan.reasoning)
     if plan.priority_families:
         lines.append(
             "Ataque priorizado (active scan): " + ", ".join(plan.priority_families[:8])

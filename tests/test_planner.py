@@ -77,3 +77,51 @@ def test_render_plan_is_readable_and_names_the_moves() -> None:
                             languages=frozenset({"php"}), has_login=True)
     text = render_plan(profile, plan_scan(profile))
     assert "WordPress" in text and "Plan" in text and "login" in text.lower()
+
+
+# --- richer analysis + confidence scoring (the improved brain) --------------------------------------
+
+
+def test_observed_params_outrank_the_language_prior() -> None:
+    # Pure PHP prioritises SQLi; but if recon actually saw file-inclusion-shaped params, evidence wins.
+    base = _families(TargetProfile(languages=frozenset({"php"})))
+    assert base[0] == "sqli"
+    fams = _families(TargetProfile(languages=frozenset({"php"}), param_names=frozenset({"file", "path"})))
+    assert fams.index("lfi") < fams.index("sqli")  # observed file/path params push LFI above the SQLi prior
+
+
+def test_framework_playbook_adds_its_families_and_note() -> None:
+    plan = plan_scan(TargetProfile(frameworks=frozenset({"spring"})))
+    assert "rce" in plan.priority_families and "ssrf" in plan.priority_families
+    assert any("Spring" in n or "Log4Shell" in n for n in plan.notes)
+
+
+def test_auth_kind_jwt_prioritises_jwt_attacks() -> None:
+    plan = plan_scan(TargetProfile(auth_kind="jwt"))
+    assert "jwt" in plan.priority_families
+    assert any("JWT" in n for n in plan.notes)
+
+
+def test_hardened_posture_steers_to_authz_lax_to_injection() -> None:
+    hardened = plan_scan(TargetProfile(security_posture="hardened"))
+    assert "authz" in hardened.priority_families and any("endurecida" in n for n in hardened.notes)
+    lax = plan_scan(TargetProfile(security_posture="lax"))
+    assert "sqli" in lax.priority_families and any("laxa" in n for n in lax.notes)
+
+
+def test_file_upload_signal_is_planned() -> None:
+    plan = plan_scan(TargetProfile(has_file_upload=True))
+    assert "upload" in plan.priority_families and any(i.focus == "Subida de ficheros" for i in plan.items)
+
+
+def test_plan_exposes_scores_and_a_reasoning_trace() -> None:
+    plan = plan_scan(TargetProfile(languages=frozenset({"php"})))
+    assert plan.family_scores.get("sqli") == 4.0                      # the transparent confidence score
+    assert plan.reasoning and plan.reasoning[0].startswith("sqli")    # the visible "thinking" cites evidence
+    assert "stack php" in plan.reasoning[0]
+
+
+def test_waf_vendor_and_secrets_surface_as_notes() -> None:
+    plan = plan_scan(TargetProfile(waf=True, waf_vendor="cloudflare", exposed_secrets=True))
+    assert any("cloudflare" in n.lower() for n in plan.notes)
+    assert any("Secretos" in n for n in plan.notes)
