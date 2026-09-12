@@ -54,6 +54,17 @@ class PlanItem:
 
 
 @dataclass
+class HostPlan:
+    """A per-host sub-plan: different hosts play different roles (admin vs api vs marketing), so the brain
+    tailors the families to each instead of one strategy for the whole target."""
+
+    host: str
+    role: str                   # "admin" | "api" | "auth" | "staging" | "devops" | "web"
+    families: tuple[str, ...]   # role-tailored families, blended with the target's global priorities
+    why: str
+
+
+@dataclass
 class ScanPlan:
     items: list[PlanItem] = field(default_factory=list)
     priority_families: tuple[str, ...] = ()     # ranked by confidence score, highest first
@@ -63,6 +74,7 @@ class ScanPlan:
     notes: list[str] = field(default_factory=list)
     family_scores: dict[str, float] = field(default_factory=dict)  # the per-family confidence (transparency)
     reasoning: list[str] = field(default_factory=list)             # the visible "thinking": why each family ranks
+    host_plans: list[HostPlan] = field(default_factory=list)       # per-host strategy when the surface spans roles
 
 
 # Language → the vuln families it most exposes (a pentester's priors). Order within a tuple is the prior
@@ -148,6 +160,50 @@ def order_hosts(hosts: tuple[str, ...]) -> tuple[str, ...]:
     juicy = [h for h in hosts if _JUICY_HOST.search(_host_of(h))]
     rest = [h for h in hosts if not _JUICY_HOST.search(_host_of(h))]
     return tuple(dict.fromkeys(juicy + rest))
+
+
+# A host's subdomain label reveals its ROLE, and the role changes the strategy: an admin panel is an
+# authz target, an API is a BOLA/mass-assignment target, a staging box is usually under-hardened, a
+# devops tool is a default-credentials/known-CVE target. First match wins; anything else is "web".
+_HOST_ROLES: list[tuple[re.Pattern[str], str, tuple[str, ...], str]] = [
+    (re.compile(r"(?:^|[.\-])(admin|dashboard|panel|manage|console|portal|backoffice)(?:[.\-]|$)", re.I), "admin",
+     ("authz", "weak-creds", "jwt"),
+     "panel de administración: autorización (BOLA/BFLA) y credenciales — la superficie tras el login"),
+    (re.compile(r"(?:^|[.\-])(api|graphql|rest|gateway|gw)(?:[.\-]|$)", re.I), "api",
+     ("authz", "mass_assignment", "sqli", "nosqli"),
+     "API: BOLA/BFLA/IDOR y mass assignment — el mayor riesgo real de una API"),
+    (re.compile(r"(?:^|[.\-])(auth|login|sso|accounts?|oauth|identity|idp)(?:[.\-]|$)", re.I), "auth",
+     ("weak-creds", "jwt", "session"),
+     "superficie de autenticación: credenciales débiles, ataques a JWT y a la sesión"),
+    (re.compile(r"(?:^|[.\-])(staging|stage|dev|develop|test|qa|uat|beta|preprod|pre-?prod|sandbox)(?:[.\-]|$)", re.I),
+     "staging", ("sqli", "xss", "lfi", "exposure"),
+     "entorno no-productivo: suele estar menos endurecido, con debug/trazas y secretos expuestos"),
+    (re.compile(r"(?:^|[.\-])(git|gitlab|jenkins|jira|grafana|kibana|vpn|ci|nexus|harbor|sonar)(?:[.\-]|$)", re.I),
+     "devops", ("weak-creds", "rce"),
+     "herramienta de infraestructura: prueba credenciales por defecto y CVEs conocidos de esa herramienta"),
+]
+_WEB_ROLE = ("web", ("xss", "open_redirect"), "sitio web/marketing: XSS reflejado y open redirect, más la "
+             "cobertura base del stack")
+
+
+def _classify_host(host: str) -> tuple[str, tuple[str, ...], str]:
+    """(role, role families, why) for a hostname — first matching role wins, else a generic web role."""
+    for pattern, role, families, why in _HOST_ROLES:
+        if pattern.search(host):
+            return role, families, why
+    return _WEB_ROLE
+
+
+def plan_hosts(hosts: tuple[str, ...], global_families: tuple[str, ...] = ()) -> list[HostPlan]:
+    """A per-host sub-plan (juicy hosts first): each host's role-tailored families, blended with the
+    target's global priorities so stack/framework evidence still applies everywhere."""
+    plans: list[HostPlan] = []
+    for host in order_hosts(tuple(hosts)):
+        bare = _host_of(host)
+        role, families, why = _classify_host(bare)
+        blended = tuple(dict.fromkeys([*families, *global_families]))[:6]
+        plans.append(HostPlan(host=bare, role=role, families=blended, why=why))
+    return plans
 
 
 def plan_scan(profile: TargetProfile) -> ScanPlan:
@@ -301,6 +357,11 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
         f"{fam} ({scores[fam]:.1f}): " + "; ".join(dict.fromkeys(reasons[fam]))
         for fam in plan.priority_families[:8]
     ]
+    # Per-host sub-plans when the surface spans more than one host or has a role-bearing subdomain:
+    # the admin panel, the API and the marketing site each warrant a different strategy.
+    distinct_hosts = {_host_of(h) for h in profile.hosts}
+    if len(distinct_hosts) > 1 or any(_JUICY_HOST.search(h) for h in distinct_hosts):
+        plan.host_plans = plan_hosts(profile.hosts, plan.priority_families)
     return plan
 
 
@@ -345,5 +406,9 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
         )
     if plan.focus_hosts and len(plan.focus_hosts) > 1:
         lines.append("Orden de hosts: " + ", ".join(plan.focus_hosts[:6]) + (" …" if len(plan.focus_hosts) > 6 else "") + ".")
+    if plan.host_plans:
+        lines.append("Plan por host (rol → familias):")
+        for hp in plan.host_plans[:8]:
+            lines.append(f"  · {hp.host} [{hp.role}]: {', '.join(hp.families)} — {hp.why}")
     lines.extend(f"  ⚠ {note}" for note in plan.notes)
     return "\n".join(lines)

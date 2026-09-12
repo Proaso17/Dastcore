@@ -3,7 +3,7 @@ Deterministic expert heuristics, so every mapping is pinned down here."""
 
 from __future__ import annotations
 
-from dastcore.analysis.planner import TargetProfile, plan_scan, render_plan
+from dastcore.analysis.planner import TargetProfile, plan_hosts, plan_scan, render_plan
 
 
 def _families(profile: TargetProfile) -> tuple[str, ...]:
@@ -125,3 +125,35 @@ def test_waf_vendor_and_secrets_surface_as_notes() -> None:
     plan = plan_scan(TargetProfile(waf=True, waf_vendor="cloudflare", exposed_secrets=True))
     assert any("cloudflare" in n.lower() for n in plan.notes)
     assert any("Secretos" in n for n in plan.notes)
+
+
+# --- per-host / per-area planning (the brain tailors strategy to each host's role) ------------------
+
+
+def test_plan_hosts_classifies_roles_and_blends_global_families() -> None:
+    hosts = ("admin.acme.com", "api.acme.com", "staging.acme.com", "www.acme.com", "git.acme.com")
+    by_host = {hp.host: hp for hp in plan_hosts(hosts, global_families=("sqli",))}
+    assert by_host["admin.acme.com"].role == "admin" and "authz" in by_host["admin.acme.com"].families
+    assert by_host["api.acme.com"].role == "api" and "mass_assignment" in by_host["api.acme.com"].families
+    assert by_host["staging.acme.com"].role == "staging"
+    assert by_host["git.acme.com"].role == "devops" and "weak-creds" in by_host["git.acme.com"].families
+    assert by_host["www.acme.com"].role == "web"
+    assert "sqli" in by_host["www.acme.com"].families  # the target's global priorities are blended in
+
+
+def test_plan_scan_attaches_per_host_plans_for_a_multi_role_surface() -> None:
+    plan = plan_scan(TargetProfile(hosts=("admin.acme.com", "www.acme.com")))
+    roles = {hp.host: hp.role for hp in plan.host_plans}
+    assert roles.get("admin.acme.com") == "admin" and roles.get("www.acme.com") == "web"
+
+
+def test_single_plain_host_gets_no_split_but_a_juicy_one_does() -> None:
+    assert plan_scan(TargetProfile(hosts=("www.acme.com",))).host_plans == []   # nothing to split
+    juicy = plan_scan(TargetProfile(hosts=("admin.acme.com",)))
+    assert juicy.host_plans and juicy.host_plans[0].role == "admin"             # a lone admin host still planned
+
+
+def test_render_shows_the_per_host_plan() -> None:
+    profile = TargetProfile(hosts=("admin.acme.com", "api.acme.com"))
+    text = render_plan(profile, plan_scan(profile))
+    assert "Plan por host" in text and "[admin]" in text and "[api]" in text
