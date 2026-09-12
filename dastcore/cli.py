@@ -996,6 +996,37 @@ def _scan_plan_finding(target: str, profile: TargetProfile, plan: ScanPlan) -> F
     )
 
 
+def _scan_plan_update_finding(
+    target: str, profile: TargetProfile, old_plan: ScanPlan, new_plan: ScanPlan
+) -> Finding:
+    """Advisory for an adaptive re-plan: recon/enrichment revealed more, so the brain revised its
+    priorities before the active scan. Shows what changed and the new reasoning."""
+    request = HttpRequest(method="GET", url=target)
+    before = ", ".join(old_plan.priority_families[:5]) or "—"
+    after = ", ".join(new_plan.priority_families[:5]) or "—"
+    detail = (
+        f"Plan revisado con nueva evidencia (parámetros ocultos, endpoints activados, hallazgos tempranos). "
+        f"Prioridad: {before} → {after}.\n\n" + render_plan(profile, new_plan)
+    )
+    return Finding(
+        id="scan-plan-update",
+        rule_id="scan-plan-update",
+        name="Plan de escaneo revisado (nueva evidencia durante el recon)",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="static", data=detail[:2000], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target),
+        remediation=(
+            "Informativo: al descubrir más superficie (params/endpoints) y hallazgos tempranos, el cerebro "
+            "reordenó las clases de vulnerabilidad prioritarias antes del escaneo activo. Así el presupuesto "
+            "se gasta donde la evidencia —no solo el prior— dice que hay más probabilidad de bug."
+        ),
+    )
+
+
 def _coverage_finding(target: str, failed: list[str]) -> Finding:
     """An info advisory that some checks were skipped, so the report reflects partial coverage."""
     names = ", ".join(sorted(set(failed)))
@@ -2066,6 +2097,26 @@ async def _run_scan(
             if test_smuggling:
                 progress.status("Probando HTTP request smuggling (CL.TE)…")
                 extra_findings.extend(await phase("smuggling", run_smuggling_checks(client, all_requests)))
+            # Adaptive re-planning: the first plan (built right after fingerprint) hadn't seen what recon
+            # and enrichment later revealed — hidden parameters (mine-params), activated API endpoints, and
+            # the early dedicated-detector findings. Re-read the target now and, if the priorities changed,
+            # revise the strategy BEFORE committing the active-scan budget, and surface the revision. The
+            # scan hasn't started, so reprioritising the scanner is safe and cheap. No change → no noise.
+            _revised_profile = _build_target_profile(
+                scan_roots, extra_findings, discovered, graphql_url, bool(supa_prof.tables), config.auth
+            )
+            _revised_plan = plan_scan(_revised_profile)
+            if _revised_plan.priority_families != _scan_plan.priority_families:
+                scanner.reprioritize(_revised_plan.priority_families)
+                _update_finding = _scan_plan_update_finding(target, _revised_profile, _scan_plan, _revised_plan)
+                extra_findings.append(_update_finding)
+                if sink is not None:
+                    sink.write([_update_finding])
+                if on_finding is not None:
+                    on_finding(_update_finding)
+                _scan_log.info("Plan de escaneo revisado (nueva evidencia):\n%s", render_plan(_revised_profile, _revised_plan))
+                _scan_plan = _revised_plan  # the revised plan is the one in effect from here on
+
             active_passive = await phase(
                 # The core injection scan is exempt from the per-phase timeout: it is already bounded by
                 # per-request timeouts + the overall budget (checked between requests), and a large legit

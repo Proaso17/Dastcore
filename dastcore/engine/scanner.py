@@ -124,7 +124,8 @@ class Scanner:
         # unchanged (identical to before for every caller that doesn't pass a plan).
         self._priority_families = priority_families
         self._priority_set = frozenset(priority_families)  # O(1) membership for the per-rule intensity check
-        self._rules = prioritize_rules(rules, priority_families)
+        self._base_rules = list(rules)  # original order, so a later reprioritize() re-sorts from scratch
+        self._rules = prioritize_rules(self._base_rules, priority_families)
         self._oast = oast
         self._concurrency = max(1, concurrency)
         self._active_checks = active_checks
@@ -147,6 +148,15 @@ class Scanner:
         self._needs_baseline = any(
             check.type == "time_based" for rule in rules if rule.oracle for check in rule.oracle.checks
         ) or any(rule.is_boolean for rule in rules)
+
+    def reprioritize(self, priority_families: tuple[str, ...]) -> None:
+        """Adaptive re-planning: swap in new family priorities before the active scan starts, after recon
+        and enrichment (hidden params, activated endpoints, early findings) revealed more than the first
+        plan saw. Re-orders the rule set (from the original order) and the request-queue / intensity bias.
+        Cheap and safe: the active scan hasn't begun, so nothing in flight is disturbed."""
+        self._priority_families = priority_families
+        self._priority_set = frozenset(priority_families)
+        self._rules = prioritize_rules(self._base_rules, priority_families)
 
     async def _send(self, request: HttpRequest) -> HttpResponse | None:
         try:

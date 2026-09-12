@@ -125,3 +125,25 @@ def test_scanner_orders_its_rules_by_priority_families() -> None:
     rules = [_rule("xss", "xss"), _rule("sqli", "sqli"), _rule("lfi", "lfi")]
     scanner = Scanner(object(), rules, priority_families=("lfi", "sqli"))
     assert [r.family for r in scanner._rules][:2] == ["lfi", "sqli"]  # noqa: SLF001 — asserting the steer
+
+
+def test_scanner_reprioritize_swaps_the_steer_mid_plan() -> None:
+    # Adaptive re-planning: the brain revises priorities before the active scan; reprioritize() re-orders
+    # the rules and updates the intensity set from the ORIGINAL rule order (not the already-sorted one).
+    from dastcore.engine.rule_engine import Rule
+    from dastcore.engine.scanner import Scanner
+    from dastcore.validation.oracles import OracleCheck, OracleSpec
+
+    def _rule(fam: str) -> Rule:
+        return Rule(
+            id=fam, name=fam, family=fam, severity="high", cwe="CWE-0", owasp="T-0",
+            inject_into=["query"], payloads=["x"],
+            oracle=OracleSpec(type="any_of", checks=[OracleCheck(type="response_match", part="body", patterns=["z"])]),
+            remediation="n/a",
+        )
+
+    scanner = Scanner(object(), [_rule("xss"), _rule("sqli"), _rule("lfi")], priority_families=("xss",))
+    assert [r.family for r in scanner._rules][0] == "xss"  # noqa: SLF001
+    scanner.reprioritize(("lfi", "sqli"))  # recon revealed file/id params → revise
+    assert [r.family for r in scanner._rules][:2] == ["lfi", "sqli"]  # noqa: SLF001 — re-ordered from base
+    assert scanner._priority_families == ("lfi", "sqli") and scanner._is_priority("lfi")  # noqa: SLF001
