@@ -4,9 +4,13 @@ These are differential, multi-session checks — the hardest class for scanners 
 get right and the highest-value to find. The signal always comes from *comparing*
 who can reach what:
 
-* **BOLA/IDOR** — the same object-scoped endpoint returns the *same object* to two
-  different users. A correctly-authorized resource is visible only to its owner;
-  identical success across users means object-level authorization is missing.
+* **BOLA/IDOR** — an object-scoped endpoint returns the *same owned record* to two
+  different users. A correctly-authorized resource is visible only to its owner, so a
+  second reader means object-level authorization is missing. Two confirmation paths:
+  (1) identical owned body across identities; (2) the same owned record (matched by a
+  principal id — owner_id/user_id/account_id value or email) reaches ≥2 identities even
+  when the surrounding body differs (per-session chrome), gated on a privacy proof that
+  the object is access-controlled (unauth or another identity is denied 401/403/404).
 * **BFLA** — a lower-privilege identity successfully invokes a privileged
   (admin/management) function.
 * **Missing authentication** — a sensitive endpoint returns success with no
@@ -46,6 +50,48 @@ def _ownership_marker(body: str) -> str | None:
     """The owner-identifying field/value in a response, if any (else None)."""
     match = _OWNERSHIP_MARKERS.search(body)
     return match.group(0) if match else None
+
+
+# A *specific* principal identifier bound to a record: an owner/user/account id whose value is
+# an actual identifier (number, UUID, or email) — not a generic label like "free"/"public". Two
+# sessions returning the SAME such value are looking at the same owned record, regardless of the
+# surrounding response chrome. This is stricter than `_OWNERSHIP_MARKERS` (which only asks "does
+# this look like owned data") because here the value must *match across identities*.
+# Capture an owner/user/account field and its *whole* value token; the value's shape is validated
+# separately (below) so a partial match can never collapse two distinct ids into one signature.
+_OWNER_ID_FIELD = re.compile(
+    r"""["']?(owner_id|owner|user_id|userid|uid|account_id|customer_id)["']?\s*[:=]\s*"""
+    r"""["']?([A-Za-z0-9._%@+-]+)""",
+    re.IGNORECASE,
+)
+# A value that denotes a *specific principal*: a pure integer, a UUID, or an email. Anything else
+# (a label like "free"/"public", a partial token) is rejected — it can't identify a record.
+_UUID_VALUE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_INT_VALUE = re.compile(r"^\d+$")
+_DENIED_STATUSES = {401, 403, 404}
+
+
+def _is_principal_id(value: str) -> bool:
+    return bool(_INT_VALUE.match(value) or _UUID_VALUE.match(value) or _EMAIL.fullmatch(value))
+
+
+def _owner_record_signature(body: str) -> str | None:
+    """A normalized token identifying *whose* record this response carries, or None.
+
+    Prefers an explicit owner/user/account id field whose value is a real principal identifier
+    (integer, UUID, or email); falls back to the first personal email in the body. The token is
+    only meaningful for *matching across sessions*: two identities that both receive the same
+    signature are reading the same principal's record. The value-shape check keeps a partial or
+    generic match from ever collapsing two different owners into one signature.
+    """
+    for match in _OWNER_ID_FIELD.finditer(body):
+        value = match.group(2)
+        if _is_principal_id(value):
+            return f"{match.group(1).lower()}={value.lower()}"
+    email = _EMAIL.search(body)
+    if email is not None:
+        return f"email={email.group(0).lower()}"
+    return None
 
 
 @dataclass
@@ -115,8 +161,26 @@ def _bola_impact(response: HttpResponse, marker: str) -> str:
     )
 
 
-def _bola_finding(request: HttpRequest, response: HttpResponse, identities: list[str], marker: str) -> Finding:
+def _bola_finding(
+    request: HttpRequest,
+    response: HttpResponse,
+    identities: list[str],
+    marker: str,
+    *,
+    confirmation: str | None = None,
+) -> Finding:
     path = urlsplit(request.url).path or "/"
+    detail = (
+        f"identical owned object (contains '{marker}') returned to multiple "
+        f"identities: {', '.join(identities)}"
+    )
+    if confirmation is not None:
+        # Owner-signature match across differing response bodies (session chrome), plus a
+        # privacy proof — the record is provably access-controlled, so a second reader is a leak.
+        detail = (
+            f"same owned record ({marker}) returned to multiple identities "
+            f"({', '.join(identities)}); {confirmation}"
+        )
     return Finding(
         id=f"authz-bola:{request.method}:{path}",
         rule_id="authz-bola",
@@ -128,10 +192,7 @@ def _bola_finding(request: HttpRequest, response: HttpResponse, identities: list
         evidence=[
             Evidence(
                 type="differential",
-                data=(
-                    f"identical owned object (contains '{marker}') returned to multiple "
-                    f"identities: {', '.join(identities)}"
-                ),
+                data=detail,
                 confidence="high",
             )
         ],
@@ -213,21 +274,54 @@ async def run_authz_checks(
         unauth_response = await _send(unauth_client, probe) if unauth_client is not None else None
         unauth_ok = unauth_response is not None and _is_success(unauth_response.status_code)
 
-        # BOLA: an object-scoped endpoint returns the identical object to two different users.
+        # BOLA: an object-scoped endpoint returns the same owned object to two different users.
         if _looks_object_scoped(probe) and len(successful) >= 2:
+            fired = False
+
+            # Path 1 — identical owned body across ≥2 identities. Fire only when the shared body
+            # is *owned data* (has ownership markers); an identical body with no owner identifiers
+            # is likely a public/shared resource, not a broken authorization.
             by_body: dict[str, list[Identity]] = {}
             resp_by_body: dict[str, HttpResponse] = {}
             for identity, response, body in successful:
                 by_body.setdefault(body, []).append(identity)
                 resp_by_body.setdefault(body, response)
             for body, ids in by_body.items():
-                # Fire only when the shared body is *owned data* (has ownership markers).
-                # An identical body with no owner identifiers is likely a public/shared
-                # resource, not a broken authorization — so we don't flag it.
                 marker = _ownership_marker(body)
                 if len(ids) >= 2 and marker is not None:
                     findings.append(_bola_finding(probe, resp_by_body[body], [i.name for i in ids], marker))
+                    fired = True
                     break
+
+            # Path 2 — the same *owned record* reaches ≥2 identities even when the surrounding
+            # bodies differ (per-session chrome: CSRF tokens, "welcome <name>" nav, timestamps).
+            # Group by a specific principal id (owner_id/user_id/account_id value or email) instead
+            # of full-body identity. Gated on a *privacy proof*: the object must be provably
+            # access-controlled — unauthenticated access or at least one identity is denied
+            # (401/403/404) — so a public resource that merely echoes a constant id can't fire.
+            if not fired:
+                access_controlled = (
+                    unauth_response is not None and unauth_response.status_code in _DENIED_STATUSES
+                ) or len(successful) < len(identities)
+                if access_controlled:
+                    by_owner: dict[str, list[tuple[Identity, HttpResponse]]] = {}
+                    for identity, response, _ in successful:
+                        signature = _owner_record_signature(response.text)
+                        if signature is not None:
+                            by_owner.setdefault(signature, []).append((identity, response))
+                    for signature, group in by_owner.items():
+                        if len(group) >= 2:
+                            names = [i.name for i, _ in group]
+                            findings.append(
+                                _bola_finding(
+                                    probe,
+                                    group[0][1],
+                                    names,
+                                    signature,
+                                    confirmation="object is access-controlled (denied to another caller)",
+                                )
+                            )
+                            break
 
         # Missing authentication: a sensitive endpoint succeeds with no credentials at all.
         if unauth_ok and _SENSITIVE_PATH.search(probe.url):

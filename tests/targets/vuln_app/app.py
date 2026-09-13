@@ -319,6 +319,24 @@ def create_app() -> Flask:
         product = _PRODUCTS.get(product_id)
         return jsonify(product) if product else (jsonify({"error": "not found"}), 404)
 
+    _INVOICES = {
+        501: {"id": 501, "owner_id": 1, "email": "alice@corp.com", "amount": 999.99},
+        502: {"id": 502, "owner_id": 2, "email": "bob@corp.com", "amount": 19.99},
+    }
+
+    @app.get("/api/invoices/<int:invoice_id>")
+    def get_invoice(invoice_id: int) -> Response:
+        """Vulnerable BOLA, but the owned record is wrapped in *per-session chrome* (a fresh CSRF
+        token every response) so two users reading the same invoice get non-identical bodies. This
+        defeats a naive identical-body comparison; the leak is only visible by matching the owned
+        record (owner_id/email) across sessions. Unauth → 401 (the object is access-controlled)."""
+        if request.cookies.get("session_user_id") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        invoice = _INVOICES.get(invoice_id)
+        if invoice is None:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"csrf": secrets.token_hex(16), "invoice": invoice})
+
     # --- Phase 3: authenticated areas -------------------------------------------------
     # Server-side session/token validity so tests can simulate an expired session and
     # exercise dastcore's automatic re-login. Not linked from '/', so the unauthenticated

@@ -144,3 +144,44 @@ def test_ownership_marker_distinguishes_owned_from_public() -> None:
     assert _ownership_marker('{"id":1,"owner_id":7,"item":"Laptop"}') == "owner_id"
     assert _ownership_marker('{"name":"jane","email":"jane@example.com"}') is not None
     assert _ownership_marker('{"id":1,"name":"Laptop","price":999.99}') is None  # public product
+
+
+async def test_bola_via_owner_signature_across_session_chrome(vuln_app_url: str) -> None:
+    """/api/invoices/501 wraps the owned record in a per-session CSRF token, so alice's and bob's
+    bodies differ. The identical-body path can't see it; matching the owned record (owner_id/email)
+    across sessions plus the unauth-401 privacy proof confirms the cross-account read."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/invoices/501")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice", "bob"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_authz_checks(identities, probes, unauth_client=unauth)
+
+    bola = [f for f in findings if f.rule_id == "authz-bola"]
+    assert len(bola) == 1
+    assert bola[0].severity == "high"
+    assert "alice" in bola[0].evidence[0].data and "bob" in bola[0].evidence[0].data
+    # confirmed via the owner-signature/privacy-proof path, not identical bodies
+    assert "access-controlled" in bola[0].evidence[0].data
+    assert bola[0].impact is not None
+
+
+async def test_no_bola_on_public_object_even_when_access_controlled(vuln_app_url: str) -> None:
+    """/api/products/1 requires a session (unauth 401 = access-controlled) but carries no owner
+    signature. The privacy proof alone must not fire BOLA on a genuinely public catalog object."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/products/1")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice", "bob"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_authz_checks(identities, probes, unauth_client=unauth)
+
+    assert not any(f.rule_id == "authz-bola" for f in findings)
+
+
+def test_owner_record_signature_requires_a_real_identifier() -> None:
+    from dastcore.detectors.authz import _owner_record_signature
+
+    assert _owner_record_signature('{"csrf":"ab","invoice":{"owner_id": 1}}') == "owner_id=1"
+    uuid = "7f3a1b2c-0000-1111-2222-333344445555"
+    assert _owner_record_signature(f'{{"user_id":"{uuid}"}}') == f"user_id={uuid}"
+    assert _owner_record_signature('{"account":"free","tier":"public"}') is None  # label, not an id
+    assert _owner_record_signature('{"contact":"jane@example.com"}') == "email=jane@example.com"
