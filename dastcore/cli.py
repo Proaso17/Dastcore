@@ -46,6 +46,7 @@ from dastcore.analysis.planner import (
     area_scan_order,
     classify_request_area,
     order_hosts,
+    order_requests_by_area,
     plan_recon,
     plan_scan,
     render_plan,
@@ -2138,7 +2139,10 @@ async def _run_scan(
                 for req in activated:
                     discovered.setdefault(req.signature(), req)
 
-            all_requests = list(discovered.values())
+            # Order the whole surface by functional-area priority so every dedicated detector below works
+            # the high-value zones (auth/API/admin/objects) first — focus under a budget, full coverage
+            # otherwise. The active scan re-partitions by area itself, so its input order is irrelevant.
+            all_requests = order_requests_by_area(list(discovered.values()))
             extra_findings.extend(await phase("shellshock", check_shellshock(client, all_requests)))
             extra_findings.extend(await phase("nosql", run_nosql_checks(client, all_requests)))
             extra_findings.extend(await phase("mass-assignment", run_mass_assignment_checks(client, all_requests)))

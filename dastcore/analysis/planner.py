@@ -446,6 +446,15 @@ def area_scan_order(name: str) -> int:
     return _REQUEST_AREA_ORDER.index(name) if name in _REQUEST_AREA_ORDER else len(_REQUEST_AREA_ORDER)
 
 
+def order_requests_by_area(requests: list) -> list:  # list[HttpRequest]; duck-typed to avoid an import cycle
+    """Order requests by their functional area's pentester priority (auth/API/admin/objects before the
+    marketing surface), stable within an area. Feeding this to the dedicated-detector phases makes each
+    detector work the high-value zones FIRST — so a --time-budget is spent where the impact is — while
+    dropping nothing: with budget to spare, the whole surface is still covered (zero coverage loss, unlike
+    hard per-detector restriction, which a misclassification would turn into a false negative)."""
+    return sorted(requests, key=lambda r: area_scan_order(classify_request_area(r)[0]))
+
+
 def plan_recon(profile: TargetProfile) -> ReconPlan:
     """Decide HOW to reconnoitre this target from what it appears to be — the reconnaissance half of the
     brain. Deterministic: picks the discovery techniques that fit the stack, the high-signal paths to

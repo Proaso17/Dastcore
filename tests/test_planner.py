@@ -7,6 +7,7 @@ from dastcore.analysis.planner import (
     TargetProfile,
     area_scan_order,
     classify_request_area,
+    order_requests_by_area,
     plan_areas,
     plan_hosts,
     plan_recon,
@@ -282,3 +283,16 @@ def test_area_scan_order_puts_high_value_zones_first() -> None:
     assert area_scan_order("Autenticación") < area_scan_order("Web")
     assert area_scan_order("API") < area_scan_order("Búsqueda")
     assert area_scan_order("desconocida") >= area_scan_order("Web")  # unknown areas go last
+
+
+def test_order_requests_by_area_focuses_high_value_without_dropping_any() -> None:
+    reqs = [
+        _req("https://t/about"),                       # Web (last)
+        _req("https://t/api/v1/items"),                # API
+        _req("https://t/login"),                       # Autenticación (first)
+        _req("https://t/blog/post-1"),                 # Web
+    ]
+    ordered = order_requests_by_area(reqs)
+    assert [r.url for r in ordered][:2] == ["https://t/login", "https://t/api/v1/items"]  # high-value first
+    assert len(ordered) == len(reqs)                   # nothing dropped — full coverage preserved
+    assert ordered[-1].url == "https://t/blog/post-1"  # stable within the Web area (about before blog)
