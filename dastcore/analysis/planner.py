@@ -37,6 +37,7 @@ class TargetProfile:
     frameworks: frozenset[str] = frozenset()    # specific frameworks: nextjs/laravel/rails/django/flask/spring/express/aspnet
     auth_kind: str = ""                         # "jwt" | "session" | "oauth" | "basic" | ""
     param_names: frozenset[str] = frozenset()   # every parameter name recon actually observed — real injectable surface
+    paths: frozenset[str] = frozenset()         # distinct URL paths observed — the basis for functional-area mapping
     endpoint_count: int = 0                     # size of the discovered surface
     has_file_upload: bool = False               # an upload endpoint/param was seen
     exposed_secrets: bool = False               # secrets/keys found in the JS bundle
@@ -65,6 +66,34 @@ class HostPlan:
 
 
 @dataclass
+class AreaPlan:
+    """A functional AREA of the application and how to work it — the way a pentester maps a target into
+    zones (auth, API, admin, objects/IDOR, uploads, search, commerce, content) and then focuses each zone
+    on the bug classes it tends to hide, rather than spraying the whole app uniformly."""
+
+    name: str                       # "Autenticación", "API", "Administración", "Subida de ficheros", …
+    families: tuple[str, ...]       # the vuln classes to focus on in this area
+    signals: tuple[str, ...]        # the evidence that revealed the area (flags/paths/params)
+    recon_paths: tuple[str, ...]    # high-signal paths to probe for this area
+    why: str                        # how a pentester works the area (the techniques)
+
+
+@dataclass
+class ReconPlan:
+    """How the brain decides to RECONNOITRE this target — the reconnaissance half of the decision, made
+    from what the target appears to be. Which discovery techniques are worth it, the high-signal paths to
+    probe for this stack, and how deep to go — so recon effort lands where the surface actually is."""
+
+    use_headless: bool = False            # client-rendered → render with the browser to see the real surface
+    extract_js_endpoints: bool = False    # SPA / JS-heavy → mine API endpoints (and secrets) from JS bundles
+    discover_api_schemas: bool = False    # API-shaped → hunt OpenAPI/GraphQL schemas and ingest them
+    mine_params: bool = False             # thin observed surface → mine hidden parameters (Arjun-style)
+    probe_paths: tuple[str, ...] = ()     # stack-specific high-signal paths (/actuator, /.env, /wp-json…)
+    depth: str = "standard"               # "light" | "standard" | "aggressive" — crawl/dirbust effort
+    reasoning: list[str] = field(default_factory=list)  # the visible "thinking" behind each recon choice
+
+
+@dataclass
 class ScanPlan:
     items: list[PlanItem] = field(default_factory=list)
     priority_families: tuple[str, ...] = ()     # ranked by confidence score, highest first
@@ -75,6 +104,8 @@ class ScanPlan:
     family_scores: dict[str, float] = field(default_factory=dict)  # the per-family confidence (transparency)
     reasoning: list[str] = field(default_factory=list)             # the visible "thinking": why each family ranks
     host_plans: list[HostPlan] = field(default_factory=list)       # per-host strategy when the surface spans roles
+    areas: list[AreaPlan] = field(default_factory=list)            # functional-area map (pentester decomposition)
+    recon: ReconPlan = field(default_factory=ReconPlan)            # the reconnaissance strategy (see plan_recon)
 
 
 # Language → the vuln families it most exposes (a pentester's priors). Order within a tuple is the prior
@@ -114,6 +145,30 @@ _FRAMEWORK_NOTE: dict[str, str] = {
 }
 _FRAMEWORK_BASE = 3.0  # a detected framework is strong evidence — slightly under a full language stack
 
+# High-signal paths to probe per stack during recon — the ones a pentester checks first because they
+# leak config/source/admin or expose a known-CVE endpoint. Far better signal than a generic wordlist.
+_FRAMEWORK_RECON_PATHS: dict[str, tuple[str, ...]] = {
+    "nextjs": ("/_next/image?url=/", "/api/", "/_next/static/"),
+    "laravel": ("/.env", "/telescope", "/_ignition/execute-solution", "/storage/logs/laravel.log"),
+    "symfony": ("/_profiler", "/app_dev.php", "/_fragment"),
+    "rails": ("/rails/info/routes", "/rails/info/properties"),
+    "django": ("/admin/", "/static/", "/__debug__/"),
+    "flask": ("/console", "/static/"),
+    "spring": ("/actuator", "/actuator/env", "/actuator/heapdump", "/actuator/gateway/routes"),
+    "express": ("/api/", "/status", "/debug"),
+    "aspnet": ("/trace.axd", "/elmah.axd", "/Telerik.Web.UI.WebResource.axd"),
+}
+_CMS_RECON_PATHS: dict[str, tuple[str, ...]] = {
+    "wordpress": ("/wp-json/wp/v2/users", "/xmlrpc.php", "/wp-login.php", "/wp-content/debug.log"),
+    "drupal": ("/user/login", "/CHANGELOG.txt", "/sites/default/files/"),
+    "joomla": ("/administrator/", "/configuration.php-dist"),
+}
+_API_RECON_PATHS: dict[str, tuple[str, ...]] = {
+    "rest": ("/openapi.json", "/swagger.json", "/swagger/v1/swagger.json", "/api-docs", "/v2/api-docs"),
+    "graphql": ("/graphql", "/graphiql", "/v1/graphql", "/api/graphql"),
+}
+_SUPABASE_RECON_PATHS = ("/rest/v1/", "/graphql/v1", "/auth/v1/settings")
+
 # Parameter-name evidence → families. Observing a real param is stronger than a generic stack prior, so
 # these votes meaningfully reorder the ranking. Each distinct matching name votes once; capped per family.
 _PARAM_SIGNALS: list[tuple[re.Pattern[str], tuple[tuple[str, float], ...]]] = [
@@ -135,6 +190,25 @@ _PARAM_SIGNALS: list[tuple[re.Pattern[str], tuple[tuple[str, float], ...]]] = [
      (("upload", 1.0),)),
 ]
 _PARAM_CAP = 4.0  # a single family can gain at most this much from parameter names (a huge API can't swamp)
+
+# Observed URL paths are evidence too: an app that exposes /admin, /upload or /checkout tells you where its
+# sensitive functions live. Each distinct matching path votes once (capped), like parameter names.
+_PATH_SIGNALS: list[tuple[re.Pattern[str], tuple[tuple[str, float], ...]]] = [
+    (re.compile(r"/(admin|administrator|dashboard|manage|management|console|backoffice|wp-admin)(/|$)", re.I),
+     (("authz", 1.5),)),
+    (re.compile(r"/(api|v\d+|graphql|graphiql|rest)(/|$)", re.I), (("authz", 1.2), ("mass_assignment", 0.8))),
+    (re.compile(r"/(login|signin|register|signup|password|passwd|reset|forgot|sso|oauth|oidc|auth|token|mfa|otp)", re.I),
+     (("weak-creds", 1.2), ("jwt", 0.5))),
+    (re.compile(r"/(upload|uploads|media|files?|attachments?|import)(/|$)", re.I), (("upload", 1.2),)),
+    (re.compile(r"/(search|query|find|lookup|autocomplete)(/|$)", re.I), (("sqli", 0.8), ("xss", 0.6))),
+    (re.compile(r"/(users?|accounts?|profiles?|orders?|objects?|items?|documents?|invoices?)(/|$)", re.I),
+     (("authz", 1.2),)),
+    (re.compile(r"/(cart|checkout|payment|pay|billing|invoice|coupon|discount|subscription)(/|$)", re.I),
+     (("authz", 1.0),)),
+    (re.compile(r"/(redirect|redir|goto|out|away|return|url|link|continue)(/|$)", re.I),
+     (("open_redirect", 1.0), ("ssrf", 0.5))),
+]
+_PATH_CAP = 3.0  # a family can gain at most this much from observed paths (bounded like parameter names)
 
 _AUTH_KIND_FAMILY: dict[str, tuple[str, float, str]] = {
     "jwt": ("jwt", 3.0, "token JWT: prueba alg=none, confusión de algoritmo, kid/jwk injection, secreto débil"),
@@ -204,6 +278,182 @@ def plan_hosts(hosts: tuple[str, ...], global_families: tuple[str, ...] = ()) ->
         blended = tuple(dict.fromkeys([*families, *global_families]))[:6]
         plans.append(HostPlan(host=bare, role=role, families=blended, why=why))
     return plans
+
+
+# Functional-area detection: a pentester maps the app into zones, then focuses each on its likely bugs.
+# Each area is revealed by any of: a profile flag, an observed PATH, or an observed PARAM name.
+_AREA_AUTH_PATH = re.compile(r"/(login|signin|sign-in|register|signup|sign-up|password|passwd|reset|forgot|"
+                             r"sso|saml|oauth|oidc|auth|token|session|mfa|2fa|otp)", re.I)
+_AREA_OAUTH = re.compile(r"/(oauth|oidc|authorize|\.well-known)", re.I)
+_AREA_API_PATH = re.compile(r"/(api|v\d+|graphql|graphiql|rest|swagger|openapi)(/|$)", re.I)
+_AREA_ADMIN_PATH = re.compile(r"/(admin|administrator|dashboard|manage|management|console|backoffice|wp-admin)(/|$)", re.I)
+_AREA_OBJ_PATH = re.compile(r"/(users?|accounts?|profiles?|orders?|objects?|items?|documents?|invoices?)(/|$)", re.I)
+_AREA_OBJ_PARAM = re.compile(r"(?:^|[_\-.])(id|uid|user|account|acct|owner|object|profile|order|customer)(?:$|[_\-.])", re.I)
+_AREA_UPLOAD_PATH = re.compile(r"/(upload|uploads|media|files?|attachments?|import)(/|$)", re.I)
+_AREA_UPLOAD_PARAM = re.compile(r"(?:^|[_\-.])(upload|file|attachment|avatar|photo|image|document)", re.I)
+_AREA_SEARCH_PATH = re.compile(r"/(search|query|find|lookup|autocomplete)(/|$)", re.I)
+_AREA_SEARCH_PARAM = re.compile(r"(?:^|[_\-.])(q|query|search|keyword|kw|term|filter|sort)(?:$|[_\-.])", re.I)
+_AREA_COMMERCE_PATH = re.compile(r"/(cart|checkout|payment|pay|billing|invoice|coupon|discount|subscription)(/|$)", re.I)
+_AREA_COMMERCE_PARAM = re.compile(r"(?:^|[_\-.])(price|amount|qty|quantity|total|coupon|discount|voucher|promo)", re.I)
+
+
+def plan_areas(profile: TargetProfile) -> list[AreaPlan]:
+    """Map the target into functional AREAS and give each its focus — a pentester's decomposition.
+
+    An area is revealed by a profile flag, an observed path, or an observed parameter; each carries the
+    vuln classes and techniques that area tends to hide, plus the high-signal paths to probe there. The
+    areas are returned in the order a pentester would prioritise them (auth/API/admin before marketing)."""
+    paths, params = profile.paths, profile.param_names
+
+    def has_path(rx: re.Pattern[str]) -> bool:
+        return any(rx.search(p) for p in paths)
+
+    def has_param(rx: re.Pattern[str]) -> bool:
+        return any(rx.search(n) for n in params)
+
+    areas: list[AreaPlan] = []
+
+    # 1) Authentication & identity — where account takeover lives.
+    auth_sig = [s for s, on in (("panel de login", profile.has_login),
+                                (f"auth {profile.auth_kind}", bool(profile.auth_kind)),
+                                ("rutas de login/registro/reset", has_path(_AREA_AUTH_PATH))) if on]
+    if auth_sig:
+        oauth = profile.auth_kind == "oauth" or has_path(_AREA_OAUTH)
+        areas.append(AreaPlan(
+            "Autenticación e identidad",
+            ("weak-creds", "jwt", "session", *(("oauth",) if oauth else ())), tuple(auth_sig),
+            ("/login", "/register", "/password/reset", "/.well-known/openid-configuration", "/oauth/authorize"),
+            "credenciales débiles/por defecto, forja y confusión de JWT (alg=none, kid/jwk), session fixation, "
+            "reset poisoning y, con OAuth, redirect_uri abierto + CSRF de state"))
+
+    # 2) API — authorization is the crown jewel.
+    api_sig = [s for s, on in ((f"API {profile.api_kind}", profile.api_kind != "none"),
+                               ("rutas /api//graphql", has_path(_AREA_API_PATH))) if on]
+    if api_sig:
+        fams = ("authz", "mass_assignment", "nosqli") + (("graphql",) if profile.api_kind == "graphql" else ("sqli",))
+        areas.append(AreaPlan(
+            "API", fams, tuple(api_sig),
+            ("/openapi.json", "/swagger.json", "/graphql", "/api-docs"),
+            "BOLA/BFLA/IDOR por objeto y función, mass assignment, introspección/batching en GraphQL; "
+            "enumera IDs de objeto entre cuentas y prueba verbos/flags no documentados"))
+
+    # 3) Administration / management — privilege escalation.
+    if has_path(_AREA_ADMIN_PATH):
+        areas.append(AreaPlan(
+            "Administración", ("authz", "weak-creds", "csrf"), ("rutas /admin//dashboard",),
+            ("/admin", "/admin/login", "/dashboard"),
+            "escalada a nivel de función (BFLA) desde un rol bajo, credenciales por defecto del panel, "
+            "y CSRF en las acciones que cambian estado"))
+
+    # 4) User/object management — the IDOR heartland.
+    obj_sig = [s for s, on in (("rutas /users//orders", has_path(_AREA_OBJ_PATH)),
+                               ("params id/user/owner", has_param(_AREA_OBJ_PARAM))) if on]
+    if obj_sig:
+        areas.append(AreaPlan(
+            "Gestión de objetos (IDOR/BOLA)", ("authz",), tuple(obj_sig), (),
+            "enumera identificadores de objeto y prueba el acceso cross-account (BOLA/IDOR) con 2 identidades; "
+            "incluye verbos de escritura (PUT/PATCH/DELETE), no solo lectura"))
+
+    # 5) File upload / media — the RCE/stored-XSS door.
+    up_sig = [s for s, on in (("endpoint de subida", profile.has_file_upload),
+                              ("rutas /upload//media", has_path(_AREA_UPLOAD_PATH)),
+                              ("params file/avatar", has_param(_AREA_UPLOAD_PARAM))) if on]
+    if up_sig:
+        areas.append(AreaPlan(
+            "Subida de ficheros / media", ("upload", "lfi", "xss"), tuple(up_sig), ("/upload", "/media"),
+            "extensiones/MIME ejecutables, doble extensión y null-byte, path traversal en el nombre, "
+            "XSS almacenado en metadatos, y SSRF si acepta una URL de importación"))
+
+    # 6) Search / query — reflected injection.
+    se_sig = [s for s, on in (("rutas /search", has_path(_AREA_SEARCH_PATH)),
+                              ("params q/search/filter", has_param(_AREA_SEARCH_PARAM))) if on]
+    if se_sig:
+        areas.append(AreaPlan(
+            "Búsqueda / consulta", ("sqli", "nosqli", "xss"), tuple(se_sig), ("/search",),
+            "inyección en el término de búsqueda (SQLi/NoSQLi) y XSS reflejado en la página de resultados"))
+
+    # 7) Commerce / payment — business-logic abuse.
+    co_sig = [s for s, on in (("rutas /cart//checkout", has_path(_AREA_COMMERCE_PATH)),
+                              ("params price/qty/coupon", has_param(_AREA_COMMERCE_PARAM))) if on]
+    if co_sig:
+        areas.append(AreaPlan(
+            "Comercio / pagos", ("authz", "logic", "race"), tuple(co_sig),
+            ("/cart", "/checkout", "/api/orders"),
+            "manipulación de precio/cantidad (negativos, decimales), abuso/reutilización de cupones, "
+            "condiciones de carrera en checkout/cupón, e IDOR en pedidos/facturas de otras cuentas"))
+
+    # 8) Content / CMS — version → CVE.
+    if profile.cms:
+        areas.append(AreaPlan(
+            f"Contenido / CMS ({profile.cms})", ("rce", "sqli", "xss"), (f"CMS {profile.cms}",),
+            (),  # the CMS recon paths come from plan_recon's _CMS_RECON_PATHS
+            "mapea versión→CVE, plugins/temas vulnerables, xmlrpc/pingback, y enumeración de usuarios"))
+
+    # 9) Fallback: a plain content/marketing surface with nothing distinctive — the classic client-side bugs.
+    if not areas and paths:
+        areas.append(AreaPlan(
+            "Contenido / marketing", ("xss", "open_redirect"), ("sin un área funcional marcada",), (),
+            "XSS reflejado y open redirect en los parámetros de navegación/enlaces del sitio"))
+
+    return areas
+
+
+def plan_recon(profile: TargetProfile) -> ReconPlan:
+    """Decide HOW to reconnoitre this target from what it appears to be — the reconnaissance half of the
+    brain. Deterministic: picks the discovery techniques that fit the stack, the high-signal paths to
+    probe, and the crawl depth, each with a cited reason. Steers recon effort to where the surface is."""
+    recon = ReconPlan()
+    why = recon.reasoning
+    paths: list[str] = []
+
+    # Client-rendered apps hide their real surface behind JS — render it and mine the bundles.
+    if profile.is_spa or "nextjs" in profile.frameworks:
+        recon.use_headless = True
+        recon.extract_js_endpoints = True
+        why.append("SPA/cliente: renderiza con navegador headless y extrae endpoints (y secretos) del bundle JS")
+    elif profile.exposed_secrets or "express" in profile.frameworks:
+        recon.extract_js_endpoints = True
+        why.append("JS con secretos/endpoints: mina los bundles (.map) para ampliar la superficie")
+
+    # API-shaped → go find the schema; it is the fastest path to the real endpoint list.
+    if profile.api_kind in ("rest", "graphql"):
+        recon.discover_api_schemas = True
+        paths += _API_RECON_PATHS.get(profile.api_kind, ())
+        why.append(f"API {profile.api_kind}: busca el esquema (OpenAPI/GraphQL) e ingiere sus endpoints")
+
+    # Framework / CMS / backend → probe the paths that stack is known to leak.
+    for fw in sorted(profile.frameworks):
+        fw_paths = _FRAMEWORK_RECON_PATHS.get(fw)
+        if fw_paths:
+            paths += fw_paths
+            why.append(f"framework {fw}: sondea {', '.join(fw_paths[:3])}… (config/fuente/CVE conocido)")
+    cms_paths = _CMS_RECON_PATHS.get(profile.cms)
+    if cms_paths:
+        paths += cms_paths
+        why.append(f"CMS {profile.cms}: sondea {', '.join(cms_paths[:3])}…")
+    if profile.backend == "supabase":
+        recon.discover_api_schemas = True
+        paths += _SUPABASE_RECON_PATHS
+        why.append("backend Supabase: mina tablas del bundle y sondea /rest/v1 y /graphql/v1")
+
+    # A thin observed surface on an app that clearly takes input → mine hidden parameters.
+    if profile.api_kind in ("rest", "graphql") or (
+        profile.endpoint_count >= 5 and len(profile.param_names) < profile.endpoint_count
+    ):
+        recon.mine_params = True
+        why.append("superficie de parámetros fina frente al nº de endpoints: mina parámetros ocultos (Arjun)")
+
+    # Depth from the size of the surface (a wildcard/many hosts or a large app warrants a deeper sweep).
+    distinct_hosts = len({_host_of(h) for h in profile.hosts})
+    if distinct_hosts >= 5 or profile.endpoint_count >= 50:
+        recon.depth = "aggressive"
+        why.append(f"superficie grande ({distinct_hosts} host(s), {profile.endpoint_count} endpoints): recon profundo")
+    elif distinct_hosts <= 1 and profile.endpoint_count and profile.endpoint_count < 10:
+        recon.depth = "light"
+        why.append("superficie pequeña: recon ligero para no gastar presupuesto en descubrimiento")
+
+    recon.probe_paths = tuple(dict.fromkeys(paths))  # de-dup, keep order
+    return recon
 
 
 def plan_scan(profile: TargetProfile) -> ScanPlan:
@@ -314,6 +564,19 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
         sample = ", ".join(sorted(param_hits[fam])[:3])
         bump(fam, round(gain, 3), f"params observados ({sample})")
 
+    # Observed paths: where the sensitive functions live (/admin, /upload, /checkout…) is evidence too.
+    path_gain: dict[str, float] = {}
+    path_hits: dict[str, set[str]] = {}
+    for path in sorted(profile.paths):
+        for pattern, votes in _PATH_SIGNALS:
+            if pattern.search(path):
+                for fam, weight in votes:
+                    path_gain[fam] = min(path_gain.get(fam, 0.0) + weight, _PATH_CAP)
+                    path_hits.setdefault(fam, set()).add(path)
+    for fam, gain in path_gain.items():
+        sample = ", ".join(sorted(path_hits[fam])[:3])
+        bump(fam, round(gain, 3), f"rutas observadas ({sample})")
+
     if profile.has_file_upload:
         bump("upload", 3.0, "endpoint/campo de subida de ficheros")
         add("Subida de ficheros", ("upload",),
@@ -362,6 +625,16 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
     distinct_hosts = {_host_of(h) for h in profile.hosts}
     if len(distinct_hosts) > 1 or any(_JUICY_HOST.search(h) for h in distinct_hosts):
         plan.host_plans = plan_hosts(profile.hosts, plan.priority_families)
+    # Functional-area map (pentester decomposition): the app broken into zones, each with its focus.
+    plan.areas = plan_areas(profile)
+    # The reconnaissance half of the plan: how to discover this target's surface, not just how to attack it.
+    plan.recon = plan_recon(profile)
+    # Each area contributes its high-signal paths to the recon — the brain probes where each zone lives.
+    if plan.areas:
+        merged = list(plan.recon.probe_paths)
+        for area in plan.areas:
+            merged.extend(area.recon_paths)
+        plan.recon.probe_paths = tuple(dict.fromkeys(merged))
     return plan
 
 
@@ -410,5 +683,23 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
         lines.append("Plan por host (rol → familias):")
         for hp in plan.host_plans[:8]:
             lines.append(f"  · {hp.host} [{hp.role}]: {', '.join(hp.families)} — {hp.why}")
+    if plan.areas:
+        lines.append("Áreas (mapa del pentester → foco por zona):")
+        for area in plan.areas:
+            lines.append(f"  ▸ {area.name}: {', '.join(area.families)} — {area.why}")
+    recon = plan.recon
+    techniques = [
+        name for flag, name in (
+            (recon.use_headless, "headless"), (recon.extract_js_endpoints, "JS-endpoints"),
+            (recon.discover_api_schemas, "esquemas API"), (recon.mine_params, "params ocultos"),
+        ) if flag
+    ]
+    if techniques or recon.probe_paths or recon.reasoning:
+        lines.append(f"Reconocimiento (profundidad {recon.depth}): " + (", ".join(techniques) or "crawl base") + ".")
+        if recon.probe_paths:
+            shown = ", ".join(recon.probe_paths[:8])
+            lines.append("  rutas de alto valor: " + shown + (" …" if len(recon.probe_paths) > 8 else ""))
+        for line in recon.reasoning:
+            lines.append(f"  · {line}")
     lines.extend(f"  ⚠ {note}" for note in plan.notes)
     return "\n".join(lines)

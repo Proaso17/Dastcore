@@ -3,7 +3,14 @@ Deterministic expert heuristics, so every mapping is pinned down here."""
 
 from __future__ import annotations
 
-from dastcore.analysis.planner import TargetProfile, plan_hosts, plan_scan, render_plan
+from dastcore.analysis.planner import (
+    TargetProfile,
+    plan_areas,
+    plan_hosts,
+    plan_recon,
+    plan_scan,
+    render_plan,
+)
 
 
 def _families(profile: TargetProfile) -> tuple[str, ...]:
@@ -157,3 +164,87 @@ def test_render_shows_the_per_host_plan() -> None:
     profile = TargetProfile(hosts=("admin.acme.com", "api.acme.com"))
     text = render_plan(profile, plan_scan(profile))
     assert "Plan por host" in text and "[admin]" in text and "[api]" in text
+
+
+# --- reconnaissance planning (the brain decides HOW to recon, not just how to attack) ---------------
+
+
+def test_recon_spa_uses_headless_and_mines_js() -> None:
+    recon = plan_recon(TargetProfile(is_spa=True))
+    assert recon.use_headless and recon.extract_js_endpoints
+
+
+def test_recon_api_hunts_schema_and_mines_params() -> None:
+    recon = plan_recon(TargetProfile(api_kind="rest"))
+    assert recon.discover_api_schemas and recon.mine_params
+    assert any("openapi" in p or "swagger" in p for p in recon.probe_paths)
+
+
+def test_recon_graphql_probes_graphql_endpoints() -> None:
+    recon = plan_recon(TargetProfile(api_kind="graphql"))
+    assert recon.discover_api_schemas and "/graphql" in recon.probe_paths
+
+
+def test_recon_framework_and_cms_probe_high_signal_paths() -> None:
+    assert "/actuator" in plan_recon(TargetProfile(frameworks=frozenset({"spring"}))).probe_paths
+    assert "/.env" in plan_recon(TargetProfile(frameworks=frozenset({"laravel"}))).probe_paths
+    assert "/wp-json/wp/v2/users" in plan_recon(TargetProfile(cms="wordpress")).probe_paths
+
+
+def test_recon_depth_scales_with_surface() -> None:
+    big = plan_recon(TargetProfile(hosts=tuple(f"h{i}.acme.com" for i in range(6)), endpoint_count=80))
+    small = plan_recon(TargetProfile(hosts=("only.acme.com",), endpoint_count=3))
+    assert big.depth == "aggressive" and small.depth == "light"
+
+
+def test_plan_scan_attaches_recon_and_render_shows_it() -> None:
+    profile = TargetProfile(is_spa=True, frameworks=frozenset({"spring"}), api_kind="rest")
+    plan = plan_scan(profile)
+    assert plan.recon.use_headless and plan.recon.discover_api_schemas and plan.recon.probe_paths
+    text = render_plan(profile, plan)
+    assert "Reconocimiento" in text and "rutas de alto valor" in text
+
+
+# --- functional-area mapping (recon like a pentester: zones, then focus each) -----------------------
+
+
+def test_plan_areas_maps_the_functional_zones() -> None:
+    profile = TargetProfile(
+        has_login=True, api_kind="rest", has_file_upload=True,
+        paths=frozenset({"/admin/users", "/search", "/checkout", "/orders/1"}),
+        param_names=frozenset({"id"}),
+    )
+    names = [a.name for a in plan_areas(profile)]
+    assert any("Autenticación" in n for n in names)
+    assert "API" in names
+    assert any("Administración" in n for n in names)
+    assert any("Subida" in n for n in names)
+    assert any("Búsqueda" in n for n in names)
+    assert any("Comercio" in n for n in names)
+    assert any("IDOR" in n for n in names)  # params id / /orders → object area
+
+
+def test_plan_areas_auth_includes_oauth_when_seen() -> None:
+    area = next(a for a in plan_areas(TargetProfile(auth_kind="oauth")) if "Autenticación" in a.name)
+    assert "oauth" in area.families
+
+
+def test_plan_areas_fallback_is_marketing() -> None:
+    areas = plan_areas(TargetProfile(paths=frozenset({"/about", "/contact"})))
+    assert len(areas) == 1 and areas[0].families == ("xss", "open_redirect")
+
+
+def test_observed_paths_steer_the_attack_families() -> None:
+    # No params/flags — only observed paths. /admin → authz, /upload → upload must still rank.
+    plan = plan_scan(TargetProfile(paths=frozenset({"/admin/settings", "/upload/avatar"})))
+    assert "authz" in plan.priority_families and "upload" in plan.priority_families
+    assert plan.family_scores["authz"] > 0 and plan.family_scores["upload"] > 0
+
+
+def test_areas_feed_recon_paths_and_render() -> None:
+    profile = TargetProfile(has_login=True, api_kind="rest", cms="wordpress")
+    plan = plan_scan(profile)
+    assert plan.areas                                  # the app was mapped into zones
+    assert "/login" in plan.recon.probe_paths          # the auth area's paths merged into recon
+    text = render_plan(profile, plan)
+    assert "Áreas" in text and "Autenticación" in text
