@@ -126,7 +126,7 @@ from dastcore.discovery.openapi import fetch_and_parse_openapi
 from dastcore.discovery.osint import bucket_findings, check_buckets, github_code_search, github_findings
 from dastcore.discovery.params import load_param_wordlist, mine_hidden_params
 from dastcore.discovery.ports import discover_http_ports
-from dastcore.discovery.recon_paths import ReconPathDiscoverer
+from dastcore.discovery.recon_paths import ReconPathDiscoverer, probe_planned_paths
 from dastcore.discovery.subdomains import (
     SubdomainDiscoverer,
     load_subdomain_wordlist,
@@ -958,10 +958,14 @@ def _build_target_profile(
     hosts = tuple(dict.fromkeys(urlsplit(r).hostname or r for r in scan_roots))
     # The real injectable surface: every parameter name recon actually observed across the discovered requests.
     param_names: set[str] = set()
+    paths: set[str] = set()
     for req in discovered.values():
         param_names |= set(req.params) | set(req.data or {})
         if isinstance(req.json_body, dict):
             param_names |= {str(k) for k in req.json_body}
+        p = urlsplit(req.url).path
+        if p and p != "/":
+            paths.add(p)
     # Security posture from the header hardening: 3+ missing security headers = lax, some = mixed, none = hardened.
     posture = "lax" if len(missing_headers) >= 3 else "mixed" if missing_headers else "hardened"
     return TargetProfile(
@@ -969,7 +973,7 @@ def _build_target_profile(
         has_login=auth.type in ("form", "oauth2", "oauth2_pkce") or _has_login_signal(discovered),
         api_kind=api_kind, backend="supabase" if supabase else "none", waf=waf, hosts=hosts,
         frameworks=frozenset(frameworks), auth_kind=_observed_auth_kind(auth, extra_findings),
-        param_names=frozenset(param_names), endpoint_count=len(discovered),
+        param_names=frozenset(param_names), paths=frozenset(sorted(paths)[:400]), endpoint_count=len(discovered),
         has_file_upload=any(_UPLOAD_PARAM.search(n) for n in param_names),
         exposed_secrets=exposed_secrets, security_posture=posture, waf_vendor=waf_vendor,
     )
@@ -1979,6 +1983,18 @@ async def _run_scan(
             if on_finding is not None:
                 on_finding(_plan_finding)
             _scan_log.info("Plan de escaneo adaptativo:\n%s", render_plan(_target_profile, _scan_plan))
+
+            # The reconnaissance brain closes the loop: probe the stack-specific high-signal paths the plan
+            # chose (/actuator, /.env, /wp-json…) and feed the live ones into the surface, so they get
+            # param-mined and scanned like any other endpoint — even on a plain scan that didn't ask for
+            # content discovery. Scope-gated, bounded, best-effort.
+            if _scan_plan.recon.probe_paths:
+                planned = await phase(
+                    "recon-planned-paths", probe_planned_paths(client, scan_roots, _scan_plan.recon.probe_paths)
+                )
+                for req in planned:
+                    discovered.setdefault(req.signature(), req)
+
             if config.auth.type == "bearer" and config.auth.bearer_token and looks_like_jwt(config.auth.bearer_token):
                 jwt = config.auth.bearer_token
                 extra_findings.extend(await phase("jwt-none", check_jwt_none_acceptance(client, target, jwt)))

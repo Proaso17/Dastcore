@@ -6,7 +6,12 @@ import json
 from types import SimpleNamespace
 
 from dastcore.discovery.js_endpoints import extract_from_sourcemap, harvest_sourcemaps
-from dastcore.discovery.recon_paths import ReconPathDiscoverer, parse_robots, parse_sitemap
+from dastcore.discovery.recon_paths import (
+    ReconPathDiscoverer,
+    parse_robots,
+    parse_sitemap,
+    probe_planned_paths,
+)
 
 
 class _FakeClient:
@@ -19,8 +24,9 @@ class _FakeClient:
         return True
 
     async def get(self, url: str, timeout: float = 6.0, retries: int = 0):
+        base = url.split("?", 1)[0]  # match on the path, ignoring any query string
         for suffix, (status, text) in self.routes.items():
-            if url.endswith(suffix):
+            if base.endswith(suffix):
                 return SimpleNamespace(status_code=status, text=text)
         return SimpleNamespace(status_code=404, text="")
 
@@ -80,3 +86,36 @@ async def test_harvest_sourcemaps_builds_scoped_requests() -> None:
     client = _FakeClient({"/app.js.map": (200, smap)})
     reqs = await harvest_sourcemaps(client, "https://x.test/", ["https://x.test/app.js"])
     assert any("/api/hidden" in r.url for r in reqs)
+
+
+# --- the recon brain closing the loop: probing the planner's high-signal paths --------------------
+
+
+async def test_probe_planned_paths_keeps_live_drops_404_and_parses_query() -> None:
+    routes = {
+        "/actuator/env": (200, "{}"),                    # exists → keep
+        "/.env": (403, "forbidden"),                     # protected but exists → keep
+        "/wp-json/wp/v2/users": (404, ""),               # not here → drop
+        "/_next/image": (200, "img"),                    # exists, and carries a query param
+    }
+    reqs = await probe_planned_paths(
+        _FakeClient(routes), ["https://x.test"],
+        ["/actuator/env", "/.env", "/wp-json/wp/v2/users", "/_next/image?url=/", "/nope"],
+    )
+    urls = {r.url for r in reqs}
+    assert any(u.endswith("/actuator/env") for u in urls)          # 200 kept
+    assert any(u.endswith("/.env") for u in urls)                  # 403 kept (exists/protected)
+    assert not any("wp-json" in u for u in urls)                   # 404 dropped
+    assert not any(u.endswith("/nope") for u in urls)              # default 404 dropped
+    assert any(r.params.get("url") == "/" for r in reqs)           # query parsed into an injection point
+
+
+async def test_probe_planned_paths_respects_scope() -> None:
+    class _OutOfScope:
+        def is_in_scope(self, url: str) -> bool:
+            return False
+
+        async def get(self, url: str, timeout: float = 6.0, retries: int = 0):  # pragma: no cover - never called
+            raise AssertionError("must not probe an out-of-scope URL")
+
+    assert await probe_planned_paths(_OutOfScope(), ["https://evil.test"], ["/actuator", "/.env"]) == []

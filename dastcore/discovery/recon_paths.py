@@ -10,6 +10,7 @@ then crawls and tests. Purely additive: bad or duplicate paths are de-duped and 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from urllib.parse import urljoin
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
@@ -17,6 +18,49 @@ from dastcore.core.models import HttpRequest
 from dastcore.discovery.historical import url_to_request
 
 _LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
+
+
+async def probe_planned_paths(
+    client: HttpClient,
+    roots: Sequence[str],
+    paths: Sequence[str],
+    *,
+    timeout: float = 6.0,
+    max_probes: int = 200,
+) -> list[HttpRequest]:
+    """Probe the planner's high-signal, stack-specific paths (``/actuator``, ``/.env``, ``/wp-json``…)
+    against each root and return the live ones as scoped requests for the scanner to test.
+
+    This is the reconnaissance brain closing the loop: ``ReconPlan.probe_paths`` decided *which* paths a
+    target's stack is known to leak, and this goes and checks them — even on a plain scan that didn't ask
+    for content discovery. A ``404`` means "not here" and is dropped; ``200``/``401``/``403``/``5xx`` are
+    all kept (the path exists, is protected, or errors — each worth a look). Best-effort, scope-gated and
+    bounded by ``max_probes``; a budget soft-stop propagates so the scan ends cleanly."""
+    requests: dict[str, HttpRequest] = {}
+    probed = 0
+    for root in roots:
+        origin = root if root.endswith("/") else root + "/"
+        for path in paths:
+            if probed >= max_probes:
+                return list(requests.values())
+            url = urljoin(origin, path.lstrip("/"))
+            if not client.is_in_scope(url):
+                continue
+            probed += 1
+            try:
+                resp = await client.get(url, timeout=timeout, retries=0)
+            except OutOfScopeError:
+                continue
+            except BudgetExceededError:
+                raise  # the intended soft-stop — let it end the scan cleanly
+            except Exception:  # noqa: BLE001 — a probe failure must never abort recon
+                continue
+            if resp is None or resp.status_code == 404:
+                continue
+            req = url_to_request(url)
+            if req is not None:
+                requests.setdefault(req.signature(), req)
+    return list(requests.values())
 
 
 def parse_robots(text: str) -> tuple[set[str], set[str]]:
