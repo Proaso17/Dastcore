@@ -40,11 +40,13 @@ from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint, infer_write_endpoints
 from dastcore.analysis import prove_findings_impact
 from dastcore.analysis.planner import (
+    ReconPlan,
     ScanPlan,
     TargetProfile,
     area_scan_order,
     classify_request_area,
     order_hosts,
+    plan_recon,
     plan_scan,
     render_plan,
 )
@@ -1008,6 +1010,60 @@ def _scan_plan_finding(target: str, profile: TargetProfile, plan: ScanPlan) -> F
     )
 
 
+def _apply_early_recon(
+    auto_recon: frozenset[str], recon: ReconPlan, profile: TargetProfile, *,
+    engine: str, use_js: bool, discover_content: bool, mine_params: bool,
+) -> tuple[str, bool, bool, bool, list[str]]:
+    """Decide which recon techniques the early fingerprint turns on — only those in ``auto_recon`` (left at
+    default by the operator) that the target actually warrants. Pure: returns the (possibly upgraded)
+    flags + the human-readable list of what changed. Never disables a technique the user chose."""
+    upgrades: list[str] = []
+    if "engine" in auto_recon and recon.use_headless and engine == "http":
+        engine = "both"
+        upgrades.append("motor headless (SPA/cliente)")
+    if "discover_content" in auto_recon and not discover_content and (
+        recon.discover_api_schemas or profile.frameworks or profile.cms
+    ):
+        discover_content = True
+        upgrades.append("descubrimiento de rutas del stack")
+    if "use_js" in auto_recon and recon.extract_js_endpoints and not use_js:
+        use_js = True
+        upgrades.append("extracción de endpoints de JS")
+    if "mine_params" in auto_recon and recon.mine_params and not mine_params:
+        mine_params = True
+        upgrades.append("minado de parámetros ocultos")
+    return engine, use_js, discover_content, mine_params, upgrades
+
+
+def _early_recon_finding(target: str, profile: TargetProfile, recon: ReconPlan, upgrades: list[str]) -> Finding:
+    """Advisory for the early recon decision: a fingerprint of the target chose the recon techniques to
+    turn on (the ones the operator left at default), so recon fits what the target IS from the first wave."""
+    request = HttpRequest(method="GET", url=target)
+    ident = ", ".join(sorted(profile.tech)) or "sin fingerprint claro"
+    detail = (
+        f"Reconocimiento adaptativo temprano sobre {ident}: el cerebro activó {', '.join(upgrades)} antes de "
+        f"la primera ola de descubrimiento, según lo que aparenta ser el objetivo. Profundidad de recon: "
+        f"{recon.depth}."
+    )
+    return Finding(
+        id="scan-recon-plan",
+        rule_id="scan-recon-plan",
+        name="Reconocimiento adaptativo (técnicas elegidas según el objetivo)",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="static", data=detail[:2000], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target),
+        remediation=(
+            "Informativo: dastcore fingerprinteó el objetivo al arrancar y encendió las técnicas de "
+            "reconocimiento que encajan (headless para SPA, extracción de JS, rutas del stack, minado de "
+            "parámetros), en vez de depender solo de los flags. Guía qué superficie se descubre."
+        ),
+    )
+
+
 def _scan_plan_update_finding(
     target: str, profile: TargetProfile, old_plan: ScanPlan, new_plan: ScanPlan
 ) -> Finding:
@@ -1476,6 +1532,7 @@ async def _run_scan(
     supabase_frontend: str = "",
     supabase_tables: Sequence[str] = (),
     supabase_write_test: bool = False,
+    auto_recon: frozenset[str] = frozenset(),
 ) -> list[Finding]:
     rules = load_rules()
     session = SessionManager(config.auth) if config.auth.type != "none" else None
@@ -1553,6 +1610,35 @@ async def _run_scan(
             # Reserve a slice of the --time-budget / --max-requests for the active scan, so crawling and
             # dirbusting can't spend it all and leave nothing to actually audit (no-op without a budget).
             client.begin_discovery_phase(_ACTIVE_SCAN_BUDGET_RESERVE)
+
+            # Early recon brain: when the operator left recon techniques at their default (auto_recon names
+            # what the brain MAY turn on), a quick fingerprint of the target decides which the target
+            # actually warrants — headless for a SPA, JS-endpoint mining, stack-path discovery, hidden-param
+            # mining — and enables them BEFORE the first discovery wave. Best-effort; the fingerprint here is
+            # only for the decision (the real fingerprint findings come from the per-root loop later, so
+            # nothing is double-reported). auto_recon empty (web/hunt/tests) → this whole step is skipped.
+            if auto_recon:
+                try:
+                    early_findings = await fingerprint_and_waf(client, target)
+                    early_findings += await run_spa_check(client, target, engine)
+                except BudgetExceededError:
+                    raise  # the intended soft-stop — end the scan cleanly
+                except Exception:  # noqa: BLE001 — a fingerprint hiccup must never abort the scan
+                    early_findings = []
+                early_profile = _build_target_profile([target], early_findings, {}, graphql_url, False, config.auth)
+                rp = plan_recon(early_profile)
+                engine, use_js, discover_content, mine_params, upgrades = _apply_early_recon(
+                    auto_recon, rp, early_profile,
+                    engine=engine, use_js=use_js, discover_content=discover_content, mine_params=mine_params,
+                )
+                if upgrades:
+                    _scan_log.info("Recon adaptativo temprano: %s (según el fingerprint del objetivo).", ", ".join(upgrades))
+                    early_advisory = _early_recon_finding(target, early_profile, rp, upgrades)
+                    extra_findings.append(early_advisory)
+                    if sink is not None:
+                        sink.write([early_advisory])
+                    if on_finding is not None:
+                        on_finding(early_advisory)
 
             # Full-surface scanning: expand the single target into every in-scope host we can find,
             # then crawl + brute-force paths on each. Both stages are opt-in and scope-enforced.
@@ -3125,6 +3211,19 @@ def scan(
         info(f"Seeds manuales: [bold]{len(seed_hosts)}[/bold] host(s), [bold]{len(seed_paths)}[/bold] ruta(s)")
 
     info()
+    # Early recon brain: which recon techniques the target's fingerprint MAY turn on — only those the user
+    # left at their default (explicit flags always win), and never in the minimal 'quick' profile. An empty
+    # set means the user pinned everything, so the early step is skipped entirely.
+    auto_recon: set[str] = set()
+    if profile != "quick":
+        if _is_default_source(ctx, "engine"):
+            auto_recon.add("engine")
+        if _is_default_source(ctx, "discover_content") and _is_default_source(ctx, "discover"):
+            auto_recon.add("discover_content")
+        if _is_default_source(ctx, "js"):
+            auto_recon.add("use_js")
+        if _is_default_source(ctx, "mine_params"):
+            auto_recon.add("mine_params")
     started_at = time.monotonic()
     progress = Progress(
         SpinnerColumn(),
@@ -3190,6 +3289,7 @@ def scan(
                     supabase_frontend=supabase_frontend,
                     supabase_tables=supabase_tables,
                     supabase_write_test=supabase_write_test,
+                    auto_recon=frozenset(auto_recon),
                 )
             )
     except SessionLoginError as exc:
