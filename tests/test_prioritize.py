@@ -127,6 +127,47 @@ def test_scanner_orders_its_rules_by_priority_families() -> None:
     assert [r.family for r in scanner._rules][:2] == ["lfi", "sqli"]  # noqa: SLF001 — asserting the steer
 
 
+async def test_active_scan_steers_area_by_area(tmp_path) -> None:
+    # The area-by-area active scan: requests are grouped by zone and worked in pentester order, each with
+    # its focus families blended with the global priority. A stub scanner records the steering (no HTTP).
+    from dastcore.cli import _ProgressAdapter, _scan_with_optional_resume
+
+    class _StubScanner:
+        def __init__(self) -> None:
+            self.reprioritized: list[tuple[str, ...]] = []
+            self.scanned: list[list[str]] = []
+
+        def reprioritize(self, families: tuple[str, ...]) -> None:
+            self.reprioritized.append(families)
+
+        async def scan_inband(self, reqs, on_request_done=None):  # noqa: ANN001, ANN202
+            self.scanned.append([r.url for r in reqs])
+            return []
+
+        async def run_oob(self, reqs):  # noqa: ANN001, ANN202
+            return []
+
+        async def run_stored(self, reqs):  # noqa: ANN001, ANN202
+            return []
+
+    reqs = [
+        HttpRequest(method="GET", url="http://t/about"),                        # Web
+        HttpRequest(method="GET", url="http://t/admin/users"),                  # Administración
+        HttpRequest(method="GET", url="http://t/s", params={"q": "x"}),         # Búsqueda
+    ]
+    stub = _StubScanner()
+    await _scan_with_optional_resume(
+        stub, reqs, None, _ProgressAdapter(None), area_families=("sqli", "xss")
+    )
+    # One reprioritize per area group (3) + one reset afterwards = 4; areas worked high-value first.
+    assert len(stub.reprioritized) == 4
+    assert stub.scanned[0] == ["http://t/admin/users"]   # Administración before Búsqueda before Web
+    assert stub.scanned[1] == ["http://t/s"]
+    assert stub.scanned[2] == ["http://t/about"]
+    assert stub.reprioritized[0][0] == "authz"           # admin zone's focus leads its pass
+    assert stub.reprioritized[-1] == ("sqli", "xss")     # reset to the global priority for OOB/stored
+
+
 def test_scanner_reprioritize_swaps_the_steer_mid_plan() -> None:
     # Adaptive re-planning: the brain revises priorities before the active scan; reprioritize() re-orders
     # the rules and updates the intensity set from the ORIGINAL rule order (not the already-sorted one).

@@ -39,7 +39,15 @@ from dastcore.ai.payload_gen import AiPayloadGenerator, build_payload_generator
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint, infer_write_endpoints
 from dastcore.analysis import prove_findings_impact
-from dastcore.analysis.planner import ScanPlan, TargetProfile, order_hosts, plan_scan, render_plan
+from dastcore.analysis.planner import (
+    ScanPlan,
+    TargetProfile,
+    area_scan_order,
+    classify_request_area,
+    order_hosts,
+    plan_scan,
+    render_plan,
+)
 from dastcore.config import (
     AuthConfig,
     FormLoginConfig,
@@ -2138,7 +2146,12 @@ async def _run_scan(
                 # per-request timeouts + the overall budget (checked between requests), and a large legit
                 # scan can outlast any fixed per-phase cap.
                 "active-scan",
-                _scan_with_optional_resume(scanner, all_requests, state, progress, sink=sink),
+                # Attack area by area: each request is worked with its zone's focus (blended with the
+                # global priorities), zones in pentester order — the reconnaissance-by-area brain, applied.
+                _scan_with_optional_resume(
+                    scanner, all_requests, state, progress, sink=sink,
+                    area_families=_scan_plan.priority_families,
+                ),
                 timeout=None,
             )
 
@@ -2276,10 +2289,19 @@ async def _scan_with_optional_resume(
     state: _ResumeState | None,
     progress: _ProgressAdapter,
     sink: FindingSink | None = None,
+    *,
+    area_families: tuple[str, ...] = (),
 ) -> list[Finding]:
     """Concurrent in-band + passive scan, then OOB. With a resume state, skip requests
     already completed in a prior run and persist progress after each one. Each request's findings
-    are streamed to ``sink`` (if given) so a hard interruption during this long phase loses nothing."""
+    are streamed to ``sink`` (if given) so a hard interruption during this long phase loses nothing.
+
+    When ``area_families`` is set (the target spans several functional areas), the in-band scan is run
+    **area by area**: each request is classified into its area (auth/API/admin/objects/upload/search/
+    commerce/web) and the areas are worked in pentester priority order, each with its own focus families
+    (blended with the global priorities) — so a budget is spent hammering each zone for the bugs it hides,
+    the way a professional works a target. Same requests, same rules, same oracle: only order + intensity
+    differ, never the finding set's validity."""
     prior = list(state.findings) if state is not None else []
     to_scan = [req for req in requests if state is None or req.signature() not in state.completed]
     progress.start_scanning(len(to_scan))
@@ -2291,7 +2313,23 @@ async def _scan_with_optional_resume(
             sink.write(request_findings)
         progress.tick()
 
-    in_band = await scanner.scan_inband(to_scan, on_request_done=_on_done)
+    # Group the surface into functional areas; only steer per-area when it actually spans more than one.
+    groups: dict[str, tuple[tuple[str, ...], list[HttpRequest]]] = {}
+    for req in to_scan:
+        name, fams = classify_request_area(req)
+        groups.setdefault(name, (fams, []))[1].append(req)
+
+    if area_families and len(groups) > 1:
+        in_band: list[Finding] = []
+        for name in sorted(groups, key=area_scan_order):
+            fams, reqs = groups[name]
+            scanner.reprioritize(tuple(dict.fromkeys([*fams, *area_families])))  # area focus, then global
+            progress.status(f"Área «{name}» ({len(reqs)}): foco {', '.join(fams)}…")
+            in_band += await scanner.scan_inband(reqs, on_request_done=_on_done)
+        scanner.reprioritize(area_families)  # reset to the global priority for OOB/stored intensity
+    else:
+        in_band = await scanner.scan_inband(to_scan, on_request_done=_on_done)
+
     # OOB and stored are idempotent and self-gated; run them over the full set every time.
     oob = await scanner.run_oob(requests)
     stored = await scanner.run_stored(requests)

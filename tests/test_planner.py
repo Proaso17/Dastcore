@@ -5,12 +5,15 @@ from __future__ import annotations
 
 from dastcore.analysis.planner import (
     TargetProfile,
+    area_scan_order,
+    classify_request_area,
     plan_areas,
     plan_hosts,
     plan_recon,
     plan_scan,
     render_plan,
 )
+from dastcore.core.models import HttpRequest
 
 
 def _families(profile: TargetProfile) -> tuple[str, ...]:
@@ -248,3 +251,34 @@ def test_areas_feed_recon_paths_and_render() -> None:
     assert "/login" in plan.recon.probe_paths          # the auth area's paths merged into recon
     text = render_plan(profile, plan)
     assert "Áreas" in text and "Autenticación" in text
+
+
+# --- per-request area classification (drives the area-by-area active scan) --------------------------
+
+
+def _req(url: str, params: dict | None = None) -> HttpRequest:
+    return HttpRequest(method="GET", url=url, params=params or {})
+
+
+def test_classify_request_area_by_path_and_param() -> None:
+    assert classify_request_area(_req("https://t/admin/users"))[0] == "Administración"
+    assert classify_request_area(_req("https://t/api/v1/orders"))[0] == "API"
+    assert classify_request_area(_req("https://t/login"))[0] == "Autenticación"
+    assert classify_request_area(_req("https://t/upload"))[0] == "Subida"
+    assert classify_request_area(_req("https://t/checkout"))[0] == "Comercio"
+    assert classify_request_area(_req("https://t/s", {"q": "x"}))[0] == "Búsqueda"
+    assert classify_request_area(_req("https://t/orders/1"))[0] == "Objetos"
+    name, fams = classify_request_area(_req("https://t/about"))
+    assert name == "Web" and fams == ("xss", "open_redirect")
+
+
+def test_classify_request_area_families_fit_the_zone() -> None:
+    assert "sqli" in classify_request_area(_req("https://t/search", {"q": "x"}))[1]
+    assert "lfi" in classify_request_area(_req("https://t/upload/avatar"))[1]
+    assert "nosqli" in classify_request_area(_req("https://t/api/items"))[1]
+
+
+def test_area_scan_order_puts_high_value_zones_first() -> None:
+    assert area_scan_order("Autenticación") < area_scan_order("Web")
+    assert area_scan_order("API") < area_scan_order("Búsqueda")
+    assert area_scan_order("desconocida") >= area_scan_order("Web")  # unknown areas go last

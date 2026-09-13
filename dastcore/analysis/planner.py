@@ -398,6 +398,54 @@ def plan_areas(profile: TargetProfile) -> list[AreaPlan]:
     return areas
 
 
+# Order to work the areas in during the active scan: authz-rich zones before the marketing surface, so a
+# --time-budget is spent where the high-impact bugs concentrate.
+_REQUEST_AREA_ORDER = ("Autenticación", "API", "Administración", "Objetos", "Subida", "Comercio", "Búsqueda", "Web")
+
+
+def classify_request_area(request: object) -> tuple[str, tuple[str, ...]]:
+    """Map a single request to its functional area + the vuln families to focus there — so the active scan
+    can attack area by area (a search endpoint gets SQLi/XSS first, an upload endpoint LFI/XSS, an API
+    object endpoint NoSQLi/SQLi…) instead of one flat priority for the whole surface. First match wins.
+
+    Families are blended with the target's global priorities by the caller; the rule engine steers on the
+    ones that are rule families (sqli/xss/lfi/nosqli/open_redirect), while authz/upload/auth stay the job
+    of the dedicated detectors that already blanket the surface."""
+    url = getattr(request, "url", "") or ""
+    path = urlsplit(url).path or "/"
+    params: set[str] = set(getattr(request, "params", {}) or {}) | set(getattr(request, "data", {}) or {})
+    body = getattr(request, "json_body", None)
+    if isinstance(body, dict):
+        params |= {str(k) for k in body}
+
+    def in_path(rx: re.Pattern[str]) -> bool:
+        return bool(rx.search(path))
+
+    def in_param(rx: re.Pattern[str]) -> bool:
+        return any(rx.search(n) for n in params)
+
+    if in_path(_AREA_ADMIN_PATH):
+        return ("Administración", ("authz", "sqli"))
+    if in_path(_AREA_API_PATH):
+        return ("API", ("authz", "mass_assignment", "nosqli", "sqli"))
+    if in_path(_AREA_AUTH_PATH):
+        return ("Autenticación", ("weak-creds", "jwt", "sqli"))
+    if in_path(_AREA_UPLOAD_PATH) or in_param(_AREA_UPLOAD_PARAM):
+        return ("Subida", ("upload", "lfi", "xss"))
+    if in_path(_AREA_COMMERCE_PATH) or in_param(_AREA_COMMERCE_PARAM):
+        return ("Comercio", ("authz", "sqli", "xss"))
+    if in_path(_AREA_SEARCH_PATH) or in_param(_AREA_SEARCH_PARAM):
+        return ("Búsqueda", ("sqli", "nosqli", "xss"))
+    if in_path(_AREA_OBJ_PATH) or in_param(_AREA_OBJ_PARAM):
+        return ("Objetos", ("authz", "sqli"))
+    return ("Web", ("xss", "open_redirect"))
+
+
+def area_scan_order(name: str) -> int:
+    """Sort key for the active scan's per-area order (lower = worked first). Unknown areas go last."""
+    return _REQUEST_AREA_ORDER.index(name) if name in _REQUEST_AREA_ORDER else len(_REQUEST_AREA_ORDER)
+
+
 def plan_recon(profile: TargetProfile) -> ReconPlan:
     """Decide HOW to reconnoitre this target from what it appears to be — the reconnaissance half of the
     brain. Deterministic: picks the discovery techniques that fit the stack, the high-signal paths to
