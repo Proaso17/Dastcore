@@ -102,11 +102,55 @@ def _lfi_path_backslash(text: str) -> str:
     return text.replace("../", "..\\")
 
 
+def _sql_ws_tab(text: str) -> str:
+    """Whitespace via a tab — SQL treats it as a space; many space-based signatures don't match it."""
+    return text.replace(" ", "\t")
+
+
+# MySQL executes SQL inside a *versioned* comment (``/*!50000SELECT*/``); a filter that strips plain
+# ``/**/`` comments or keys on the bare keyword misses it, yet the DB still runs the statement.
+_SQL_VERSIONED = re.compile(
+    r"\b(select|union|from|where|and|or|insert|update|delete|sleep|benchmark)\b", re.IGNORECASE
+)
+
+
+def _sql_versioned_comment(text: str) -> str:
+    return _SQL_VERSIONED.sub(lambda m: f"/*!50000{m.group(0)}*/", text)
+
+
+def _xss_slash_separators(text: str) -> str:
+    """Tag whitespace via ``/`` — browsers accept it between attributes (``<img/src=x/onerror=..>``),
+    so a filter keying on ``<img src`` / spaces is bypassed while the markup still parses."""
+    return text.replace(" ", "/")
+
+
+def _lfi_nested_traversal(text: str) -> str:
+    """Nested traversal (``../`` -> ``....//``): a filter that strips one ``../`` collapses it back to
+    ``../``. Uses only dots/slashes, so it survives URL-encoding of the parameter intact."""
+    return text.replace("../", "....//")
+
+
+def _cmdi_tab(text: str) -> str:
+    """Shell whitespace via a tab — the shell still splits on it, a space-only filter is bypassed."""
+    return text.replace(" ", "\t")
+
+
 # Appended after the generic TAMPERS when the rule's family is known.
 _FAMILY_TAMPERS: dict[str, list[tuple[str, Callable[[str], str]]]] = {
-    "sqli": [("ws-comment", _sql_ws_comment), ("ws-newline", _sql_ws_newline)],
-    "cmdi": [("ifs", _cmdi_ifs), ("quote-insert", _cmdi_quote_insert), ("cmd-backslash", _cmdi_backslash)],
-    "lfi": [("path-backslash", _lfi_path_backslash)],
+    "sqli": [
+        ("ws-comment", _sql_ws_comment),
+        ("ws-newline", _sql_ws_newline),
+        ("ws-tab", _sql_ws_tab),
+        ("versioned-comment", _sql_versioned_comment),
+    ],
+    "xss": [("slash-separators", _xss_slash_separators)],
+    "cmdi": [
+        ("ifs", _cmdi_ifs),
+        ("quote-insert", _cmdi_quote_insert),
+        ("cmd-backslash", _cmdi_backslash),
+        ("cmdi-tab", _cmdi_tab),
+    ],
+    "lfi": [("path-backslash", _lfi_path_backslash), ("nested-traversal", _lfi_nested_traversal)],
 }
 
 

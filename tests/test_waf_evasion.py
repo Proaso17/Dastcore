@@ -45,6 +45,31 @@ def test_cmdi_equivalents_keep_the_command_valid() -> None:
     assert _sql_ws_comment("UNION SELECT 1") == "UNION/**/SELECT/**/1"  # keywords intact -> valid SQL
 
 
+def test_expanded_family_tampers_keep_meaning() -> None:
+    from dastcore.engine.waf import (
+        _lfi_nested_traversal,
+        _sql_versioned_comment,
+        _sql_ws_tab,
+        _xss_slash_separators,
+    )
+
+    assert _sql_ws_tab("UNION SELECT 1") == "UNION\tSELECT\t1"  # tab is SQL whitespace
+    assert _sql_versioned_comment("SELECT 1") == "/*!50000SELECT*/ 1"  # MySQL runs it, plain-comment filters miss it
+    assert _xss_slash_separators("<img src=x onerror=e>") == "<img/src=x/onerror=e>"  # browser still parses it
+    # a filter that strips one "../" collapses "....//etc" back to the real traversal "../etc"
+    assert _lfi_nested_traversal("../etc") == "....//etc"
+    assert _lfi_nested_traversal("../etc").replace("../", "", 1) == "../etc"
+
+
+def test_new_family_tampers_are_registered() -> None:
+    sqli = {name for name, _ in tampered_variants("' UNION SELECT 1", "sqli")}
+    lfi = {name for name, _ in tampered_variants("../../etc/passwd", "lfi")}
+    xss = {name for name, _ in tampered_variants("<img src=x onerror=alert(1)>", "xss")}
+    assert {"ws-tab", "versioned-comment"} <= sqli
+    assert "nested-traversal" in lfi
+    assert "slash-separators" in xss
+
+
 # --- scanner integration: a naive WAF that blocks the raw SQLi keyword -------------------
 
 
