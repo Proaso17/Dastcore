@@ -126,6 +126,36 @@ async def test_without_flag_the_masked_sqli_is_not_confirmed() -> None:
     assert not any(f.rule_id == "sqli-injection" for f in findings)
 
 
+class _RecordingWaf:
+    """Blocks only the exact raw payload; confirms any other value. Records every 'q' it received."""
+
+    def __init__(self) -> None:
+        self.q_values: list[str] = []
+
+    async def request(self, method: str, url: str, **kwargs) -> HttpResponse:
+        value = (kwargs.get("params") or {}).get("q", "")
+        self.q_values.append(value)
+        if value == "' OR SELECT":  # the raw payload is blocked by the WAF
+            return HttpResponse(status_code=403, text="blocked", url=url)
+        if value == "1":  # the benign baseline is clean
+            return HttpResponse(status_code=200, text="ok", url=url)
+        return HttpResponse(status_code=500, text="You have an SQL syntax error near '...'", url=url)  # any tamper decodes -> injects
+
+
+async def test_evasion_hint_tries_the_learned_tamper_first() -> None:
+    # The WAF audit learned 'double-url-encode' bypasses the WAF for sqli -> the scanner must try it first.
+    from dastcore.engine.waf import _double_url_encode
+
+    client = _RecordingWaf()
+    scanner = Scanner(
+        client, [_sqli_rule()], active_checks=False, waf_evasion=True, evasion_hints={"sqli": "double-url-encode"}
+    )
+    findings = await scanner.scan_request(_request())
+    assert any(f.rule_id == "sqli-injection" for f in findings)
+    tampers = [q for q in client.q_values if q not in ("1", "' OR SELECT")]
+    assert tampers and tampers[0] == _double_url_encode("' OR SELECT")  # hinted tamper came first
+
+
 # --- family-aware evasion: a space-blocking WAF only ${IFS} slips past -----------------------
 
 

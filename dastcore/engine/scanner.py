@@ -117,6 +117,7 @@ class Scanner:
         ai_payloads: AiPayloadGenerator | None = None,
         ai_payload_budget: int = 15,
         priority_families: tuple[str, ...] = (),
+        evasion_hints: dict[str, str] | None = None,
     ) -> None:
         self._http = http_client
         # Adaptive planner steer: attack the target's priority families first within each request, so a
@@ -136,6 +137,9 @@ class Scanner:
         # When a raw payload is blocked, retry with encoding/case tampers to see if the vuln
         # is real but WAF-masked. Intrusive/noisy → opt-in (--waf-evasion), off in `quick`.
         self._waf_evasion = waf_evasion
+        # Intelligence loop: a WAF audit (--waf-audit) may have learned which tamper bypasses the WAF for
+        # each family. Try that tamper first, so evasion confirms faster and with fewer requests.
+        self._evasion_hints = evasion_hints or {}
         # Optional AI-assisted payload generation: when the declared payloads don't fire but the
         # input *reflects*, the AI proposes context-aware payloads. The rule's own oracle still
         # confirms every one (the AI never confirms). Bounded by a per-scan LLM-call budget.
@@ -422,7 +426,11 @@ class Scanner:
     ) -> tuple[HttpRequest, HttpResponse, str, list[Evidence], str] | None:
         """Retry a blocked payload with encoding/case tampers (plus family-specific equivalents);
         return the first variant that gets past the WAF and fires the oracle (with a note), else None."""
-        for name, tampered in tampered_variants(payload_value, family):
+        variants = tampered_variants(payload_value, family)
+        hint = self._evasion_hints.get(family)
+        if hint:  # a WAF audit learned this tamper bypasses the WAF for this family -> try it first
+            variants.sort(key=lambda nv: nv[0] != hint)
+        for name, tampered in variants:
             request = build_mutated_request(point, tampered)
             response = await self._send(request)
             if response is None or looks_blocked(response) is not None:

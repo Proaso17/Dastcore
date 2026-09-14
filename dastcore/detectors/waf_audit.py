@@ -111,8 +111,14 @@ def _finding(root_url: str, vendor: str, results: list[tuple[str, bool, str | No
     )
 
 
-async def run_waf_audit(client: HttpClient, root_url: str, *, waf_vendor: str = "") -> list[Finding]:
-    """Send inert canaries per family, measure block-vs-pass, and probe evasions for blocked families."""
+async def run_waf_audit(
+    client: HttpClient, root_url: str, *, waf_vendor: str = "", hints_out: dict[str, str] | None = None
+) -> list[Finding]:
+    """Send inert canaries per family, measure block-vs-pass, and probe evasions for blocked families.
+
+    When ``hints_out`` is given, it is filled with ``{family: tamper_name}`` for each family whose block
+    a tamper bypassed — the scanner can then try that tamper first during the active WAF-evasion scan
+    (the names match :func:`dastcore.engine.waf.tampered_variants`)."""
     baseline = await _get(client, _url_with_q(root_url, _BENIGN))
     if baseline is None or baseline.status_code in _BLOCK_STATUSES:
         return []  # the baseline itself is blocked -> can't run a clean differential
@@ -132,4 +138,6 @@ async def run_waf_audit(client: HttpClient, root_url: str, *, waf_vendor: str = 
                 break
         results.append((family, True, bypass))
 
+    if hints_out is not None:
+        hints_out.update({family: name for family, blocked, name in results if blocked and name})
     return [_finding(root_url, waf_vendor, results)]

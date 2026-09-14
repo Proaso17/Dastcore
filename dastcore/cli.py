@@ -2092,11 +2092,17 @@ async def _run_scan(
 
             # WAF effectiveness audit (opt-in): measure the WAF in front of the app — which vuln
             # families it blocks, which pass unfiltered, and which blocks are bypassable. Sends inert
-            # canaries, so it's off by default and gated behind --waf-audit.
+            # canaries, so it's off by default and gated behind --waf-audit. The learned bypasses feed
+            # the active scan's evasion (intelligence loop): the scanner tries the known-working tamper
+            # first per family.
+            _waf_hints: dict[str, str] = {}
             if waf_audit:
                 for root in scan_roots:
                     extra_findings.extend(
-                        await phase("waf-audit", run_waf_audit(client, root, waf_vendor=_target_profile.waf_vendor))
+                        await phase(
+                            "waf-audit",
+                            run_waf_audit(client, root, waf_vendor=_target_profile.waf_vendor, hints_out=_waf_hints),
+                        )
                     )
 
             # The reconnaissance brain closes the loop: probe the stack-specific high-signal paths the plan
@@ -2139,6 +2145,8 @@ async def _run_scan(
                 # families reorder both the request queue and the per-request rule order, so under a budget
                 # the relevant vuln classes are probed first. The brain reorders the attack, not just explains it.
                 priority_families=_scan_plan.priority_families,
+                # Intelligence loop: tampers the WAF audit found bypass the WAF (per family) are tried first.
+                evasion_hints=_waf_hints,
             )
             if mine_params:
                 # Find undocumented query params on the discovered endpoints — each is a new injection point.
