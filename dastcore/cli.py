@@ -2232,9 +2232,12 @@ async def _run_scan(
             if test_proto_pollution:
                 progress.status("Probando prototype pollution (json spaces)…")
                 extra_findings.extend(await phase("proto-pollution", run_proto_pollution_checks(client, all_requests)))
-            if test_cache_poisoning:
-                progress.status("Probando web cache poisoning…")
-                extra_findings.extend(await phase("cache-poisoning", run_cache_poisoning_checks(client, all_requests)))
+            # Web cache poisoning runs unconditionally (like the other detector phases below): it only
+            # writes cache entries under a random cache-buster URL no real user requests (safe by
+            # design), so it needs no opt-in and runs identically in the `scan` command and the
+            # bug-bounty campaign. `--test-cache-poisoning` is kept as an accepted no-op.
+            progress.status("Probando web cache poisoning…")
+            extra_findings.extend(await phase("cache-poisoning", run_cache_poisoning_checks(client, all_requests)))
             if test_upload:
                 progress.status("Probando subida de ficheros…")
                 extra_findings.extend(await phase("file-upload", run_file_upload_checks(client, all_requests)))
@@ -2779,9 +2782,8 @@ def scan(
     test_cache_poisoning: bool = typer.Option(
         False,
         "--test-cache-poisoning",
-        help="Prueba web cache poisoning: envenena una URL única (cache-buster) con una cabecera no clavada y "
-        "confirma con una petición limpia servida desde la caché (intrusivo: escribe una entrada de caché; "
-        "no se activa en el perfil quick).",
+        help="(Obsoleto/no-op: el chequeo de web cache poisoning ahora corre siempre — es seguro porque solo "
+        "escribe en una URL cache-buster que ningún usuario real pide — e igual en scan y en bug bounty).",
     ),
     prove_impact: bool = typer.Option(
         False,

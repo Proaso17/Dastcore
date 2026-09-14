@@ -63,6 +63,24 @@ def _no_reflect_app():
     return app
 
 
+def _header_sink_app():
+    from flask import Flask, Response, request
+
+    app = Flask(__name__)
+    cache: dict[str, str] = {}
+
+    @app.get("/page")
+    def page() -> Response:
+        key = request.full_path  # VULNERABLE: cache keyed on URL only
+        if key not in cache:
+            cache[key] = request.headers.get("X-Forwarded-Host", "example.test")
+        resp = Response("<html>static body</html>", mimetype="text/html")  # body never reflects it
+        resp.headers["Link"] = f'<https://{cache[key]}/page>; rel="canonical"'  # ...only the Link header does
+        return resp
+
+    return app
+
+
 def _serve(app) -> tuple[str, object]:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -93,6 +111,13 @@ def static_url() -> Iterator[str]:
     server.shutdown()
 
 
+@pytest.fixture(scope="module")
+def header_sink_url() -> Iterator[str]:
+    url, server = _serve(_header_sink_app())
+    yield url
+    server.shutdown()
+
+
 def _scope() -> ScopeConfig:
     return ScopeConfig(allow_domains=["127.0.0.1"])
 
@@ -119,3 +144,12 @@ async def test_header_keyed_cache_is_not_flagged(keyed_url: str) -> None:
 async def test_non_reflecting_page_is_not_flagged(static_url: str) -> None:
     async with HttpClient(_scope()) as client:
         assert await check_cache_poisoning(client, _req(static_url)) == []
+
+
+async def test_poisoned_response_header_is_flagged(header_sink_url: str) -> None:
+    """The marker surfaces only in the cached Link response header (not the body) -> still caught."""
+    async with HttpClient(_scope()) as client:
+        findings = await check_cache_poisoning(client, _req(header_sink_url))
+    assert len(findings) == 1
+    assert findings[0].rule_id == "web-cache-poisoning"
+    assert "link" in findings[0].evidence[0].data.lower()  # reported as a response-header sink

@@ -12,8 +12,13 @@ request never sent the marker, finding it in the clean (cached) response can onl
 served the poisoned copy — confirmed poisoning. If the header isn't reflected, or the clean
 request doesn't return the marker, nothing is reported.
 
-Intrusive and stateful (it writes a cache entry), so it runs only behind ``--test-cache-poisoning``
-and never in the ``quick`` profile.
+The marker is looked for in the cached response **body and in dangerous response headers**
+(``Location`` and other redirects, ``Set-Cookie``, ``Link``, CORS ``Access-Control-Allow-Origin``):
+a poisoned ``Location`` redirect or ACAO header is higher impact than a body reflection.
+
+Safe to run on every scan: it only ever writes cache entries under a random cache-buster URL that no
+real user requests, so it cannot poison the real page. Runs in both the ``scan`` command and the
+bug-bounty campaign (they share ``_run_scan``).
 
 CWE-524 (Use of Cache Containing Sensitive Information) / OWASP WSTG-INPV-19.
 """
@@ -38,12 +43,27 @@ _UNKEYED_HEADERS = (
     "X-HTTP-Host-Override",
     "X-Original-URL",
     "X-Rewrite-URL",
+    "X-Forwarded-Port",
+    "X-Forwarded-Prefix",
+    "Forwarded",
 )
+# Response headers where a reflected marker is dangerous (open redirect, cookie/CORS control).
+_HEADER_SINKS = ("location", "content-location", "refresh", "link", "set-cookie", "access-control-allow-origin")
 _MAX_URLS = 25  # bound the request budget
 
 
 def _point(request: HttpRequest, header: str) -> InjectionPoint:
     return InjectionPoint(location="header", name=header, base_value="", request_template=request)
+
+
+def _marker_sink(response: HttpResponse, marker: str) -> str | None:
+    """Where the poisoned marker surfaced in a response: a dangerous response header, or the body."""
+    for name, value in (response.headers or {}).items():
+        if name.lower() in _HEADER_SINKS and marker in value:
+            return f"la cabecera de respuesta '{name}'"
+    if marker in response.text:
+        return "el cuerpo de la respuesta"
+    return None
 
 
 async def _get(
@@ -64,11 +84,12 @@ async def check_cache_poisoning(client: HttpClient, request: HttpRequest) -> lis
         params = {**base_params, "dccb": buster}  # a unique key we own, not the real page
 
         poisoned = await _get(client, request.url, params, {header: marker})
-        if poisoned is None or marker not in poisoned.text:
-            continue  # header not reflected → this vector can't poison
+        if poisoned is None or _marker_sink(poisoned, marker) is None:
+            continue  # header not reflected (body or a response header) → this vector can't poison
 
         clean = await _get(client, request.url, params, None)  # same URL, no malicious header
-        if clean is None or marker not in clean.text:
+        sink = _marker_sink(clean, marker) if clean is not None else None
+        if sink is None:
             continue  # the clean request didn't get the marker → not served from a poisoned cache
 
         path = urlsplit(request.url).path or "/"
@@ -88,10 +109,11 @@ async def check_cache_poisoning(client: HttpClient, request: HttpRequest) -> lis
                     Evidence(
                         type="differential",
                         data=(
-                            f"a marker sent only in the '{header}' header of one request was reflected into a cached "
-                            f"response and then returned to a *clean* request (no such header) for {path} — the header "
-                            "is unkeyed, so an attacker can poison the cache for other users"
-                        )[:200],
+                            f"un marcador enviado solo en la cabecera '{header}' de una petición apareció en "
+                            f"{sink} de la respuesta cacheada y luego se devolvió a una petición *limpia* (sin esa "
+                            f"cabecera) para {path} — la cabecera no está en la clave de caché, así que un atacante "
+                            "puede envenenar la caché para otros usuarios"
+                        )[:220],
                         confidence="high",
                     )
                 ],
