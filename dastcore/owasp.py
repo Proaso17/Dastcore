@@ -61,7 +61,7 @@ _KEYWORD_TO_CAT: list[tuple[str, tuple[str, ...]]] = [
              "dom-clobbering", "clobber", "orm-leak", "operator-injection", "injection")),
     ("A01", ("idor", "bola", "bfla", "authz", "access-bypass", "access-control", "path-traversal",
              "traversal", "lfi", "open-redirect", "redirect", "directory-listing", "csrf",
-             "forced-browsing", "unauth-access", "path-normalization")),
+             "forced-browsing", "unauth-access", "path-normalization", "verb-tampering")),
     ("A05", ("misconfig", "security-header", "missing-header", "cors", "sensitive-file", "exposed",
              "waf-audit",
              "actuator", "trace-method", "dangerous-method", "clickjacking", "verbose-error",
