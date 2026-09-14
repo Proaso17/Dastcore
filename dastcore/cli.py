@@ -169,6 +169,7 @@ from dastcore.engine.oast import InteractshClient, LocalOastServer, OastProvider
 from dastcore.engine.race import run_race_checks
 from dastcore.engine.rule_engine import Rule, load_rules
 from dastcore.engine.scanner import Scanner
+from dastcore.integrations.sqlmap import run_sqlmap_scan, sqlmap_available
 from dastcore.report import render_defectdojo, render_html, render_json, render_sarif
 from dastcore.report.correlation import correlate, cross_correlate, deduplicate
 from dastcore.report.incremental import FindingSink
@@ -1047,6 +1048,34 @@ def _apply_early_recon(
     return engine, use_js, discover_content, mine_params, upgrades
 
 
+def _sqlmap_unavailable_finding(target: str, sqlmap_path: str) -> Finding:
+    """Advisory: --sqlmap was requested but the sqlmap binary isn't installed, so the deep sweep was skipped."""
+    request = HttpRequest(method="GET", url=target)
+    return Finding(
+        id="sqlmap-unavailable",
+        rule_id="sqlmap-unavailable",
+        name="Barrido sqlmap solicitado pero sqlmap no está instalado",
+        severity="info",
+        cwe="CWE-0",
+        owasp="A03:2021",
+        injection_point=InjectionPoint(location="path", name="-", base_value="", request_template=request),
+        evidence=[
+            Evidence(
+                type="status",
+                data=(
+                    f"Se pidió --sqlmap pero no se encontró el binario '{sqlmap_path}'. El barrido profundo se "
+                    "omitió; la detección nativa de SQLi de dastcore sí se ejecutó. Instala sqlmap o pásalo con "
+                    "--sqlmap-path para habilitar el escalado."
+                ),
+                confidence="high",
+            )
+        ],
+        request=request,
+        response=HttpResponse(status_code=0, text=""),
+        remediation="Instala sqlmap (pip install sqlmap o el paquete del sistema) y reintenta con --sqlmap.",
+    )
+
+
 def _early_recon_finding(target: str, profile: TargetProfile, recon: ReconPlan, upgrades: list[str]) -> Finding:
     """Advisory for the early recon decision: a fingerprint of the target chose the recon techniques to
     turn on (the ones the operator left at default), so recon fits what the target IS from the first wave."""
@@ -1507,6 +1536,10 @@ async def _run_scan(
     stored_scan: bool = False,
     waf_evasion: bool = False,
     waf_audit: bool = False,
+    sqlmap: bool = False,
+    sqlmap_path: str = "sqlmap",
+    sqlmap_level: int = 2,
+    sqlmap_risk: int = 2,
     test_race: bool = False,
     test_csrf: bool = False,
     test_proto_pollution: bool = False,
@@ -2208,6 +2241,36 @@ async def _run_scan(
             extra_findings.extend(await phase("path-bypass", run_path_bypass_checks(client, all_requests)))
             extra_findings.extend(await phase("verb-tampering", run_verb_tampering_checks(client, all_requests)))
             extra_findings.extend(await phase("vhost-routing", run_vhost_routing_checks(client, scan_roots)))
+
+            # Optional deep sqlmap sweep (opt-in --sqlmap): shells out to sqlmap over discovered
+            # injection points for maximum SQLi detection. Intrusive + external tool, so opt-in; a
+            # clean no-op (with an advisory) if sqlmap isn't installed. Scope-enforced, no data dump.
+            if sqlmap:
+                _sqlmap_cmd = tuple(sqlmap_path.split())
+                if not sqlmap_available(_sqlmap_cmd):
+                    _sqlmap_advisory = _sqlmap_unavailable_finding(target, sqlmap_path)
+                    extra_findings.append(_sqlmap_advisory)
+                    if sink is not None:
+                        sink.write([_sqlmap_advisory])
+                    _scan_log.warning("sqlmap solicitado (--sqlmap) pero no se encontró el binario '%s'", sqlmap_path)
+                else:
+                    progress.status("Barrido profundo con sqlmap…")
+                    _cookie = "; ".join(f"{k}={v}" for k, v in client.cookies.items())
+                    extra_findings.extend(
+                        await phase(
+                            "sqlmap",
+                            run_sqlmap_scan(
+                                all_requests,
+                                cmd=_sqlmap_cmd,
+                                in_scope=client.is_in_scope,
+                                cookie=_cookie,
+                                proxy=proxy or "",
+                                user_agent=user_agent or "",
+                                level=sqlmap_level,
+                                risk=sqlmap_risk,
+                            ),
+                        )
+                    )
             extra_findings.extend(await phase("xslt-injection", run_xslt_injection_checks(client, all_requests)))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.
@@ -2763,6 +2826,18 @@ def scan(
         help="Audita el WAF: envía canarios inertes por familia (SQLi/XSS/LFI/RCE/SSRF/SSTI/Log4Shell) y "
         "reporta qué bloquea, qué deja pasar y qué bloqueos son evadibles (opt-in; envía payloads maliciosos).",
     ),
+    sqlmap: bool = typer.Option(
+        False,
+        "--sqlmap",
+        help="Barrido profundo con sqlmap (herramienta externa) sobre los puntos de inyección descubiertos "
+        "para máxima detección de SQLi. Opt-in e intrusivo; requiere sqlmap instalado; sin --dump (no roba "
+        "datos); scope-enforced. No se activa en el perfil quick.",
+    ),
+    sqlmap_path: str = typer.Option(
+        "sqlmap", "--sqlmap-path", help="Ruta/comando del binario sqlmap (por defecto 'sqlmap' en PATH)."
+    ),
+    sqlmap_level: int = typer.Option(2, "--sqlmap-level", help="sqlmap --level (1-5), amplitud de pruebas."),
+    sqlmap_risk: int = typer.Option(2, "--sqlmap-risk", help="sqlmap --risk (1-3), agresividad de payloads."),
     test_race: bool = typer.Option(
         False,
         "--test-race",
@@ -3305,6 +3380,10 @@ def scan(
                     stored_scan=stored,
                     waf_evasion=waf_evasion and profile != "quick",
                     waf_audit=waf_audit and profile != "quick",
+                    sqlmap=sqlmap and profile != "quick",
+                    sqlmap_path=sqlmap_path,
+                    sqlmap_level=sqlmap_level,
+                    sqlmap_risk=sqlmap_risk,
                     test_race=test_race and profile != "quick",
                     test_csrf=test_csrf and profile != "quick",
                     test_proto_pollution=test_proto_pollution and profile != "quick",
