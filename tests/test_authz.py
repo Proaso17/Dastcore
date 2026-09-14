@@ -12,7 +12,7 @@ from dastcore.config import AuthConfig, ScopeConfig
 from dastcore.core.http_client import HttpClient
 from dastcore.core.models import HttpRequest
 from dastcore.core.session import SessionManager
-from dastcore.detectors.authz import Identity, run_authz_checks
+from dastcore.detectors.authz import Identity, run_authz_checks, run_bola_enumeration_checks
 
 _SCOPE = ScopeConfig(allow_domains=["127.0.0.1"])
 
@@ -185,3 +185,86 @@ def test_owner_record_signature_requires_a_real_identifier() -> None:
     assert _owner_record_signature(f'{{"user_id":"{uuid}"}}') == f"user_id={uuid}"
     assert _owner_record_signature('{"account":"free","tier":"public"}') is None  # label, not an id
     assert _owner_record_signature('{"contact":"jane@example.com"}') == "email=jane@example.com"
+
+
+# --- Active IDOR by id enumeration --------------------------------------------------------------
+
+
+async def test_idor_enumeration_detects_cross_owner_pii_leak(vuln_app_url: str) -> None:
+    """alice's single session walks /api/invoices/<id> and reads invoices of *two* owners, each with
+    an email (strong PII), on an endpoint that denies unauthenticated access -> confirmed IDOR."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/invoices/501")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_bola_enumeration_checks(identities, probes, unauth_client=unauth)
+
+    enum = [f for f in findings if f.rule_id == "authz-idor-enum"]
+    assert len(enum) == 1
+    assert enum[0].severity == "high" and enum[0].cwe == "CWE-639"
+    assert "alice" in enum[0].evidence[0].data
+    assert enum[0].impact is not None
+
+
+async def test_no_idor_enum_on_members_forum_without_pii(vuln_app_url: str) -> None:
+    """/api/posts/<id> is a members-only forum: any user may read any post, and posts carry an author
+    user_id but no per-user PII. The strong-PII gate must keep enumeration from firing."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/posts/601")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_bola_enumeration_checks(identities, probes, unauth_client=unauth)
+
+    assert not any(f.rule_id == "authz-idor-enum" for f in findings)
+
+
+async def test_no_idor_enum_on_public_catalog(vuln_app_url: str) -> None:
+    """/api/products/<id> has no owner/PII markers, so enumeration finds nothing to leak."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/products/1")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_bola_enumeration_checks(identities, probes, unauth_client=unauth)
+
+    assert not any(f.rule_id == "authz-idor-enum" for f in findings)
+
+
+async def test_no_idor_enum_without_privacy_oracle(vuln_app_url: str) -> None:
+    """Without an unauth client we can't prove the endpoint is access-controlled -> never fires."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/invoices/501")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice"])
+        findings = await run_bola_enumeration_checks(identities, probes)
+
+    assert findings == []
+
+
+async def test_idor_enum_skips_privileged_identity(vuln_app_url: str) -> None:
+    """An admin legitimately reads many owners' records, so enumeration must not flag an admin session."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/invoices/501")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["admin"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_bola_enumeration_checks(identities, probes, unauth_client=unauth)
+
+    assert not any(f.rule_id == "authz-idor-enum" for f in findings)
+
+
+def test_enumerable_points_and_id_mutation() -> None:
+    from dastcore.detectors.authz import _enumerable_points, _with_id
+
+    req = HttpRequest(method="GET", url="https://x.test/api/2/orders/101")
+    points = _enumerable_points(req)
+    # both "2" (index 2) and "101" (index 4) are integers; the last is the object id
+    assert ("path", 2, 2) in points
+    assert points[-1] == ("path", 4, 101)
+    mutated = _with_id(req, points[-1], 102)
+    assert mutated.url == "https://x.test/api/2/orders/102"
+
+    req_param = HttpRequest(method="GET", url="https://x.test/api/order", params={"order_id": "7"})
+    pts = _enumerable_points(req_param)
+    assert pts[-1] == ("param", "order_id", 7)
+    assert _with_id(req_param, pts[-1], 8).params["order_id"] == "8"
+
+    # a long digit run (epoch/code/phone) is not an enumerable object id
+    assert _enumerable_points(HttpRequest(method="GET", url="https://x.test/t/1700000000000")) == []

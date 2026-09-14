@@ -18,13 +18,19 @@ who can reach what:
 
 Each check requires a real difference in access to fire, which keeps false
 positives near zero.
+
+The checks in ``run_authz_checks`` are *observational* — they replay already-crawled
+requests across sessions. ``run_bola_enumeration_checks`` is *active*: a single session
+walks neighbouring integer ids to reach objects the crawler never saw (the classic manual
+IDOR test), gated on an access-control proof + strong per-user PII + owner diversity so a
+legitimately member-shared resource (e.g. a forum) can't trip it.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from dastcore.core.http_client import HttpClient, OutOfScopeError
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
@@ -69,6 +75,21 @@ _OWNER_ID_FIELD = re.compile(
 _UUID_VALUE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _INT_VALUE = re.compile(r"^\d+$")
 _DENIED_STATUSES = {401, 403, 404}
+
+# Strong per-user PII: data meaningful only to its owner. Requiring this in an *enumerated*
+# cross-account read is what separates a real IDOR (leaking someone's private data) from a
+# legitimately member-shared resource — a forum post carries an author id but never a stranger's
+# email, SSN, or balance. This is the discriminator that keeps active enumeration low-FP.
+_STRONG_PII = re.compile(
+    r"\b(ssn|social_security|iban|bic|swift|card_number|cardnumber|credit_card|cvv|cvc|"
+    r"balance|salary|passport|tax_id|national_id|phone|phone_number|birth|dob|date_of_birth)\b"
+    r"|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",  # an email address
+    re.IGNORECASE,
+)
+
+
+def _has_strong_pii(body: str) -> bool:
+    return _STRONG_PII.search(body) is not None
 
 
 def _is_principal_id(value: str) -> bool:
@@ -336,5 +357,175 @@ async def run_authz_checks(
                 if identity.role.lower() not in PRIVILEGED_ROLES:
                     findings.append(_bfla_finding(probe, response, identity))
                     break
+
+    return findings
+
+
+# --- Active IDOR by id enumeration -------------------------------------------------------------
+# The checks above are *observational*: they replay already-crawled requests across sessions. This
+# one is *active* — it walks neighbouring integer ids to reach objects the crawler never saw, the
+# classic manual IDOR test. See run_bola_enumeration_checks for the (heavily gated) confirmation.
+_MAX_ENUM_TEMPLATES = 40
+_MAX_NEIGHBORS = 5  # ids probed on each side of an observed id
+
+
+def _enumerable_points(request: HttpRequest) -> list[tuple[str, str | int, int]]:
+    """Integer object-id positions in a request: ('path', segment_index, value) or ('param', name, value).
+
+    Only short integers (<=9 digits) qualify — long digit runs are epochs/codes/phone numbers, not
+    enumerable object ids, and walking them wastes requests.
+    """
+    points: list[tuple[str, str | int, int]] = []
+    segments = urlsplit(request.url).path.split("/")
+    for i, seg in enumerate(segments):
+        if seg.isdigit() and len(seg) <= 9:
+            points.append(("path", i, int(seg)))
+    for name, value in request.params.items():
+        if _ID_PARAM.search(name) and str(value).isdigit() and len(str(value)) <= 9:
+            points.append(("param", name, int(value)))
+    return points
+
+
+def _with_id(request: HttpRequest, point: tuple[str, str | int, int], new_id: int) -> HttpRequest:
+    """A copy of `request` with the id at `point` replaced by `new_id` (path segment or query param)."""
+    kind, key, _ = point
+    if kind == "path":
+        parts = urlsplit(request.url)
+        segments = parts.path.split("/")
+        segments[int(key)] = str(new_id)
+        new_url = urlunsplit((parts.scheme, parts.netloc, "/".join(segments), parts.query, parts.fragment))
+        return request.model_copy(update={"url": new_url})
+    params = dict(request.params)
+    params[str(key)] = str(new_id)
+    return request.model_copy(update={"params": params})
+
+
+def _enum_template_key(request: HttpRequest, point: tuple[str, str | int, int]) -> str:
+    """Stable key that ignores the concrete id, so each endpoint template is enumerated only once."""
+    kind, key, _ = point
+    if kind == "path":
+        parts = urlsplit(request.url)
+        segments = parts.path.split("/")
+        segments[int(key)] = "{id}"
+        return f"{request.method} {parts.netloc}{'/'.join(segments)}"
+    return f"{request.method} {urlsplit(request.url).path}?{key}={{id}}"
+
+
+def _idor_enum_finding(
+    request: HttpRequest,
+    response: HttpResponse,
+    identity: Identity,
+    owners: list[str],
+    tested_ids: list[int],
+) -> Finding:
+    path = urlsplit(request.url).path or "/"
+    template = re.sub(r"/\d+", "/{id}", path)
+    marker = _owner_record_signature(response.text) or "owner"
+    return Finding(
+        id=f"authz-idor-enum:{request.method}:{template}",
+        rule_id="authz-idor-enum",
+        name="Broken Object Level Authorization (IDOR via id enumeration)",
+        severity="high",
+        cwe="CWE-639",
+        owasp="OWASP API1:2023 - BOLA",
+        injection_point=_authz_point(request, "object-id"),
+        evidence=[
+            Evidence(
+                type="differential",
+                data=(
+                    f"session '{identity.name}' walked object ids {tested_ids} on the "
+                    f"access-controlled endpoint {template} and read personal records of multiple "
+                    f"distinct owners ({', '.join(owners)}); a session may only read its own objects"
+                ),
+                confidence="high",
+            )
+        ],
+        request=request,
+        response=response,
+        impact=_bola_impact(response, marker.split("=")[-1]),
+        remediation=(
+            "Enforce object-level authorization: verify the authenticated subject owns or may "
+            "access the specific object id server-side on every request. Do not rely on ids being "
+            "sequential-but-unguessable — treat every id as attacker-controlled."
+        ),
+    )
+
+
+async def run_bola_enumeration_checks(
+    identities: list[Identity],
+    probes: list[HttpRequest],
+    *,
+    unauth_client: HttpClient | None = None,
+    max_templates: int = _MAX_ENUM_TEMPLATES,
+    max_neighbors: int = _MAX_NEIGHBORS,
+) -> list[Finding]:
+    """Active IDOR: on an access-controlled, integer-id GET endpoint, a single non-privileged session
+    walks neighbouring ids. If it retrieves the *personal records of two or more distinct owners*,
+    object-level authorization is missing — a session may only ever read its own objects.
+
+    Low false positives by construction:
+
+    * the endpoint must be provably access-controlled (unauthenticated access is denied), which
+      excludes public catalogs;
+    * each qualifying response must carry a specific principal id (owner_id/user_id/...) *and*
+      strong per-user PII (email/phone/SSN/IBAN/card/balance) — a legitimately member-shared
+      resource (e.g. a forum) never returns a stranger's PII, so it can't trip this;
+    * confirmation requires >=2 *distinct* principals reaching one session (proving per-id records,
+      not a constant self-profile) and the hit is reproduced before reporting.
+
+    Read-only (GET) so it never changes state.
+    """
+    if unauth_client is None:
+        return []  # no privacy oracle -> cannot prove the endpoint is access-controlled
+
+    findings: list[Finding] = []
+    seen_templates: set[str] = set()
+
+    for probe in probes:
+        if probe.method != "GET":
+            continue  # enumeration must not change state
+        points = _enumerable_points(probe)
+        if not points:
+            continue
+        point = points[-1]  # the last integer id — most likely the object id, not an api version
+        template = _enum_template_key(probe, point)
+        if template in seen_templates:
+            continue
+        if len(seen_templates) >= max_templates:
+            break
+        seen_templates.add(template)
+
+        # Privacy proof: the endpoint must deny unauthenticated access.
+        unauth_response = await _send(unauth_client, probe)
+        if unauth_response is None or unauth_response.status_code not in _DENIED_STATUSES:
+            continue
+
+        base = point[2]
+        candidate_ids = [base + d for d in range(-max_neighbors, max_neighbors + 1) if base + d > 0]
+        for identity in identities:
+            if identity.role.lower() in PRIVILEGED_ROLES:
+                continue  # an admin legitimately reads many owners' objects
+            owners: dict[str, tuple[int, HttpResponse]] = {}
+            for cid in candidate_ids:
+                response = await _send(identity.client, _with_id(probe, point, cid))
+                if response is None or not _is_success(response.status_code):
+                    continue
+                signature = _owner_record_signature(response.text)
+                if signature is not None and _has_strong_pii(response.text):
+                    owners.setdefault(signature, (cid, response))
+            if len(owners) < 2:
+                continue
+            # Reproduce one hit before reporting.
+            first_sig, (first_id, first_resp) = next(iter(owners.items()))
+            recheck = await _send(identity.client, _with_id(probe, point, first_id))
+            if recheck is None or _owner_record_signature(recheck.text) != first_sig:
+                continue
+            tested = sorted(cid for _, (cid, _) in owners.items())
+            findings.append(
+                _idor_enum_finding(
+                    _with_id(probe, point, first_id), first_resp, identity, list(owners), tested
+                )
+            )
+            break  # one finding per endpoint template is enough
 
     return findings

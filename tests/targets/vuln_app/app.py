@@ -337,6 +337,21 @@ def create_app() -> Flask:
             return jsonify({"error": "not found"}), 404
         return jsonify({"csrf": secrets.token_hex(16), "invoice": invoice})
 
+    _POSTS = {
+        601: {"id": 601, "user_id": 1, "title": "Welcome", "body": "First post"},
+        602: {"id": 602, "user_id": 2, "title": "Hello", "body": "Second post"},
+    }
+
+    @app.get("/api/posts/<int:post_id>")
+    def get_post(post_id: int) -> Response:
+        """NOT an IDOR: a members-only forum where any logged-in user may read any post. Posts carry
+        an author user_id (a principal id) but no per-user PII, so enumeration across authors is
+        by-design sharing, not a leak — the strong-PII gate must keep this from firing."""
+        if request.cookies.get("session_user_id") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        post = _POSTS.get(post_id)
+        return jsonify(post) if post else (jsonify({"error": "not found"}), 404)
+
     # --- Phase 3: authenticated areas -------------------------------------------------
     # Server-side session/token validity so tests can simulate an expired session and
     # exercise dastcore's automatic re-login. Not linked from '/', so the unauthenticated

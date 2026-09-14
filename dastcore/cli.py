@@ -73,7 +73,7 @@ from dastcore.detectors.active_checks import (
     probe_sensitive_files,
 )
 from dastcore.detectors.authz import Identity as AuthzIdentity
-from dastcore.detectors.authz import run_authz_checks
+from dastcore.detectors.authz import run_authz_checks, run_bola_enumeration_checks
 from dastcore.detectors.cache_deception import run_cache_deception_checks
 from dastcore.detectors.cache_poison import run_cache_poisoning_checks
 from dastcore.detectors.code_injection import run_code_injection_checks
@@ -780,6 +780,7 @@ async def _run_authz(
             identities.append(AuthzIdentity(name=identity_cfg.name, role=identity_cfg.role, client=client))
         unauth_client = await stack.enter_async_context(_make_client(config, budget))
         findings = await run_authz_checks(identities, probes, unauth_client=unauth_client)
+        findings.extend(await run_bola_enumeration_checks(identities, probes, unauth_client=unauth_client))
         if graphql_url:
             findings.extend(await run_graphql_authz_checks(identities, graphql_url, unauth_client=unauth_client))
             findings.extend(await run_graphql_field_authz_checks(identities, graphql_url, unauth_client=unauth_client))
