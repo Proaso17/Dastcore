@@ -72,6 +72,47 @@ async def test_bfla_detected_when_user_hits_admin_function(vuln_app_url: str) ->
     assert "alice" in bfla[0].evidence[0].data
 
 
+async def test_bfla_detected_on_privileged_action_verb(vuln_app_url: str) -> None:
+    """A privileged action named by its verb (/api/users/<id>/promote), not under /admin, reached by
+    a normal user -> BFLA. Exercises the privileged-action recognizer beyond the /admin path."""
+    probes = [HttpRequest(method="POST", url=f"{vuln_app_url}/api/users/5/promote")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice", "admin"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_authz_checks(identities, probes, unauth_client=unauth)
+
+    bfla = [f for f in findings if f.rule_id == "authz-bfla"]
+    assert len(bfla) == 1
+    assert "alice" in bfla[0].evidence[0].data
+
+
+async def test_no_bfla_on_ordinary_user_write(vuln_app_url: str) -> None:
+    """DELETE /api/cart/<id> is a normal user action (no privileged name/verb), so a user succeeding
+    must not be flagged — guards against over-broad verb matching."""
+    probes = [HttpRequest(method="DELETE", url=f"{vuln_app_url}/api/cart/9")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice", "admin"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_authz_checks(identities, probes, unauth_client=unauth)
+
+    assert not any(f.rule_id == "authz-bfla" for f in findings)
+
+
+async def test_bfla_differential_privilege_inversion(vuln_app_url: str) -> None:
+    """/api/legacy/export forbids admins (403) but serves normal users (200). A junior doing what a
+    senior cannot is BFLA by monotonicity — no path/name heuristic involved."""
+    probes = [HttpRequest(method="GET", url=f"{vuln_app_url}/api/legacy/export")]
+    async with AsyncExitStack() as stack:
+        identities = await _identities(stack, ["alice", "admin"])
+        unauth = await stack.enter_async_context(HttpClient(_SCOPE))
+        findings = await run_authz_checks(identities, probes, unauth_client=unauth)
+
+    bfla = [f for f in findings if f.rule_id == "authz-bfla"]
+    assert len(bfla) == 1
+    assert "inversion" in bfla[0].evidence[0].data.lower()
+    assert bfla[0].evidence[0].type == "differential"
+
+
 async def test_no_bfla_on_properly_secured_admin_endpoint(vuln_app_url: str) -> None:
     """/admin/delete enforces the admin role, so a normal user gets 403 -> no BFLA."""
     probes = [HttpRequest(method="POST", url=f"{vuln_app_url}/admin/delete")]

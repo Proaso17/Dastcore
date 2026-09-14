@@ -352,6 +352,35 @@ def create_app() -> Flask:
         post = _POSTS.get(post_id)
         return jsonify(post) if post else (jsonify({"error": "not found"}), 404)
 
+    @app.post("/api/users/<int:user_id>/promote")
+    def promote_user(user_id: int) -> Response:
+        """Vulnerable BFLA: a privileged action (promote to admin) that is authenticated but has NO
+        role check — any logged-in user can invoke it. Named by its action, not under /admin, so a
+        path-name heuristic misses it; the privileged-action recognizer catches it."""
+        if request.cookies.get("session_user_id") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        return jsonify({"status": "promoted", "user_id": user_id, "new_role": "admin"}), 200
+
+    @app.delete("/api/cart/<int:item_id>")
+    def delete_cart_item(item_id: int) -> Response:
+        """NOT BFLA: deleting one's own cart item is an ordinary user action (no privileged name or
+        verb). A normal user succeeding on a plain write must not be flagged as a function-level
+        authorization bypass."""
+        if request.cookies.get("session_user_id") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        return jsonify({"status": "removed", "item_id": item_id}), 200
+
+    @app.get("/api/legacy/export")
+    def legacy_export() -> Response:
+        """Privilege inversion for the differential BFLA oracle: a legacy report that forbids admin
+        accounts (403) but serves normal users (200). A junior doing what a senior cannot is broken
+        function-level authorization, provable with no name heuristic."""
+        if request.cookies.get("session_user_id") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        if request.cookies.get("session_role") == "admin":
+            return jsonify({"error": "forbidden for admin"}), 403
+        return jsonify({"report": "user export data"}), 200
+
     # --- Phase 3: authenticated areas -------------------------------------------------
     # Server-side session/token validity so tests can simulate an expired session and
     # exercise dastcore's automatic re-login. Not linked from '/', so the unauthenticated

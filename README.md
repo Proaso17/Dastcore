@@ -480,7 +480,7 @@ La Fase 7 entrega el descubrimiento de API por esquema y la detección de **auto
 - `dastcore/discovery/graphql.py` — corre la query de introspección y convierte cada campo de query/mutation en un request de sondeo.
 - `dastcore/detectors/authz.py` — checks diferenciales **multi-sesión**:
   - **BOLA/IDOR**: un endpoint con id de objeto devuelve el **mismo objeto** a dos usuarios distintos → falta autorización a nivel de objeto.
-  - **BFLA**: una identidad de rol inferior invoca con éxito una función privilegiada (admin/management) que sí exige autenticación.
+  - **BFLA**: una identidad no privilegiada invoca una función privilegiada. Dos señales: (1) función privilegiada **por nombre** — superficie `/admin` o acción de gestión (`promote`/`impersonate`/`ban`/`backoffice`/`superadmin`…) — alcanzada por un rol inferior; (2) **inversión de privilegio** (sin depender del nombre): un rol inferior tiene éxito donde uno superior recibe **403** → por monotonía, autorización de función rota.
   - **Missing authentication**: un endpoint sensible responde con éxito **sin credenciales**.
   - Cada check exige una diferencia real de acceso para dispararse → falsos positivos cercanos a cero (y no se doble-reporta: un endpoint sin auth es missing-auth, no también BFLA).
 - Config: `ScanConfig.identities` (lista de `{name, role, auth}`). CLI: `--roles-file <json>`, `--openapi <url>`, `--graphql <url>`.

@@ -11,8 +11,11 @@ who can reach what:
   principal id — owner_id/user_id/account_id value or email) reaches ≥2 identities even
   when the surrounding body differs (per-session chrome), gated on a privacy proof that
   the object is access-controlled (unauth or another identity is denied 401/403/404).
-* **BFLA** — a lower-privilege identity successfully invokes a privileged
-  (admin/management) function.
+* **BFLA** — a non-privileged identity invokes a privileged function. Two signals:
+  (1) the function is privileged by name — an /admin surface or a management action
+  (promote/impersonate/ban/...) — and a non-privileged identity reached it; (2) a privilege
+  *inversion*, needing no naming — a lower-privilege identity succeeds where a higher-privilege
+  one is forbidden (403), which by monotonicity is always a broken function-level check.
 * **Missing authentication** — a sensitive endpoint returns success with no
   credentials at all.
 
@@ -38,6 +41,14 @@ from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, I
 PRIVILEGED_ROLES = {"staff", "manager", "admin", "administrator", "superadmin", "root"}
 
 _PRIVILEGED_PATH = re.compile(r"(^|/)(admin|administrator|manage|management|internal)(/|$)", re.IGNORECASE)
+# Privileged *functions* by name, beyond the /admin surface: management consoles and actions that
+# by their very name require elevated authority. High-confidence tokens only — deliberately no
+# generic ones like "settings"/"config"/"users" that ordinary users legitimately reach.
+_PRIVILEGED_ACTION = re.compile(
+    r"(^|/)(wp-admin|backoffice|back-office|superadmin|sysadmin|impersonate|masquerade|sudo|"
+    r"promote|demote|grant|revoke|suspend|unban|ban|moderation|moderator|takeover)(/|$)",
+    re.IGNORECASE,
+)
 _SENSITIVE_PATH = re.compile(r"(admin|internal|config|secret|token|password|private|credential)", re.IGNORECASE)
 _OBJECT_SEGMENT = re.compile(r"^(\d+|[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,})$")
 _ID_PARAM = re.compile(r"(^|_)(id|uuid|guid)$", re.IGNORECASE)
@@ -138,6 +149,13 @@ def _looks_object_scoped(request: HttpRequest) -> bool:
         return True
     keys = list(request.params) + list((request.json_body or {}) if isinstance(request.json_body, dict) else [])
     return any(_ID_PARAM.search(key) for key in keys)
+
+
+def _privileged_function(request: HttpRequest) -> bool:
+    """Whether the endpoint is a privileged *function* by name — an /admin-style surface or a
+    management action (promote/impersonate/ban/...) that by its name requires elevated authority."""
+    path = urlsplit(request.url).path
+    return bool(_PRIVILEGED_PATH.search(path) or _PRIVILEGED_ACTION.search(path))
 
 
 def _authz_point(request: HttpRequest, name: str) -> InjectionPoint:
@@ -253,6 +271,42 @@ def _bfla_finding(request: HttpRequest, response: HttpResponse, identity: Identi
     )
 
 
+def _bfla_differential_finding(
+    request: HttpRequest, response: HttpResponse, junior: Identity, senior: Identity
+) -> Finding:
+    """BFLA proven by a privilege inversion: a lower-privilege identity succeeds where a
+    higher-privilege one is forbidden. Needs no path/name heuristic — privileges are monotonic,
+    so a junior doing what a senior cannot is unambiguously broken function-level authorization."""
+    path = urlsplit(request.url).path or "/"
+    return Finding(
+        id=f"authz-bfla:{request.method}:{path}",
+        rule_id="authz-bfla",
+        name="Broken Function Level Authorization (BFLA)",
+        severity="high",
+        cwe="CWE-285",
+        owasp="OWASP API5:2023 - BFLA",
+        injection_point=_authz_point(request, "function"),
+        evidence=[
+            Evidence(
+                type="differential",
+                data=(
+                    f"privilege inversion: '{junior.name}' (role '{junior.role}') invoked this function "
+                    f"(HTTP {response.status_code}) while the higher-privilege '{senior.name}' "
+                    f"(role '{senior.role}') was forbidden (HTTP 403) — a junior can do what a senior cannot"
+                ),
+                confidence="high",
+            )
+        ],
+        request=request,
+        response=response,
+        remediation=(
+            "Enforce function-level authorization consistently: check the caller's role/permission "
+            "on every privileged endpoint server-side, denying by default. A lower-privilege role "
+            "must never reach a function a higher-privilege role is denied."
+        ),
+    )
+
+
 def _missing_auth_finding(request: HttpRequest, response: HttpResponse) -> Finding:
     path = urlsplit(request.url).path or "/"
     return Finding(
@@ -286,9 +340,11 @@ async def run_authz_checks(
     findings: list[Finding] = []
 
     for probe in probes:
+        results: list[tuple[Identity, HttpResponse | None]] = []
         successful: list[tuple[Identity, HttpResponse, str]] = []
         for identity in identities:
             response = await _send(identity.client, probe)
+            results.append((identity, response))
             if response is not None and _is_success(response.status_code):
                 successful.append((identity, response, _normalize_body(response.text)))
 
@@ -352,11 +408,30 @@ async def run_authz_checks(
         # auth-gated. If the endpoint is reachable unauthenticated, the root cause is missing
         # authentication (reported above), not a function-level authorization bypass — so we
         # don't double-report it here.
-        if _PRIVILEGED_PATH.search(urlsplit(probe.url).path) and not unauth_ok:
-            for identity, response, _ in successful:
-                if identity.role.lower() not in PRIVILEGED_ROLES:
-                    findings.append(_bfla_finding(probe, response, identity))
-                    break
+        if not unauth_ok:
+            junior_success = next(
+                (r for r in successful if r[0].role.lower() not in PRIVILEGED_ROLES), None
+            )
+            # Signal 1 — the function is privileged *by name* (an /admin surface or a management
+            # action like promote/impersonate/ban), and a non-privileged identity reached it.
+            if _privileged_function(probe) and junior_success is not None:
+                findings.append(_bfla_finding(probe, junior_success[1], junior_success[0]))
+            # Signal 2 — privilege inversion, no naming needed: a non-privileged identity succeeds
+            # while a *higher*-privilege identity is forbidden (403) on the same function. Requires a
+            # function (not object-scoped, else it's BOLA) and is unambiguous by monotonicity.
+            elif junior_success is not None and not _looks_object_scoped(probe):
+                senior_denied = next(
+                    (
+                        i
+                        for i, resp in results
+                        if resp is not None and resp.status_code == 403 and i.role.lower() in PRIVILEGED_ROLES
+                    ),
+                    None,
+                )
+                if senior_denied is not None:
+                    findings.append(
+                        _bfla_differential_finding(probe, junior_success[1], junior_success[0], senior_denied)
+                    )
 
     return findings
 
