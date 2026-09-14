@@ -116,6 +116,7 @@ from dastcore.detectors.user_enum import run_user_enumeration_checks
 from dastcore.detectors.weak_credentials import WeakCredentials, find_weak_credentials
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
 from dastcore.detectors.xslt_injection import run_xslt_injection_checks
+from dastcore.detectors.hpp import run_hpp_checks
 from dastcore.detectors.xxe_inband import run_xxe_inband_checks
 from dastcore.discovery.activate import activate_endpoints
 from dastcore.discovery.api_probe import probe_api_schemas
@@ -2172,6 +2173,7 @@ async def _run_scan(
             extra_findings.extend(await phase("ssti-error", run_ssti_error_checks(client, all_requests)))
             extra_findings.extend(await phase("code-injection", run_code_injection_checks(client, all_requests)))
             extra_findings.extend(await phase("xxe-inband", run_xxe_inband_checks(client, all_requests)))
+            extra_findings.extend(await phase("hpp", run_hpp_checks(client, all_requests)))
             extra_findings.extend(await phase("xslt-injection", run_xslt_injection_checks(client, all_requests)))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.

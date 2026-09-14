@@ -52,6 +52,43 @@ def _app(*, vulnerable: bool):
     return app
 
 
+def _app_variants():
+    """Endpoints that isolate the DOCTYPE-free and encoding-bypass techniques.
+
+    Both simulate the relevant parser/filter behaviour deterministically (no real filesystem read),
+    so the test exercises the detector's delivery strategies on any OS."""
+    from flask import Flask, Response, request
+
+    app = Flask(__name__)
+
+    @app.post("/xinclude")
+    def xinclude() -> Response:
+        # A parser that FORBIDS DOCTYPE (so classic SYSTEM-entity XXE fails) but processes XInclude.
+        body = request.get_data(as_text=True)
+        if "<!DOCTYPE" in body or "<!ENTITY" in body:
+            return Response("<result>DOCTYPE forbidden</result>", mimetype="text/html", status=400)
+        if 'parse="text"' in body and "XInclude" in body and 'href="file://' in body:
+            return Response(f"<html><result>{_FAKE_PASSWD}</result></html>", mimetype="text/html")
+        return Response("<result></result>", mimetype="text/html")
+
+    @app.post("/utf16")
+    def utf16() -> Response:
+        # A naive signature WAF blocks the ASCII DOCTYPE/ENTITY bytes; a UTF-16 body slips past it and
+        # the parser auto-detects the encoding from the BOM and resolves the SYSTEM entity.
+        raw = request.get_data()
+        if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+            return Response("<result>blocked</result>", mimetype="text/html", status=403)
+        try:
+            text = raw.decode("utf-16")
+        except (UnicodeDecodeError, ValueError):
+            text = raw.decode("utf-8", "ignore")
+        if "SYSTEM" in text and "file://" in text:
+            return Response(f"<html><result>{_FAKE_PASSWD}</result></html>", mimetype="text/html")
+        return Response("<result></result>", mimetype="text/html")
+
+    return app
+
+
 def _serve(app) -> tuple[str, object]:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -71,6 +108,13 @@ def vuln_url() -> Iterator[str]:
 @pytest.fixture(scope="module")
 def safe_url() -> Iterator[str]:
     url, server = _serve(_app(vulnerable=False))
+    yield url
+    server.shutdown()
+
+
+@pytest.fixture(scope="module")
+def variants_url() -> Iterator[str]:
+    url, server = _serve(_app_variants())
     yield url
     server.shutdown()
 
@@ -104,3 +148,22 @@ async def test_non_xml_endpoint_is_left_alone(vuln_url: str) -> None:
     async with HttpClient(_scope()) as client:
         findings = await run_xxe_inband_checks(client, [req])
     assert findings == []
+
+
+async def test_xinclude_file_read_without_doctype(variants_url: str) -> None:
+    """DOCTYPE is forbidden (classic XXE blocked), but XInclude reads the file → flagged via XInclude."""
+    req = HttpRequest(method="POST", url=f"{variants_url}/xinclude", headers={"Content-Type": "application/xml"})
+    async with HttpClient(_scope()) as client:
+        findings = await run_xxe_inband_checks(client, [req])
+    assert len(findings) == 1
+    assert findings[0].rule_id == "xxe-inband"
+    assert "xinclude" in findings[0].evidence[0].data.lower()
+
+
+async def test_utf16_encoding_bypasses_signature_filter(variants_url: str) -> None:
+    """A UTF-8 DOCTYPE is blocked by a signature WAF; the UTF-16 variant slips through → flagged."""
+    req = HttpRequest(method="POST", url=f"{variants_url}/utf16", headers={"Content-Type": "application/xml"})
+    async with HttpClient(_scope()) as client:
+        findings = await run_xxe_inband_checks(client, [req])
+    assert len(findings) == 1
+    assert "utf-16" in findings[0].evidence[0].data.lower()

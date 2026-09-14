@@ -57,7 +57,7 @@ _KEYWORD_TO_CAT: list[tuple[str, tuple[str, ...]]] = [
              "integrity", "takeover", "smuggling", "unsigned")),
     ("A03", ("sqli", "sql-injection", "xss", "ssti", "template-injection", "cmdi", "command-injection",
              "ldap", "xpath", "crlf", "code-injection", "ssi", "nosql", "response-splitting",
-             "header-injection", "host-header", "injection")),
+             "header-injection", "host-header", "parameter-pollution", "hpp", "injection")),
     ("A01", ("idor", "bola", "bfla", "authz", "access-bypass", "access-control", "path-traversal",
              "traversal", "lfi", "open-redirect", "redirect", "directory-listing", "csrf",
              "forced-browsing", "unauth-access")),
@@ -83,8 +83,8 @@ _CWE_TO_CAT: dict[str, str] = {
     "759": "A02", "760": "A02",
     # A03 Injection
     "78": "A03", "79": "A03", "89": "A03", "90": "A03", "91": "A03", "93": "A03", "94": "A03",
-    "95": "A03", "96": "A03", "97": "A03", "98": "A03", "113": "A03", "564": "A03", "643": "A03",
-    "644": "A03", "917": "A03", "943": "A03", "1336": "A03",
+    "95": "A03", "96": "A03", "97": "A03", "98": "A03", "113": "A03", "235": "A03", "564": "A03",
+    "643": "A03", "644": "A03", "917": "A03", "943": "A03", "1336": "A03",
     # A04 Insecure Design
     "209": "A04", "501": "A04", "602": "A04", "807": "A04", "840": "A04", "1021": "A04", "1173": "A04",
     # A05 Security Misconfiguration

