@@ -43,6 +43,33 @@ def _app():
         body = request.get_json(silent=True) or {}
         return jsonify({"greeting": f"hi {body.get('name', '')}"}), 200
 
+    # --- Read-back fixtures: updates that bind server-side but do NOT echo the object ---
+    state = {"1": {"id": 1, "name": "bob", "email": "bob@x.test", "role": "user", "is_admin": False}}
+    state_safe = {"1": {"id": 1, "name": "bob", "email": "bob@x.test", "role": "user", "is_admin": False}}
+
+    @app.route("/profile/<uid>", methods=["PUT", "PATCH"])  # VULNERABLE: binds body, echoes nothing
+    def profile_update(uid: str):
+        body = request.get_json(silent=True) or {}
+        state.setdefault(uid, {"id": int(uid)}).update(body)  # over-posts role/is_admin/...
+        return jsonify({"status": "ok"}), 200  # no echo -> only a read-back can prove the bind
+
+    @app.get("/profile/<uid>")
+    def profile_get(uid: str):
+        return jsonify(state.get(uid, {})), 200
+
+    @app.route("/profile-safe/<uid>", methods=["PUT", "PATCH"])  # HARDENED: allowlist, no echo
+    def profile_safe(uid: str):
+        body = request.get_json(silent=True) or {}
+        obj = state_safe.setdefault(uid, {"id": int(uid), "role": "user", "is_admin": False})
+        for key, value in body.items():
+            if key in _ALLOWED:
+                obj[key] = value
+        return jsonify({"status": "ok"}), 200
+
+    @app.get("/profile-safe/<uid>")
+    def profile_safe_get(uid: str):
+        return jsonify(state_safe.get(uid, {})), 200
+
     return app
 
 
@@ -118,3 +145,25 @@ async def test_non_json_body_is_skipped(mass_server: str) -> None:
     async with HttpClient(_scope()) as client:
         req = HttpRequest(method="POST", url=f"{mass_server}/users-vuln", data={"name": "bob"})
         assert await check_mass_assignment(client, req) == []
+
+
+def _put(url: str) -> HttpRequest:
+    return HttpRequest(method="PUT", url=url, json_body={"name": "bob", "email": "bob@x.test"})
+
+
+async def test_readback_detects_silent_bind(mass_server: str) -> None:
+    """A PUT that binds `role`/`is_admin` but returns only {"status":"ok"} never reflects the field;
+    re-reading the object proves the value persisted → flagged."""
+    async with HttpClient(_scope()) as client:
+        findings = await check_mass_assignment(client, _put(f"{mass_server}/profile/1"))
+    assert findings, "read-back should catch a bind the write response never echoes"
+    assert all(f.rule_id == "mass-assignment" and f.cwe == "CWE-915" for f in findings)
+    names = {f.injection_point.name for f in findings}
+    assert names & {"role", "is_admin"}  # the privileged fields it bound
+    assert any("read of the object" in f.evidence[0].data for f in findings)  # read-back mode
+
+
+async def test_readback_hardened_endpoint_not_flagged(mass_server: str) -> None:
+    """An allowlist update ignores unexpected fields, so the read-back never shows them → no finding."""
+    async with HttpClient(_scope()) as client:
+        assert await check_mass_assignment(client, _put(f"{mass_server}/profile-safe/1")) == []
