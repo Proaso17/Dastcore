@@ -81,6 +81,7 @@ from dastcore.detectors.csrf import run_csrf_checks
 from dastcore.detectors.css_injection import run_css_injection_checks
 from dastcore.detectors.cswsh import run_cswsh_checks
 from dastcore.detectors.deserialization_active import run_deserialization_checks
+from dastcore.detectors.dom_clobbering import run_dom_clobbering_checks
 from dastcore.detectors.dom_xss_static import run_dom_xss_static_checks
 from dastcore.detectors.file_upload import run_file_upload_checks
 from dastcore.detectors.fingerprint import fingerprint_and_waf
@@ -2178,6 +2179,7 @@ async def _run_scan(
             extra_findings.extend(await phase("hpp", run_hpp_checks(client, all_requests)))
             extra_findings.extend(await phase("css-injection", run_css_injection_checks(client, all_requests)))
             extra_findings.extend(await phase("cswsh", run_cswsh_checks(client, all_requests)))
+            extra_findings.extend(await phase("dom-clobbering", run_dom_clobbering_checks(client, all_requests)))
             extra_findings.extend(await phase("xslt-injection", run_xslt_injection_checks(client, all_requests)))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.
