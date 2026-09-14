@@ -78,6 +78,7 @@ from dastcore.detectors.cache_deception import run_cache_deception_checks
 from dastcore.detectors.cache_poison import run_cache_poisoning_checks
 from dastcore.detectors.code_injection import run_code_injection_checks
 from dastcore.detectors.csrf import run_csrf_checks
+from dastcore.detectors.css_injection import run_css_injection_checks
 from dastcore.detectors.deserialization_active import run_deserialization_checks
 from dastcore.detectors.dom_xss_static import run_dom_xss_static_checks
 from dastcore.detectors.file_upload import run_file_upload_checks
@@ -85,6 +86,7 @@ from dastcore.detectors.fingerprint import fingerprint_and_waf
 from dastcore.detectors.graphql import run_graphql_checks
 from dastcore.detectors.graphql_authz import run_graphql_authz_checks, run_graphql_field_authz_checks
 from dastcore.detectors.graphql_injection import check_graphql_arg_injection
+from dastcore.detectors.hpp import run_hpp_checks
 from dastcore.detectors.js_secrets import run_js_secret_scan
 from dastcore.detectors.jwt import (
     check_jwt_algorithm_confusion,
@@ -116,7 +118,6 @@ from dastcore.detectors.user_enum import run_user_enumeration_checks
 from dastcore.detectors.weak_credentials import WeakCredentials, find_weak_credentials
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
 from dastcore.detectors.xslt_injection import run_xslt_injection_checks
-from dastcore.detectors.hpp import run_hpp_checks
 from dastcore.detectors.xxe_inband import run_xxe_inband_checks
 from dastcore.discovery.activate import activate_endpoints
 from dastcore.discovery.api_probe import probe_api_schemas
@@ -2174,6 +2175,7 @@ async def _run_scan(
             extra_findings.extend(await phase("code-injection", run_code_injection_checks(client, all_requests)))
             extra_findings.extend(await phase("xxe-inband", run_xxe_inband_checks(client, all_requests)))
             extra_findings.extend(await phase("hpp", run_hpp_checks(client, all_requests)))
+            extra_findings.extend(await phase("css-injection", run_css_injection_checks(client, all_requests)))
             extra_findings.extend(await phase("xslt-injection", run_xslt_injection_checks(client, all_requests)))
             if config.auth.type == "form" and config.auth.form is not None:
                 # Fresh visitor (empty jar): capture the pre-auth session, then confirm it isn't rotated.
