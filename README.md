@@ -52,7 +52,7 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | Clase | Cómo | CWE / OWASP |
 |---|---|---|
 | SQL Injection (error + **boolean-blind TRUE/FALSE** + blind time-based) | regla YAML | CWE-89 / WSTG-INPV-05 |
-| **SQL Injection confirmada por sqlmap** (`--sqlmap`, opt-in: barrido profundo con sqlmap sobre los puntos de inyección descubiertos; enriquece con DBMS/técnica/banner como prueba de impacto; sin `--dump` — no roba datos; scope-enforced; no-op con advisory si sqlmap no está instalado) | integración externa | CWE-89 / A03:2021 |
+| **SQL Injection confirmada por sqlmap** (barrido profundo con sqlmap sobre los puntos de inyección descubiertos; enriquece con DBMS/técnica/banner como prueba de impacto; sin `--dump` — no roba datos; scope-enforced. **En el panel web se activa automáticamente** si sqlmap está instalado; en CLI es opt-in con `--sqlmap`; no-op con advisory si falta el binario) | integración externa | CWE-89 / A03:2021 |
 | NoSQL Injection (error-based **+ operator injection `$ne`/`$eq` con oráculo diferencial de 3 vías → bypass de auth**, JSON y form/qs bracket) | regla YAML + detector activo | CWE-943 / WSTG-INPV-05 |
 | **Prototype pollution server-side** (Node/Express: inyecta `__proto__` y confirma por el oráculo *json spaces* — la respuesta JSON pasa a indentada; restaura el prototipo) — `--test-proto-pollution`, intrusivo, no en quick | detector activo | CWE-1321 / A08:2021 |
 | **XPath Injection** (error-based) | regla YAML | CWE-643 / WSTG-INPV-09 |

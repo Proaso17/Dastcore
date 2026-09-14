@@ -28,6 +28,7 @@ from dastcore.cli import (
 from dastcore.config import OutputConfig, RateLimitConfig, ScanConfig, ScopeConfig
 from dastcore.core.models import Finding
 from dastcore.engine.rule_engine import load_rules
+from dastcore.integrations.sqlmap import sqlmap_available
 from dastcore.notify import filter_by_severity, send_alert
 from dastcore.retest import classify, open_findings, summarize
 from dastcore.web.diff import diff_findings
@@ -313,6 +314,9 @@ class ScanManager:
                 use_permutations=use_permutations,
                 interactive=interactive,
                 supabase_write_test=supabase_write_test,
+                # The web scanner uses sqlmap automatically (no toggle needed): enable the deep SQLi
+                # sweep whenever the sqlmap binary is present, and stay a silent no-op when it isn't.
+                sqlmap=sqlmap_available(("sqlmap",)),
             )
             duration = time.monotonic() - started
             self._store.mark_done(job.id, time.time(), duration, findings)
