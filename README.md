@@ -107,7 +107,9 @@ El problema de las herramientas open source generales no es qué encuentran, sin
 | **Exposición de objeto serializado** (Java/PHP/pickle → sink de deserialización) | pasivo | CWE-502 / A08:2021 |
 | **Deserialización insegura activa** (inyecta payloads benignos con callback OAST — pickle Python, `node-serialize` Node — y confirma la RCE-gadget **out-of-band**; no-op sin `--oast`) | detector activo | CWE-502 / A08:2021 |
 | **Envío de credenciales en claro** (form password → acción `http://`) | pasivo | CWE-319 / WSTG-ATHN-01 |
-| **OAuth2/OIDC: validación laxa de `redirect_uri`** (reenvía el authorize con un `redirect_uri` ajeno; si el servidor redirige a ese origen → robo de código/token) | detector activo | CWE-601 / A07:2021 |
+| **OAuth2/OIDC: validación laxa de `redirect_uri`** (reenvía el authorize con `redirect_uri` controlado por el atacante y sus **bypasses** de validador — foráneo, `registrado@atacante` (userinfo), `registrado.atacante` (subdominio), `atacante/registrado` (path); dispara solo si el host de redirección resuelto es nuestro → robo de código/token) | detector activo | CWE-601 / A07:2021 |
+| **OAuth2/OIDC: falta de `state`** (petición de autorización sin token anti-CSRF → CSRF de login / vinculación forzada de cuenta) | pasivo | CWE-352 / A07:2021 |
+| **OAuth2/OIDC: sin PKCE** (flujo de código sin `code_challenge` → interceptación del código de autorización; PKCE obligatorio en clientes públicos) | pasivo | CWE-287 / A07:2021 |
 | **Token de sesión expuesto en la URL** (query con sessionid/access_token) | pasivo | CWE-598 / WSTG-SESS-04 |
 | **Session fixation** (el identificador de sesión no se renueva al autenticarse; se confirma con un login válido — diferencial creds correctas vs incorrectas — y comparando la cookie de sesión antes/después) | detector activo (form-login) | CWE-384 / A07:2021 |
 | **Credenciales débiles/por defecto** (prueba pares por defecto contra el login; solo reporta si uno autentica de verdad — establece sesión / redirige, a diferencia de un intento inválido) — `--test-weak-creds`, intrusivo, no en quick | detector activo (form-login) | CWE-1391/287 / A07:2021 |
