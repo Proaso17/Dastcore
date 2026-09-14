@@ -39,6 +39,7 @@ from dastcore.ai.payload_gen import AiPayloadGenerator, build_payload_generator
 from dastcore.ai.presets import AI_PRESETS, resolve_preset
 from dastcore.ai.stored_injection import StoredInjectionScanner, WriteEndpoint, infer_write_endpoints
 from dastcore.analysis import prove_findings_impact
+from dastcore.analysis.edge_posture import summarize_edge_posture
 from dastcore.analysis.planner import (
     ReconPlan,
     ScanPlan,
@@ -2339,6 +2340,11 @@ async def _run_scan(
 
     # Cross-technique correlation over the complete set (in-band + probes + DOM + authz).
     final_findings = cross_correlate(active_passive + extra_findings + dom_findings + authz_findings)
+
+    # Edge posture: fold WAF detection + WAF audit + ACL bypasses (path/method/header) into one advisory.
+    _edge_posture = summarize_edge_posture(final_findings, str(config.target))
+    if _edge_posture is not None:
+        final_findings.append(_edge_posture)
 
     # Bug-bounty mode: suppress the hardening/disclosure/no-impact findings that programs (HackerOne
     # Core et al.) close as N/A, so the report and gate count only the potentially-reportable ones.
