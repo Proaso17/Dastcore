@@ -118,6 +118,7 @@ from dastcore.detectors.ssrf_metadata import run_cloud_ssrf_checks
 from dastcore.detectors.ssti_error import run_ssti_error_checks
 from dastcore.detectors.takeover import run_subdomain_takeover_check
 from dastcore.detectors.user_enum import run_user_enumeration_checks
+from dastcore.detectors.waf_audit import run_waf_audit
 from dastcore.detectors.weak_credentials import WeakCredentials, find_weak_credentials
 from dastcore.detectors.xml_expansion import run_xml_expansion_checks
 from dastcore.detectors.xslt_injection import run_xslt_injection_checks
@@ -1501,6 +1502,7 @@ async def _run_scan(
     progress: _ProgressAdapter | None = None,
     stored_scan: bool = False,
     waf_evasion: bool = False,
+    waf_audit: bool = False,
     test_race: bool = False,
     test_csrf: bool = False,
     test_proto_pollution: bool = False,
@@ -2084,6 +2086,15 @@ async def _run_scan(
             if on_finding is not None:
                 on_finding(_plan_finding)
             _scan_log.info("Plan de escaneo adaptativo:\n%s", render_plan(_target_profile, _scan_plan))
+
+            # WAF effectiveness audit (opt-in): measure the WAF in front of the app — which vuln
+            # families it blocks, which pass unfiltered, and which blocks are bypassable. Sends inert
+            # canaries, so it's off by default and gated behind --waf-audit.
+            if waf_audit:
+                for root in scan_roots:
+                    extra_findings.extend(
+                        await phase("waf-audit", run_waf_audit(client, root, waf_vendor=_target_profile.waf_vendor))
+                    )
 
             # The reconnaissance brain closes the loop: probe the stack-specific high-signal paths the plan
             # chose (/actuator, /.env, /wp-json…) and feed the live ones into the surface, so they get
@@ -2723,6 +2734,12 @@ def scan(
         help="Si el WAF bloquea un payload, reintenta con encoders/tampers para confirmar la vuln enmascarada "
         "(intrusivo; no se activa en el perfil quick).",
     ),
+    waf_audit: bool = typer.Option(
+        False,
+        "--waf-audit",
+        help="Audita el WAF: envía canarios inertes por familia (SQLi/XSS/LFI/RCE/SSRF/SSTI/Log4Shell) y "
+        "reporta qué bloquea, qué deja pasar y qué bloqueos son evadibles (opt-in; envía payloads maliciosos).",
+    ),
     test_race: bool = typer.Option(
         False,
         "--test-race",
@@ -3265,6 +3282,7 @@ def scan(
                     _ProgressAdapter(progress),
                     stored_scan=stored,
                     waf_evasion=waf_evasion and profile != "quick",
+                    waf_audit=waf_audit and profile != "quick",
                     test_race=test_race and profile != "quick",
                     test_csrf=test_csrf and profile != "quick",
                     test_proto_pollution=test_proto_pollution and profile != "quick",

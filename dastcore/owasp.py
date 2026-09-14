@@ -63,6 +63,7 @@ _KEYWORD_TO_CAT: list[tuple[str, tuple[str, ...]]] = [
              "traversal", "lfi", "open-redirect", "redirect", "directory-listing", "csrf",
              "forced-browsing", "unauth-access")),
     ("A05", ("misconfig", "security-header", "missing-header", "cors", "sensitive-file", "exposed",
+             "waf-audit",
              "actuator", "trace-method", "dangerous-method", "clickjacking", "verbose-error",
              "stack-trace", "xxe", "xml-expansion", "redos", "default", "cache-poison",
              "cache-deception", "web-cache", "csp")),
