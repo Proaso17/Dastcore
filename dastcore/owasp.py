@@ -58,7 +58,7 @@ _KEYWORD_TO_CAT: list[tuple[str, tuple[str, ...]]] = [
     ("A03", ("sqli", "sql-injection", "xss", "ssti", "template-injection", "cmdi", "command-injection",
              "ldap", "xpath", "crlf", "code-injection", "ssi", "nosql", "response-splitting",
              "header-injection", "host-header", "parameter-pollution", "hpp", "css-injection",
-             "dom-clobbering", "clobber", "injection")),
+             "dom-clobbering", "clobber", "orm-leak", "operator-injection", "injection")),
     ("A01", ("idor", "bola", "bfla", "authz", "access-bypass", "access-control", "path-traversal",
              "traversal", "lfi", "open-redirect", "redirect", "directory-listing", "csrf",
              "forced-browsing", "unauth-access")),
