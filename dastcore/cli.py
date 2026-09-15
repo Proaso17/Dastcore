@@ -156,11 +156,14 @@ from dastcore.discovery.subdomains import (
 from dastcore.discovery.supabase import (
     SupabaseDiscoverer,
     SupabaseProfile,
+    anon_key_from_refs,
+    derive_supabase_backend,
     graphql_url_for,
     is_supabase_project,
     probe_cross_user_bola,
     probe_supabase_aux,
     probe_write_rls,
+    rest_target_from_refs,
 )
 from dastcore.discovery.tech_paths import discover_tech_paths
 from dastcore.discovery.tls_info import run_tls_checks
@@ -3311,6 +3314,34 @@ def scan(
     if _is_default_source(ctx, "deny_domain") and scan_file.deny_domains is not None:
         deny_domain = scan_file.deny_domains
 
+    # Zero-config Supabase: given only --supabase-frontend and no target, mine the front-end bundle to
+    # derive the REST target + anon key + table names, so you don't hand-copy the project ref / anon key
+    # per environment. (Found dogfooding getnyma: beta and staging are different projects.)
+    _derived_apikey = ""
+    if not target and supabase_frontend:
+        from urllib.parse import urlsplit
+
+        try:
+            _refs = asyncio.run(derive_supabase_backend(supabase_frontend))
+        except Exception as exc:  # noqa: BLE001 — a failed derivation just falls through to the target guard
+            _refs = None
+            _scan_log.warning("auto-derivación Supabase falló: %s: %s", type(exc).__name__, exc)
+        _derived_target = rest_target_from_refs(_refs) if _refs is not None else ""
+        if _derived_target:
+            target = _derived_target
+            _derived_apikey = anon_key_from_refs(_refs)
+            for _host in (urlsplit(_derived_target).netloc, urlsplit(supabase_frontend).netloc):
+                if _host and _host not in allow_domain:
+                    allow_domain = [*allow_domain, _host]
+            if not supabase_tables and _refs.tables:
+                supabase_tables = sorted(_refs.tables)
+            console.print(
+                f"[green]Supabase auto-detectado desde el frontend:[/green] target [bold]{_derived_target}[/bold] · "
+                f"anon key {'derivada' if _derived_apikey else 'no hallada'} · {len(_refs.tables)} tabla(s) del bundle"
+            )
+        elif _refs is not None:
+            console.print("[yellow]--supabase-frontend: no se pudo derivar el proyecto Supabase del bundle.[/yellow]")
+
     if not target:
         console.print("[bold red]Falta el target:[/bold red] pásalo como argumento o en --config.")
         raise typer.Exit(code=1)
@@ -3385,6 +3416,14 @@ def scan(
         )
         if auth.type == "none" and scan_file.auth is not None:
             auth = scan_file.auth
+        if _derived_apikey:
+            # Supabase REST needs the anon `apikey` header on every request; inject the derived one.
+            _merged = {**(auth.headers or {}), "apikey": _derived_apikey}
+            auth = (
+                AuthConfig(type="header", headers=_merged)
+                if auth.type == "none"
+                else auth.model_copy(update={"headers": _merged})
+            )
         config = ScanConfig(
             target=target,  # type: ignore[arg-type]
             scope=ScopeConfig(allow_domains=list(allow_domain), deny_domains=list(deny_domain)),

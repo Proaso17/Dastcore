@@ -109,6 +109,51 @@ def graphql_url_for(url: str) -> str:
     return f"https://{ref}.supabase.co/graphql/v1" if ref else ""
 
 
+def rest_target_from_refs(refs: SupabaseRefs) -> str:
+    """The PostgREST base derived from mined project refs: ``https://<ref>.supabase.co/rest/v1/`` (or "")."""
+    ref = next(iter(sorted(refs.project_refs)), "")
+    return f"https://{ref}.supabase.co/rest/v1/" if ref else ""
+
+
+def anon_key_from_refs(refs: SupabaseRefs) -> str:
+    """One mined anon key (public JWT) to use as the ``apikey``, or "" if none was found."""
+    return next(iter(sorted(refs.anon_keys)), "")
+
+
+async def derive_supabase_backend(frontend_url: str, *, max_scripts: int = 25, timeout: float = 8.0) -> SupabaseRefs:
+    """Fetch a Supabase app's front-end (page + its same-origin script bundles) and mine its backend:
+    the project ref (→ REST target), the anon key (→ apikey) and table names — so a scan can be
+    auto-configured from just the front-end URL, instead of hand-copying them per environment.
+
+    Standalone/best-effort httpx (the front-end URL is operator-provided and explicitly in scope); only
+    same-origin scripts are fetched, and a dead page/script is skipped rather than raising."""
+    import httpx
+
+    refs = SupabaseRefs()
+    origin = frontend_url.rstrip("/") + "/"
+    fe_host = urlsplit(origin).netloc
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+            html = (await client.get(origin)).text
+            _merge_refs(refs, mine_supabase_refs(html))
+            script_urls: list[str] = []
+            for node in HTMLParser(html).css("script[src]"):
+                src = node.attributes.get("src")
+                if not src:
+                    continue
+                full = urljoin(origin, src)
+                if urlsplit(full).netloc == fe_host:  # same-origin bundles only
+                    script_urls.append(full)
+            for url in list(dict.fromkeys(script_urls))[:max_scripts]:
+                try:
+                    _merge_refs(refs, mine_supabase_refs((await client.get(url)).text))
+                except httpx.HTTPError:
+                    continue
+    except httpx.HTTPError:
+        return refs
+    return refs
+
+
 @dataclass
 class SupabaseRefs:
     """What a front-end bundle reveals about its Supabase backend."""
@@ -117,6 +162,7 @@ class SupabaseRefs:
     rpcs: set[str] = field(default_factory=set)
     project_refs: set[str] = field(default_factory=set)
     service_role_keys: set[str] = field(default_factory=set)  # redacted service_role JWTs found in the bundle
+    anon_keys: set[str] = field(default_factory=set)  # full anon JWTs (public — shipped in the client, used as apikey)
     edge_functions: set[str] = field(default_factory=set)  # Supabase Edge Function names the bundle invokes
 
     @property
@@ -146,10 +192,14 @@ def mine_supabase_refs(text: str) -> SupabaseRefs:
     refs.tables = {t for t in tables if t not in _NON_TABLE}
     refs.rpcs = {r for r in rpcs if r not in _NON_TABLE}
     refs.edge_functions = edge
-    # A leaked service_role key = full RLS bypass. The anon key is a JWT too, but role=anon is expected.
-    refs.service_role_keys = {
-        _redact(tok) for tok in _JWT_RE.findall(text) if _jwt_role(tok) in _PRIVILEGED_ROLES
-    }
+    # A leaked service_role key = full RLS bypass (redacted). The anon key is a JWT too and role=anon is
+    # expected/public — keep it in full so a scan can be auto-configured with it as the `apikey`.
+    for tok in _JWT_RE.findall(text):
+        role = _jwt_role(tok)
+        if role in _PRIVILEGED_ROLES:
+            refs.service_role_keys.add(_redact(tok))
+        elif role == "anon":
+            refs.anon_keys.add(tok)
     return refs
 
 
@@ -159,6 +209,7 @@ def _merge_refs(into: SupabaseRefs, found: SupabaseRefs) -> None:
     into.rpcs |= found.rpcs
     into.project_refs |= found.project_refs
     into.service_role_keys |= found.service_role_keys
+    into.anon_keys |= found.anon_keys
     into.edge_functions |= found.edge_functions
 
 

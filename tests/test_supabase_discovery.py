@@ -7,12 +7,15 @@ from types import SimpleNamespace
 
 from dastcore.discovery.supabase import (
     SupabaseDiscoverer,
+    SupabaseRefs,
+    anon_key_from_refs,
     graphql_url_for,
     is_supabase_project,
     mine_supabase_refs,
     probe_cross_user_bola,
     probe_supabase_aux,
     probe_write_rls,
+    rest_target_from_refs,
     table_probes,
 )
 
@@ -52,6 +55,24 @@ def test_mine_detects_service_role_key_and_ignores_anon() -> None:
     refs = mine_supabase_refs(bundle)
     assert len(refs.service_role_keys) == 1  # only the service_role JWT, never the (public) anon key
     assert all("…" in k for k in refs.service_role_keys)  # stored redacted, not the full token
+
+
+def test_mine_captures_anon_key_in_full_for_auto_config() -> None:
+    anon = _make_jwt({"role": "anon", "iss": "supabase", "ref": "abcdefghij1234567890"})
+    svc = _make_jwt({"role": "service_role", "iss": "supabase"})
+    bundle = f'createClient("https://abcdefghij1234567890.supabase.co","{anon}"); const a="{svc}";'
+    refs = mine_supabase_refs(bundle)
+    assert refs.anon_keys == {anon}  # full anon token (public) kept for use as apikey
+    assert anon not in refs.service_role_keys  # never redacted/confused with a privileged key
+
+
+def test_derive_helpers_build_target_and_pick_anon_key() -> None:
+    anon = _make_jwt({"role": "anon"})
+    refs = SupabaseRefs(project_refs={"rsqclbrclphaelurxwsy"}, anon_keys={anon})
+    assert rest_target_from_refs(refs) == "https://rsqclbrclphaelurxwsy.supabase.co/rest/v1/"
+    assert anon_key_from_refs(refs) == anon
+    assert rest_target_from_refs(SupabaseRefs()) == ""  # nothing mined -> empty
+    assert anon_key_from_refs(SupabaseRefs()) == ""
 
 
 def test_service_role_finding_is_critical() -> None:
