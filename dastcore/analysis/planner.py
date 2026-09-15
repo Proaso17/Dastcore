@@ -655,8 +655,12 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
 
     if profile.waf:
         vendor = f" ({profile.waf_vendor})" if profile.waf_vendor else ""
-        plan.notes.append(f"WAF/CDN delante{vendor}: activa evasión (--waf-evasion) y usa insertion points 'moved'; "
-                          "los hallazgos pueden salir parciales si bloquea el escaneo.")
+        # A CDN/WAF at the edge is normal (Cloudflare/Supabase) and doesn't imply the scan is being
+        # blocked — phrase it conditionally so it isn't a false "results may be partial" alarm.
+        plan.notes.append(
+            f"CDN/WAF en el borde{vendor} (capa normal). Si empieza a bloquear (403/429), activa "
+            "--waf-evasion y usa insertion points 'moved'; solo entonces los hallazgos podrían salir parciales."
+        )
 
     plan.focus_hosts = order_hosts(profile.hosts)
     if any(_JUICY_HOST.search(_host_of(h)) for h in profile.hosts):
@@ -695,10 +699,22 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
     return plan
 
 
+def identity_summary(profile: TargetProfile) -> str:
+    """What the target *is*, for the plan header: tech fingerprints plus the CMS/backend/API-kind signals —
+    so a Supabase/API target reads as 'backend supabase' instead of the misleading 'sin fingerprint claro'."""
+    parts = sorted(profile.tech)
+    if profile.cms:
+        parts.append(f"CMS {profile.cms}")
+    if profile.backend and profile.backend != "none":
+        parts.append(f"backend {profile.backend}")
+    if profile.api_kind and profile.api_kind != "none":
+        parts.append(f"API {profile.api_kind}")
+    return ", ".join(dict.fromkeys(parts)) or "sin fingerprint claro"
+
+
 def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
     """A human-readable summary of the target profile and the chosen strategy — the visible 'thinking'."""
-    ident = ", ".join(sorted(profile.tech)) or "sin fingerprint claro"
-    lines = [f"Perfil del objetivo: {ident}."]
+    lines = [f"Perfil del objetivo: {identity_summary(profile)}."]
     shape = []
     if profile.frameworks:
         shape.append("/".join(sorted(profile.frameworks)))

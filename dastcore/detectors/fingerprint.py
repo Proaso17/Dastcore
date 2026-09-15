@@ -197,13 +197,21 @@ async def fingerprint_and_waf(client: HttpClient, target: str) -> list[Finding]:
             waf_reason = f"suspicious request blocked ({reason})"
 
     if waf:
+        # Distinguish an edge that merely *is present* (header signature — normal for Cloudflare/Supabase)
+        # from one that actually *blocked* a request, so the report doesn't cry "blocking" when nothing was.
+        blocked = bool(waf_reason and "blocked" in waf_reason)
+        waf_name = (
+            f"WAF bloqueando peticiones en {parts.netloc}: {waf}"
+            if blocked
+            else f"CDN/WAF en el borde de {parts.netloc}: {waf} (presente; no se observó bloqueo)"
+        )
         findings.append(
             Finding(
                 id=f"waf-detected:{parts.netloc}",
                 rule_id="waf-detected",
                 # Name the host: a multi-host scan (target + its Supabase/CDN + subdomains) can detect a
                 # WAF on a *different* host than the reader assumes, so say which one explicitly.
-                name=f"WAF / blocking layer detected on {parts.netloc}: {waf}",
+                name=waf_name,
                 severity="info",
                 cwe="CWE-693",
                 owasp="WSTG-INFO-02",

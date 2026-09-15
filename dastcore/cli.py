@@ -46,6 +46,7 @@ from dastcore.analysis.planner import (
     TargetProfile,
     area_scan_order,
     classify_request_area,
+    identity_summary,
     order_hosts,
     order_requests_by_area,
     plan_recon,
@@ -1193,7 +1194,7 @@ def _early_recon_finding(target: str, profile: TargetProfile, recon: ReconPlan, 
     """Advisory for the early recon decision: a fingerprint of the target chose the recon techniques to
     turn on (the ones the operator left at default), so recon fits what the target IS from the first wave."""
     request = HttpRequest(method="GET", url=target)
-    ident = ", ".join(sorted(profile.tech)) or "sin fingerprint claro"
+    ident = identity_summary(profile)
     detail = (
         f"Reconocimiento adaptativo temprano sobre {ident}: el cerebro activó {', '.join(upgrades)} antes de "
         f"la primera ola de descubrimiento, según lo que aparenta ser el objetivo. Profundidad de recon: "
@@ -1309,11 +1310,16 @@ def _supabase_coverage_finding(target: str, prof: SupabaseProfile) -> Finding:
         else "GraphQL introspection: deshabilitada/vacía"
     ]
     if prof.frontend_tables:
-        sources.append(f"frontend: {len(prof.frontend_tables)}")
+        sources.append(f"frontend (bundle): {len(prof.frontend_tables)}")
+    # Tables not from the bundle/GraphQL came from the common-table wordlist and were kept only because
+    # the PostgREST oracle confirmed they exist — account for them so the total isn't "10 from nowhere".
+    common = prof.tables - prof.frontend_tables - prof.graphql_tables
+    if common:
+        sources.append(f"lista común confirmada por oráculo PostgREST: {len(common)}")
     if prof.oracle_blind:
         sources.append("oráculo PostgREST ciego → solo fuentes exactas")
     sample = ", ".join(sorted(prof.tables)[:20])
-    detail = f"{n} tabla(s) confirmadas y probadas anon-vs-authed. Fuentes → {'; '.join(sources)}."
+    detail = f"{n} tabla(s) confirmadas (existen) y probadas anon-vs-authed. Fuentes → {'; '.join(sources)}."
     if sample:
         detail += f" Tablas: {sample}{' …' if n > 20 else ''}"
     name = (
