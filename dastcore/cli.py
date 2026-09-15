@@ -1462,6 +1462,36 @@ def _supabase_bola_coverage_finding(target: str, n_comparable: int, n_pairs: int
     )
 
 
+def _authz_coverage_gap_finding(target: str, n_tables: int, n_user_identities: int) -> Finding:
+    """Advisory: the highest-value authorization checks (BOLA user-vs-user, authed-vs-anon RLS read)
+    need >=2 authenticated user identities. With fewer, only the anonymous surface was tested — so a
+    'clean' result here must NOT be read as 'fully tested'. Makes that limitation explicit in the report."""
+    request = HttpRequest(method="GET", url=target)
+    detail = (
+        f"Cobertura de autorización LIMITADA: se probó la superficie anónima ({n_tables} tabla(s)), pero "
+        f"BOLA user-vs-user y la RLS de lectura autenticada NO se probaron — requieren ≥2 identidades "
+        f"autenticadas y solo hay {n_user_identities}. Un resultado 'limpio' aquí no significa 'probado del "
+        "todo': el mayor riesgo (acceso cruzado entre usuarios) queda sin verificar."
+    )
+    return Finding(
+        id="authz-coverage-gap",
+        rule_id="authz-coverage-gap",
+        name="Cobertura de autorización limitada: faltan identidades para probar BOLA/RLS authed",
+        severity="low",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="status", data=detail[:300], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail),
+        remediation=(
+            "Configura 2 cuentas de prueba reales como `identities` (auth form/bearer) para que el escáner "
+            "compare acceso entre usuarios (BOLA/IDOR) y anon-vs-autenticado (RLS). Con --supabase-frontend, "
+            "solo necesitas añadir las credenciales; el proyecto y la anon key se derivan solos."
+        ),
+    )
+
+
 def _waf_blocking_finding(target: str, ratio: float, blocked: int, total: int) -> Finding:
     """An advisory (not a vuln) that the target's WAF blocked most requests, so results are unreliable."""
     request = HttpRequest(method="GET", url=target)
@@ -2194,12 +2224,20 @@ async def _run_scan(
                             _run_supabase_write_test(config, target, supa_prof.tables, budget),
                         )
                     )
-                if supa_prof.tables and sum(1 for i in config.identities if i.auth.type in _USER_AUTH_TYPES) >= 2:
+                _n_user_ids = sum(1 for i in config.identities if i.auth.type in _USER_AUTH_TYPES)
+                if supa_prof.tables and _n_user_ids >= 2:
                     # Cross-user BOLA (read-only): auto-runs once two real user identities exist.
                     progress.status("Probando BOLA user-vs-user (acceso cruzado por id)…")
                     extra_findings.extend(
                         await phase("supabase-bola", _run_supabase_bola(config, target, supa_prof.tables, budget))
                     )
+                elif supa_prof.tables:
+                    # Fewer than 2 authenticated user identities → the high-value authz checks can't run.
+                    # Say so explicitly so a clean anon result isn't mistaken for a complete test (#6).
+                    _gap = _authz_coverage_gap_finding(target, len(supa_prof.tables), _n_user_ids)
+                    extra_findings.append(_gap)
+                    if sink is not None:
+                        sink.write([_gap])
 
             if graphql_url:
                 progress.status("Introspeccionando GraphQL…")

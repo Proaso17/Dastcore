@@ -176,6 +176,16 @@ def test_read_env_file_and_precedence(monkeypatch, tmp_path) -> None:
     assert merged["B"] == "quoted"
 
 
+def test_authz_coverage_gap_finding_is_a_low_advisory() -> None:
+    from dastcore.cli import _authz_coverage_gap_finding
+    from dastcore.owasp import is_advisory
+
+    f = _authz_coverage_gap_finding("https://x.supabase.co/rest/v1/", 13, 1)
+    assert f.rule_id == "authz-coverage-gap" and f.severity == "low"
+    assert "BOLA" in f.evidence[0].data and "13" in f.evidence[0].data  # says what wasn't tested
+    assert is_advisory(f)  # excluded from the OWASP rollup (it's meta, not a target vuln)
+
+
 def test_windows_persisted_env_is_a_safe_dict() -> None:
     from dastcore.cli import _windows_persisted_env
 

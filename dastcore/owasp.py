@@ -120,7 +120,7 @@ _KEYWORD_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # not vulnerabilities of the target, so they're kept out of the OWASP rollup (they'd otherwise pollute a
 # category via their generic CWE-200). WAF/tech-fingerprint stay: they say something about the target.
 _ADVISORY_RULE_IDS: frozenset[str] = frozenset(
-    {"scan-coverage", "spa-detected", "spa-awareness", "edge-posture", "sqlmap-unavailable"}
+    {"scan-coverage", "spa-detected", "spa-awareness", "edge-posture", "sqlmap-unavailable", "authz-coverage-gap"}
 )
 
 
