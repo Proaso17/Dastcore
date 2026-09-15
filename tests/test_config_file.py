@@ -61,6 +61,31 @@ def test_supabase_profiling_block_runs_and_emits_coverage_finding(vuln_app_url: 
     assert any("supabase" in json.dumps(f).lower() for f in data), "supabase coverage finding missing"
 
 
+def test_supabase_scan_with_frontend_emits_spa_endpoints_advisory(vuln_app_url: str, tmp_path) -> None:
+    # #6a: a Supabase (SPA + API) scan with a known frontend must mine the SPA bundle for XHR endpoints
+    # and, on engine=http, emit the spa-endpoints advisory recommending engine=both — so the SPA's real
+    # dynamic surface is scanned instead of only the REST target.
+    cfg = tmp_path / "scan.yaml"
+    cfg.write_text(
+        json.dumps(
+            {
+                "target": vuln_app_url,
+                "engine": "http",
+                "rps": 90,
+                "fail_on": "none",
+                "supabase_frontend": vuln_app_url,  # forces the Supabase block + SPA mining on a local target
+                "supabase_tables": ["zzz_probe"],
+                "allow_domains": ["127.0.0.1"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["scan", "--config", str(cfg), "--i-have-authorization", "--quiet", "-f", "json"])
+    assert result.exit_code == 0, result.stdout
+    data = json.loads(result.stdout)
+    assert any(f.get("rule_id") == "spa-endpoints" for f in data), "spa-endpoints advisory missing"
+
+
 def test_scan_file_rejects_unknown_keys() -> None:
     import pytest
     from pydantic import ValidationError
@@ -184,6 +209,27 @@ def test_authz_coverage_gap_finding_is_a_low_advisory() -> None:
     assert f.rule_id == "authz-coverage-gap" and f.severity == "low"
     assert "BOLA" in f.evidence[0].data and "13" in f.evidence[0].data  # says what wasn't tested
     assert is_advisory(f)  # excluded from the OWASP rollup (it's meta, not a target vuln)
+
+
+def test_spa_surface_finding_recommends_engine_both_on_http() -> None:
+    from dastcore.cli import _spa_surface_finding
+    from dastcore.owasp import is_advisory
+
+    f = _spa_surface_finding("https://panel.example.com", 7, "http")
+    assert f.rule_id == "spa-endpoints" and f.severity == "info"
+    body = f.evidence[0].data + " " + f.name
+    assert "7" in body  # says how many endpoints were mined
+    assert "engine: both" in body or "engine=both" in body  # recommends rendering the SPA
+    assert is_advisory(f)  # scan meta, out of the OWASP rollup
+
+
+def test_spa_surface_finding_no_engine_advice_when_already_both() -> None:
+    from dastcore.cli import _spa_surface_finding
+
+    f = _spa_surface_finding("https://panel.example.com", 3, "both")
+    text = f.evidence[0].data + " " + f.name
+    assert "engine" not in text.lower()  # already rendering the DOM — no recommendation
+    assert "3" in text
 
 
 def test_windows_persisted_env_is_a_safe_dict() -> None:

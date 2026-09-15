@@ -1405,6 +1405,45 @@ def _supabase_functions_finding(target: str, rpcs: set[str], edge: set[str]) -> 
     )
 
 
+def _spa_surface_finding(frontend_url: str, mined: int, engine: str) -> Finding:
+    """Advisory (#6a): a Supabase app is a client-rendered SPA whose real dynamic surface (the fetch/XHR
+    endpoints) lives in its JS bundle, not in the REST target. We mined that bundle and added the endpoints
+    to the active scan; when the engine is plain ``http`` we also recommend ``engine: both`` so the SPA's
+    DOM (and the runtime-only endpoints and client-side bugs) actually get rendered and tested."""
+    request = HttpRequest(method="GET", url=frontend_url)
+    parts = [
+        f"Superficie de la SPA: se minaron {mined} endpoint(s) dinámico(s) (fetch/XHR) del bundle de "
+        f"{frontend_url} y se añadieron al escaneo activo (además de las tablas RLS de Supabase)."
+    ]
+    if engine == "http":
+        parts.append(
+            "El escaneo usa engine=http, que NO renderiza la SPA: los bugs de cliente (DOM XSS, CSTI, "
+            "postMessage, DOM clobbering) y los endpoints que solo se construyen en tiempo de ejecución no se "
+            "ven. Añade `engine: both` (o --engine both) para renderizar la SPA con navegador headless y "
+            "ampliar la superficie real; requiere el navegador de Playwright (instálalo desde el panel web → "
+            "Herramientas opcionales, o `python -m playwright install chromium`)."
+        )
+    detail = " ".join(parts)
+    return Finding(
+        id="spa-endpoints",
+        rule_id="spa-endpoints",
+        name=f"Superficie SPA ampliada: {mined} endpoint(s) del bundle JS"
+        + (" · recomendado engine=both" if engine == "http" else ""),
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="path", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="static", data=detail[:600], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=frontend_url, text=detail[:600]),
+        remediation=(
+            "Informativo: para una SPA + API (p. ej. Supabase) el target REST no es toda la superficie; los "
+            "endpoints dinámicos viven en el bundle JS. dastcore los minó y escaneó; usa engine=both para "
+            "renderizar además el DOM de la SPA y cubrir los bugs de cliente."
+        ),
+    )
+
+
 def _supabase_write_coverage_finding(target: str, n_tested: int, n_identities: int, n_writable: int) -> Finding:
     """Info advisory documenting the write-side RLS test, so the report itemizes what was tried."""
     request = HttpRequest(method="POST", url=target)
@@ -2213,6 +2252,34 @@ async def _run_scan(
                     extra_findings.append(
                         _supabase_functions_finding(target, supa_prof.rpcs, supa_prof.edge_functions)
                     )
+                if supabase_frontend:
+                    # #6a — SPA + API: the target is the REST API, but the app is a client-rendered SPA whose
+                    # real dynamic surface (fetch/XHR endpoints) lives in its JS bundle. An engine=http scan of
+                    # the REST target never renders that SPA, so mine the frontend bundle for endpoints and add
+                    # them to the active scan (GET-only, scope-gated) — the detector suite then sees the SPA's
+                    # actual API surface, not only the RLS table probes. Also recommend engine=both (below).
+                    progress.status("Minando endpoints XHR de la SPA (bundle del frontend)…")
+                    try:
+                        spa_reqs = await JsEndpointDiscoverer(client, harvest_maps=True).discover(supabase_frontend)
+                    except BudgetExceededError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — a mining hiccup must not abort the scan
+                        _scan_log.warning("Minado de endpoints de la SPA omitido: %s: %s", type(exc).__name__, exc)
+                        spa_reqs = []
+                    spa_added = 0
+                    for req in spa_reqs:
+                        if client.is_in_scope(req.url) and req.signature() not in discovered:
+                            discovered[req.signature()] = req
+                            spa_added += 1
+                    if spa_added or engine == "http":
+                        _spa_adv = _spa_surface_finding(supabase_frontend, spa_added, engine)
+                        extra_findings.append(_spa_adv)
+                        if sink is not None:
+                            sink.write([_spa_adv])
+                        if on_finding is not None:
+                            on_finding(_spa_adv)
+                    if surface is not None:
+                        surface["spa_endpoints"] = spa_added
                 progress.status(f"Supabase: {added} tabla(s) confirmadas para probar RLS/authz")
                 if supabase_write_test and supa_prof.tables:
                     # Opt-in: also test write-side RLS (safe INSERT probe). Off by default because it can
