@@ -24,6 +24,16 @@ def _resp(status: int = 401, text: str = "") -> HttpResponse:
     return HttpResponse(status_code=status, text=text)
 
 
+def _jwt(exp_delta: float) -> str:
+    """A minimal JWT whose payload carries an ``exp`` at now+exp_delta (only the payload is decoded)."""
+    import base64 as _b64
+    import json as _json
+    import time as _time
+
+    payload = _b64.urlsafe_b64encode(_json.dumps({"exp": int(_time.time() + exp_delta)}).encode()).decode().rstrip("=")
+    return f"h.{payload}.s"
+
+
 # --- unit: SessionManager state machine ------------------------------------------------
 
 
@@ -61,6 +71,31 @@ def test_is_expired_supports_body_pattern() -> None:
     session._established = True
     assert session.is_expired(_resp(status=200, text="<p>Please log in</p>")) is True
     assert session.is_expired(_resp(status=200, text="welcome")) is False
+
+
+def test_authz_401_with_valid_jwt_is_not_treated_as_expiry() -> None:
+    # Supabase RLS/BOLA: a 401 with a still-valid session JWT is an authorization denial, not a dropped
+    # session — so it must NOT trigger a re-login (the 28-re-login storm found dogfooding getnyma).
+    session = SessionManager(AuthConfig(type="form", form=FormLoginConfig(login_url="http://127.0.0.1/x")))
+    session._established = True
+    session.headers["Authorization"] = "Bearer " + _jwt(3600)  # valid ~1h
+    assert session.is_expired(_resp(status=401)) is False
+
+
+def test_401_relogs_when_session_jwt_actually_expired() -> None:
+    session = SessionManager(AuthConfig(type="form", form=FormLoginConfig(login_url="http://127.0.0.1/x")))
+    session._established = True
+    session.headers["Authorization"] = "Bearer " + _jwt(-10)  # already expired
+    assert session.is_expired(_resp(status=401)) is True
+
+
+def test_401_expiry_check_ignores_apikey_and_only_reads_the_session_token() -> None:
+    # A far-future JWT in `apikey` (the anon key) must NOT mask a real re-login: only the token header
+    # (Authorization) counts. With no session token we can't confirm validity -> a 401 still re-logs in.
+    session = SessionManager(AuthConfig(type="form", form=FormLoginConfig(login_url="http://127.0.0.1/x")))
+    session._established = True
+    session.headers["apikey"] = _jwt(10**9)
+    assert session.is_expired(_resp(status=401)) is True
 
 
 # --- integration: static cookie auth ---------------------------------------------------

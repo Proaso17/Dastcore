@@ -20,6 +20,7 @@ import hashlib
 import json
 import re
 import secrets
+import time
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
 
@@ -127,10 +128,42 @@ class SessionManager:
         """
         return {**self.headers, **(headers or {})}
 
+    def _session_jwt_valid(self, skew: float = 30.0) -> bool | None:
+        """Whether the session's own token is a JWT that has NOT yet expired.
+
+        None when we can't tell (cookie/opaque session, or a token we can't decode); True/False when the
+        session token is a JWT whose ``exp`` is in the future / past. We look only at the session's token
+        header (default ``Authorization``), never at a static ``apikey`` — so a token-auth API that returns
+        401 as an *authorization* denial (Supabase RLS/BOLA) isn't mistaken for a dropped session.
+        """
+        header_name = (self._auth.form.token_header if self._auth.form else "") or "Authorization"
+        raw = next((v for k, v in self.headers.items() if k.lower() == header_name.lower()), "")
+        if not raw:
+            return None
+        token = raw.split(" ", 1)[-1].strip() if " " in raw else raw.strip()
+        if token.count(".") != 2:
+            return None  # not a JWT (opaque bearer / cookie) -> can't judge expiry
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(payload))
+        except (ValueError, TypeError):
+            return None
+        exp = claims.get("exp")
+        if not isinstance(exp, (int, float)):
+            return None
+        return exp > time.time() + skew
+
     def is_expired(self, response) -> bool:
         if not self._established or self._auth.type == "none":
             return False
         if response.status_code == self._auth.logged_out_status:
+            # A bare 401 on a token session whose JWT is still valid is an *authorization* denial (e.g.
+            # Supabase RLS/BOLA returns 401 with a perfectly valid token), NOT a dropped session — re-logging
+            # in would be a wasteful storm. Only treat it as expiry when we can't confirm a valid JWT
+            # (opaque/cookie session) or the JWT has actually expired.
+            if self._session_jwt_valid() is True:
+                return False
             return True
         if self._auth.logged_out_pattern and re.search(self._auth.logged_out_pattern, response.text):
             return True
