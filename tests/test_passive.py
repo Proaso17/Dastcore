@@ -145,3 +145,43 @@ def test_run_passive_checks_zero_findings_on_fully_hardened_response() -> None:
         text="<h1>All good</h1>",
     )
     assert run_passive_checks(_request("https://x/page"), hardened_response) == []
+
+
+def test_no_passive_findings_from_vercel_waf_block_page() -> None:
+    """#11 regression: a Vercel 403 block page is NOT the app's response, so its missing headers must not
+    be reported (the bug that flagged missing HSTS/CSP/X-Frame-Options off getnyma.com's 403 block page)."""
+    block = _response(
+        status_code=403,
+        headers={"server": "Vercel", "x-vercel-id": "cdg1::abc", "content-type": "text/html"},
+        text="<html><body>Vercel Security Checkpoint</body></html>",
+        url="https://getnyma.com/",
+    )
+    assert run_passive_checks(_request("https://getnyma.com/"), block) == []
+
+
+def test_no_passive_findings_from_cloudflare_challenge() -> None:
+    block = _response(
+        status_code=403,
+        headers={"server": "cloudflare", "cf-ray": "8xdeadbeef", "content-type": "text/html"},
+        text="<html><head><title>Just a moment...</title></head><body>Attention Required! Ray ID</body></html>",
+        url="https://x/page",
+    )
+    assert run_passive_checks(_request("https://x/page"), block) == []
+
+
+def test_bare_origin_403_without_cdn_still_assessed() -> None:
+    """No false negative: a genuine app 403 with no CDN/WAF fingerprint is still the app's response, so
+    posture checks must still run (only edge/CDN block pages are skipped)."""
+    app_403 = _response(status_code=403, headers={"content-type": "text/html"}, text="<h1>Forbidden</h1>",
+                        url="https://x/page")
+    findings = run_passive_checks(_request("https://x/page"), app_403)
+    assert any(f.id == "passive-missing-hsts" for f in findings)  # still flagged — it's the app, not an edge block
+
+
+def test_cdn_fronted_200_is_not_treated_as_block() -> None:
+    """A 200 served through a CDN (server: Vercel) is a real app response — checks must run normally."""
+    ok = _response(status_code=200, headers={"server": "Vercel", "x-vercel-id": "cdg1::ok",
+                                             "content-type": "text/html"}, text="<h1>Home</h1>",
+                   url="https://getnyma.com/")
+    findings = run_passive_checks(_request("https://getnyma.com/"), ok)
+    assert any(f.id == "passive-missing-hsts" for f in findings)  # 200 is the app → posture assessed

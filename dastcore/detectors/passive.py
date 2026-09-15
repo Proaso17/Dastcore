@@ -23,6 +23,42 @@ _ERROR_DISCLOSURE_PATTERNS = [
     r"ORA-\d{5}",
 ]
 
+# A WAF/CDN block page is NOT the application's own response, so its headers/body say nothing about the
+# target's security posture: judging "missing HSTS/CSP/X-Frame-Options" (or leaked secrets, stack traces…)
+# from a block page is a false positive. Suppress every passive check when the response is an edge block —
+# a block status *and* a CDN/WAF fingerprint (so a bare-origin app 403 is still assessed: no false negative).
+_BLOCK_STATUSES = frozenset({403, 429, 503})
+_CDN_SERVERS = (
+    "cloudflare", "vercel", "akamai", "akamaighost", "sucuri", "cloudfront", "fastly",
+    "imperva", "incapsula", "awselb", "barracuda", "big-ip", "f5", "varnish",
+)
+_CDN_BLOCK_HEADERS = (
+    "cf-ray", "cf-mitigated", "x-vercel-id", "x-sucuri-id", "x-sucuri-block", "x-amz-cf-id",
+    "x-akamai-transformed", "x-iinfo", "x-cdn", "x-waf-event-info",
+)
+_BLOCK_BODY_MARKERS = (
+    "just a moment", "attention required", "cloudflare", "security checkpoint", "request blocked",
+    "you have been blocked", "sorry, you have been blocked", "access denied", "ddos protection by",
+    "verifying you are human", "ray id", "cf-error-details", "vercel security",
+)
+
+
+def _is_edge_block(response: HttpResponse) -> bool:
+    """True when the response is a WAF/CDN block/challenge page rather than the application's own reply —
+    a block status (403/429/503) carrying a CDN/WAF fingerprint in the server header, a block-marker header,
+    or a known challenge-page body. Used to skip passive posture checks whose 'evidence' would otherwise be
+    read off the block page (the bug that reported missing security headers from a Vercel 403)."""
+    if response.status_code not in _BLOCK_STATUSES:
+        return False
+    server = response.headers.get("server", "").lower()
+    if any(cdn in server for cdn in _CDN_SERVERS):
+        return True
+    header_names = {name.lower() for name in response.headers}
+    if any(h in header_names for h in _CDN_BLOCK_HEADERS):
+        return True
+    body = (response.text or "")[:4000].lower()
+    return any(marker in body for marker in _BLOCK_BODY_MARKERS)
+
 
 def _passive_point(request: HttpRequest, name: str) -> InjectionPoint:
     """Passive findings aren't tied to a mutated parameter; anchor to the request itself."""
@@ -344,6 +380,10 @@ def check_directory_listing(request: HttpRequest, response: HttpResponse) -> lis
 
 
 def run_passive_checks(request: HttpRequest, response: HttpResponse) -> list[Finding]:
+    if _is_edge_block(response):
+        # WAF/CDN block page — not the application's response. Every passive check here describes the
+        # target's own headers/content, so reading them off a block page yields false positives. Skip.
+        return []
     findings: list[Finding] = []
     findings.extend(check_missing_security_headers(request, response))
     findings.extend(check_insecure_cookies(request, response))
