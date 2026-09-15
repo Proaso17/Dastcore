@@ -77,3 +77,31 @@ async def test_run_scan_survives_budget_exhaustion_during_discovery(vuln_app_url
         config, max_pages=50, engine="http", budget=_Budget(8, None), discover_content=True, discover_depth="light"
     )
     assert isinstance(findings, list)
+
+
+async def test_discovery_reserve_stop_falls_through_to_the_active_audit(vuln_app_url: str, monkeypatch) -> None:
+    """#10 regression: when discovery hits its *reserved* budget slice (raising DiscoveryBudgetExceededError
+    from a re-raising discovery component like the dirbuster), the scan must NOT abort — it must end
+    discovery, run the active audit on the reserved slice, and flag the partial surface. Before the fix the
+    error was treated as the terminal soft-stop and the active scan never ran (a silent false all-clear)."""
+    from dastcore.core.http_client import DiscoveryBudgetExceededError
+    from dastcore.discovery.content import ContentDiscoverer
+
+    async def _hit_reserve(self, *_args, **_kwargs):
+        raise DiscoveryBudgetExceededError("discovery reserve reached")
+
+    # Force the dirbuster to hit the reserve the way ContentDiscoverer does in the wild (it re-raises).
+    monkeypatch.setattr(ContentDiscoverer, "discover", _hit_reserve)
+    config = ScanConfig(
+        target=vuln_app_url,  # type: ignore[arg-type]
+        scope=ScopeConfig(allow_domains=["127.0.0.1"]),
+        rate_limit=RateLimitConfig(requests_per_second=100, max_concurrency=10),
+        output=OutputConfig(format="json"),
+        i_have_authorization=True,
+    )
+    findings = await _run_scan(config, max_pages=30, engine="http", discover_content=True, discover_depth="light")
+    assert isinstance(findings, list)
+    assert any(f.rule_id == "discovery-budget" for f in findings)  # advisory emitted at end-of-discovery
+    assert any(f.rule_id == "scan-plan" for f in findings)  # post-discovery planning ran (didn't abort)
+    # the active audit actually ran and found the vuln app's real vulns (the whole point of the reserve)
+    assert any(f.severity in ("critical", "high", "medium") for f in findings)

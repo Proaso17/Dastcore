@@ -66,6 +66,15 @@ class BudgetExceededError(RuntimeError):
     """Raised when the scan's request or time budget has been reached."""
 
 
+class DiscoveryBudgetExceededError(BudgetExceededError):
+    """Raised when only the DISCOVERY reserve is exhausted — the fraction held back for the active audit is
+    still available. A subclass of :class:`BudgetExceededError`, so code that stops a phase on the base class
+    still stops discovering; but the CLI catches this variant specifically to end discovery and fall through
+    to the active scan (which then spends the reserved slice) instead of ending the whole scan. Without this
+    split, hitting the tightened discovery limit raised the terminal error and the reserved slice was never
+    used — a near-empty result that looked 'clean' but never ran the audit."""
+
+
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header (delta-seconds form) into seconds."""
     if not value:
@@ -249,10 +258,12 @@ class HttpClient:
         """Lift the discovery reservation so the active scan can use the full remaining budget."""
         self._in_discovery = False
 
-    def budget_exceeded(self) -> bool:
+    def budget_exceeded(self, *, hard: bool = False) -> bool:
         """True once the request count or the time budget has been reached. During the discovery phase the
-        limits are tightened by the reserved fraction so a slice is guaranteed to remain for the active scan."""
-        reserve = self._reserve_active if self._in_discovery else 0.0
+        limits are tightened by the reserved fraction so a slice is guaranteed to remain for the active scan.
+        Pass ``hard=True`` to check the real, untightened budget — used to tell a discovery-reserve stop
+        (the active audit can still run) apart from true exhaustion (the whole scan stops)."""
+        reserve = 0.0 if hard else (self._reserve_active if self._in_discovery else 0.0)
         if self._max_requests is not None and self._request_count >= self._max_requests * (1.0 - reserve):
             return True
         if self._deadline is not None and time.monotonic() >= self._deadline - (self._time_budget_s or 0.0) * reserve:
@@ -264,6 +275,11 @@ class HttpClient:
         if self._deadline is None and self._time_budget_s is not None:
             self._deadline = time.monotonic() + self._time_budget_s
         if self.budget_exceeded():
+            # During discovery, hitting the *tightened* limit while the real budget still has room stops
+            # discovery but keeps the reserved slice for the active scan — raise the discovery-only variant
+            # so the CLI ends discovery and falls through to the audit instead of ending the whole scan.
+            if self._in_discovery and not self.budget_exceeded(hard=True):
+                raise DiscoveryBudgetExceededError("Discovery budget reached (reserve held for the active scan).")
             raise BudgetExceededError("Scan budget exhausted (max-requests / time-budget).")
         self._request_count += 1
 

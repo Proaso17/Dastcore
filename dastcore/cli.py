@@ -64,7 +64,7 @@ from dastcore.config import (
     ScanFile,
     ScopeConfig,
 )
-from dastcore.core.http_client import BudgetExceededError, HttpClient
+from dastcore.core.http_client import BudgetExceededError, DiscoveryBudgetExceededError, HttpClient
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.core.session import SessionManager, auth_endpoint_urls
 from dastcore.detectors.access_bypass import run_access_bypass_checks
@@ -1405,6 +1405,36 @@ def _supabase_functions_finding(target: str, rpcs: set[str], edge: set[str]) -> 
     )
 
 
+def _discovery_budget_finding(target: str) -> Finding:
+    """Advisory (#10): discovery (crawl/dirbust/mining) hit its reserved budget slice, so it stopped early
+    and the active audit ran with the reserved remainder. Surfaced so a smaller surface isn't mistaken for
+    a clean, fully-tested target — the exact 'silent false all-clear' this reserve/finding pair prevents."""
+    request = HttpRequest(method="GET", url=target)
+    detail = (
+        "El descubrimiento (crawl/dirbusting/minado de JS) agotó la porción de presupuesto que tiene "
+        "reservada y se detuvo antes de tiempo; el escaneo activo SÍ se ejecutó con la porción reservada "
+        "(no como antes, que agotar el descubrimiento abortaba todo el escaneo). La superficie descubierta "
+        "puede ser parcial: sube --max-requests / --time-budget (o baja el crawl) para ampliarla. Un "
+        "resultado con esta nota no equivale a 'objetivo probado por completo'."
+    )
+    return Finding(
+        id="discovery-budget",
+        rule_id="discovery-budget",
+        name="Presupuesto de descubrimiento agotado (superficie parcial; el audit activo sí corrió)",
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="static", data=detail[:600], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail[:600]),
+        remediation=(
+            "Informativo: aumenta --max-requests / --time-budget para que el descubrimiento cubra más "
+            "superficie, o reduce el alcance del crawl/dirbusting. El audit activo se ejecutó igualmente."
+        ),
+    )
+
+
 def _spa_surface_finding(frontend_url: str, mined: int, engine: str) -> Finding:
     """Advisory (#6a): a Supabase app is a client-rendered SPA whose real dynamic surface (the fetch/XHR
     endpoints) lives in its JS bundle, not in the REST target. We mined that bundle and added the endpoints
@@ -1667,6 +1697,11 @@ async def _bounded_discovery(coro: Awaitable[Any], *, timeout: float, label: str
     A budget soft-stop still bubbles up (it ends the scan cleanly)."""
     try:
         return await asyncio.wait_for(coro, timeout)
+    except DiscoveryBudgetExceededError:
+        # The discovery reserve was reached inside this inline stage — stop it and keep the reserved slice
+        # for the active scan (do NOT re-raise; the base BudgetExceededError below is the terminal stop). (#10)
+        _scan_log.info("Descubrimiento '%s' detenido: presupuesto de descubrimiento agotado (reserva para el audit).", label)
+        return default
     except BudgetExceededError:
         raise
     except TimeoutError:
@@ -1792,6 +1827,10 @@ async def _run_scan(
     active_passive: list[Finding] = []
     dns_records: dict[str, RecordSet] = {}  # host -> DNS records; feeds the takeover check its CNAMEs
     budget_hit = False
+    # Discovery-reserve stop (distinct from the terminal budget stop): when discovery hits the tightened
+    # limit, the reserved slice is held back for the active audit. A mutable box so the nested phase()/
+    # discovery guards can flag it by closure (no `nonlocal`), and the active scan still runs. (#10)
+    discovery_budget = {"hit": False}
     sink = FindingSink(findings_log).open() if findings_log else None  # persist findings as they're found
     failed_phases: list[str] = []
 
@@ -1807,6 +1846,12 @@ async def _run_scan(
         are streamed to the sink immediately, so a hard interruption loses nothing."""
         try:
             result = await (asyncio.wait_for(coro, timeout) if timeout is not None else coro)
+        except DiscoveryBudgetExceededError:
+            # Discovery reserve reached: stop THIS discovery phase but keep the reserved slice for the
+            # active scan — don't re-raise (that would end the whole scan). Remaining discovery phases hit
+            # the same limit and wind down the same way; the audit then runs. (#10)
+            discovery_budget["hit"] = True
+            return []
         except BudgetExceededError:
             raise
         except Exception as exc:  # noqa: BLE001 — isolate: log it loudly, skip this one, keep going
@@ -1855,6 +1900,9 @@ async def _run_scan(
                 try:
                     early_findings = await fingerprint_and_waf(client, target)
                     early_findings += await run_spa_check(client, target, engine)
+                except DiscoveryBudgetExceededError:
+                    discovery_budget["hit"] = True  # tiny budget spent already — keep the audit slice
+                    early_findings = []
                 except BudgetExceededError:
                     raise  # the intended soft-stop — end the scan cleanly
                 except Exception:  # noqa: BLE001 — a fingerprint hiccup must never abort the scan
@@ -2019,7 +2067,11 @@ async def _run_scan(
                 # Favicon fingerprint per root — identifies/correlates the stack behind each host.
                 favicons: dict[str, dict[str, object]] = {}
                 for root in scan_roots:
-                    info = await probe_favicon(client, root)
+                    try:
+                        info = await probe_favicon(client, root)
+                    except DiscoveryBudgetExceededError:
+                        discovery_budget["hit"] = True  # reserve reached — keep the audit slice
+                        break
                     if info is not None:
                         favicons[root] = {"hash": info.hash, "product": info.product}
                 if surface is not None and favicons:
@@ -2109,6 +2161,9 @@ async def _run_scan(
                     try:
                         for req in await HttpCrawler(client, max_pages=max_pages).crawl(root):
                             discovered.setdefault(req.signature(), req)
+                    except DiscoveryBudgetExceededError:
+                        discovery_budget["hit"] = True  # reserve reached — stop crawling, keep the audit slice
+                        break
                     except httpx.HTTPError:
                         progress.status(f"{root} no accesible (error de red), lo salto…")
 
@@ -2119,6 +2174,9 @@ async def _run_scan(
                         headless_reqs, root_dom = await _run_headless(
                             config, client, root, max_pages, user_agent, proxy, interactive=interactive, oast=oast
                         )
+                    except DiscoveryBudgetExceededError:
+                        discovery_budget["hit"] = True  # reserve reached — stop, keep the audit slice
+                        break
                     except httpx.HTTPError:
                         continue  # a flaky host must not abort the whole multi-host scan
                     dom_findings.extend(root_dom)
@@ -2142,16 +2200,20 @@ async def _run_scan(
                 dir_probe_budget = 200  # cap so a huge dirbust doesn't multiply into an unbounded sweep
                 for root in scan_roots:
                     progress.status(f"Descubriendo directorios y rutas (dirbusting) en {root}…")
-                    endpoints = await ContentDiscoverer(
-                        client, wordlist=content_words, extensions=extensions, recursion_depth=recursion
-                    ).discover(root)
-                    if surface is not None:
-                        surface["content"][root] = [e.url for e in endpoints]
-                    for endpoint in endpoints:
-                        # A shallow crawl of each hidden page extracts its own links/forms/params, so the
-                        # detectors actually get something to test — not just a bare URL.
-                        for req in await HttpCrawler(client, max_pages=8, use_robots=False).crawl(endpoint.url):
-                            discovered.setdefault(req.signature(), req)
+                    try:
+                        endpoints = await ContentDiscoverer(
+                            client, wordlist=content_words, extensions=extensions, recursion_depth=recursion
+                        ).discover(root)
+                        if surface is not None:
+                            surface["content"][root] = [e.url for e in endpoints]
+                        for endpoint in endpoints:
+                            # A shallow crawl of each hidden page extracts its own links/forms/params, so the
+                            # detectors actually get something to test — not just a bare URL.
+                            for req in await HttpCrawler(client, max_pages=8, use_robots=False).crawl(endpoint.url):
+                                discovered.setdefault(req.signature(), req)
+                    except DiscoveryBudgetExceededError:
+                        discovery_budget["hit"] = True  # reserve reached — stop dirbusting, keep the audit slice
+                        break
 
                     # Per-directory leak sweep: probe each discovered directory for its OWN sensitive
                     # files (/admin/.env, /backup/config.php.bak, /api/.git/config…), not just the site
@@ -2178,8 +2240,12 @@ async def _run_scan(
                 # harvest_maps also pulls each bundle's .map sourcemap to mine the original source.
                 for root in scan_roots:
                     progress.status(f"Extrayendo endpoints de JavaScript en {root}…")
-                    for req in await JsEndpointDiscoverer(client, harvest_maps=True).discover(root):
-                        discovered.setdefault(req.signature(), req)
+                    try:
+                        for req in await JsEndpointDiscoverer(client, harvest_maps=True).discover(root):
+                            discovered.setdefault(req.signature(), req)
+                    except DiscoveryBudgetExceededError:
+                        discovery_budget["hit"] = True  # reserve reached — stop mining JS, keep the audit slice
+                        break
 
             if discover_content:
                 # Tech-aware probing: fingerprint each host's stack and probe the paths that stack exposes
@@ -2195,6 +2261,9 @@ async def _run_scan(
                 progress.status("Detectando esquemas de API (OpenAPI/GraphQL)…")
                 try:
                     found_openapi, found_graphql = await probe_api_schemas(client, scan_roots)
+                except DiscoveryBudgetExceededError:
+                    discovery_budget["hit"] = True  # reserve reached — keep the audit slice
+                    found_openapi, found_graphql = [], []
                 except httpx.HTTPError:
                     found_openapi, found_graphql = [], []
                 for schema_url in found_openapi:
@@ -2231,6 +2300,9 @@ async def _run_scan(
                         graphql_url=graphql_url_for(target),
                         extra_tables=tuple(supabase_tables),
                     )
+                except DiscoveryBudgetExceededError:
+                    discovery_budget["hit"] = True  # reserve reached — profile with what we have, keep the audit slice
+                    supa_prof = SupabaseProfile()
                 except BudgetExceededError:
                     raise
                 except Exception as exc:  # noqa: BLE001 — isolate: a profiling error must not abort the scan
@@ -2261,6 +2333,9 @@ async def _run_scan(
                     progress.status("Minando endpoints XHR de la SPA (bundle del frontend)…")
                     try:
                         spa_reqs = await JsEndpointDiscoverer(client, harvest_maps=True).discover(supabase_frontend)
+                    except DiscoveryBudgetExceededError:
+                        discovery_budget["hit"] = True  # reserve reached — keep the audit slice
+                        spa_reqs = []
                     except BudgetExceededError:
                         raise
                     except Exception as exc:  # noqa: BLE001 — a mining hiccup must not abort the scan
@@ -2317,6 +2392,19 @@ async def _run_scan(
             # Discovery is done — release the reserved budget so the active audit (detectors + the core
             # injection scan below) can use the full remaining time/requests instead of a tightened slice.
             client.end_discovery_phase()
+            if discovery_budget["hit"]:
+                # Discovery was cut short by its reserve, but the reserved slice now runs the active audit —
+                # say so, so a shorter surface isn't mistaken for a clean, fully-tested target. (#10)
+                _scan_log.info(
+                    "Descubrimiento detenido por su reserva de presupuesto; el audit activo corre con la porción "
+                    "reservada. Sube --max-requests/--time-budget para una superficie más amplia."
+                )
+                _disc_adv = _discovery_budget_finding(target)
+                extra_findings.append(_disc_adv)
+                if sink is not None:
+                    sink.write([_disc_adv])
+                if on_finding is not None:
+                    on_finding(_disc_adv)
 
             progress.status("Probando ficheros sensibles…")
             for root in scan_roots:

@@ -46,3 +46,52 @@ def test_no_reservation_without_a_budget() -> None:
     c.begin_discovery_phase(0.4)
     c._request_count = 10_000
     assert not c.budget_exceeded()  # nothing to run out of
+
+
+def test_discovery_reserve_raises_the_non_terminal_variant() -> None:
+    """#10 regression: hitting the *discovery* reserve must raise DiscoveryBudgetExceededError (the CLI
+    ends discovery and runs the audit on the reserved slice), NOT the terminal BudgetExceededError that
+    would end the whole scan and leave the audit unrun."""
+    import pytest
+
+    from dastcore.core.http_client import DiscoveryBudgetExceededError
+
+    c = _client(max_requests=100)
+    c._account_for_budget()  # start accounting
+    c.begin_discovery_phase(0.4)  # discovery may use 60 of 100
+    c._request_count = 60  # tightened limit reached, hard limit (100) not
+    with pytest.raises(DiscoveryBudgetExceededError):
+        c._account_for_budget()
+
+
+def test_hard_budget_raises_the_terminal_error_even_during_discovery() -> None:
+    """When the REAL budget is exhausted (not just the reserve), the terminal BudgetExceededError is raised
+    even mid-discovery — the scan must actually stop, not just end discovery."""
+    import pytest
+
+    from dastcore.core.http_client import BudgetExceededError, DiscoveryBudgetExceededError
+
+    c = _client(max_requests=100)
+    c._account_for_budget()
+    c.begin_discovery_phase(0.4)
+    c._request_count = 100  # the hard limit itself is reached
+    with pytest.raises(BudgetExceededError) as excinfo:
+        c._account_for_budget()
+    assert not isinstance(excinfo.value, DiscoveryBudgetExceededError)  # terminal, not the discovery variant
+
+
+def test_after_discovery_ends_the_reserved_slice_raises_only_the_terminal_error() -> None:
+    import pytest
+
+    from dastcore.core.http_client import BudgetExceededError, DiscoveryBudgetExceededError
+
+    c = _client(max_requests=100)
+    c._account_for_budget()
+    c.begin_discovery_phase(0.4)
+    c.end_discovery_phase()  # reserve lifted: the active scan may spend up to the hard limit
+    c._request_count = 80
+    assert not c.budget_exceeded()  # the reserved slice is now spendable
+    c._request_count = 100
+    with pytest.raises(BudgetExceededError) as excinfo:
+        c._account_for_budget()
+    assert not isinstance(excinfo.value, DiscoveryBudgetExceededError)
