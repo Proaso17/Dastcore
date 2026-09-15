@@ -146,6 +146,42 @@ def test_load_scan_file_drops_discovery_auth_with_unset_env_var(monkeypatch, tmp
     assert sf.auth is None or sf.auth.type in ("none", None)  # discovery auth dropped, not applied blank
 
 
+def test_load_scan_file_env_file_supplies_vars(monkeypatch, tmp_path) -> None:
+    from dastcore.cli import _load_scan_file
+
+    monkeypatch.delenv("DAST_EF", raising=False)  # not in the process env at all
+    envf = tmp_path / "creds.env"
+    envf.write_text('# secretos\nDAST_EF="secret-from-file"\n', encoding="utf-8")
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "target: https://x.test/\nallow_domains: [x.test]\n"
+        "identities:\n  - name: a\n    role: user\n    auth: {type: bearer, bearer_token: '${DAST_EF}'}\n",
+        encoding="utf-8",
+    )
+    sf, warnings = _load_scan_file(str(cfg), str(envf))
+    assert warnings == []
+    assert [i.name for i in sf.identities] == ["a"]  # kept: --env-file supplied the var
+    assert sf.identities[0].auth.bearer_token == "secret-from-file"
+
+
+def test_read_env_file_and_precedence(monkeypatch, tmp_path) -> None:
+    from dastcore.cli import _read_env_file, _resolve_env
+
+    envf = tmp_path / "e.env"
+    envf.write_text("A=fromfile\nB='quoted'\n# comment\nBAD LINE NO EQUALS\n", encoding="utf-8")
+    assert _read_env_file(str(envf)) == {"A": "fromfile", "B": "quoted"}
+    monkeypatch.setenv("A", "fromproc")
+    merged = _resolve_env(str(envf))
+    assert merged["A"] == "fromfile"  # env-file wins over the process env
+    assert merged["B"] == "quoted"
+
+
+def test_windows_persisted_env_is_a_safe_dict() -> None:
+    from dastcore.cli import _windows_persisted_env
+
+    assert isinstance(_windows_persisted_env(), dict)  # {} off Windows, registry env on Windows; never raises
+
+
 def test_load_scan_file_unset_var_in_non_auth_field_still_errors(monkeypatch, tmp_path) -> None:
     import pytest
 

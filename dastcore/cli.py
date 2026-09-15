@@ -256,9 +256,71 @@ _DEEP_PROFILE_TOGGLES = ("discover", "discover_ports", "discover_vhosts", "prove
 _ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
-def _expand_env_refs(value: object, missing: set[str] | None = None) -> object:
-    """Replace ``${VAR}`` / ``${VAR:-default}`` references in string leaves with the environment's
-    value, so secrets (passwords, API keys) live in env vars instead of a committed config file.
+def _read_env_file(path: str) -> dict[str, str]:
+    """Parse a ``.env``-style file (``KEY=VALUE`` lines, ``#`` comments, optional quotes) into a dict.
+
+    Lets secrets live in a file the operator points at (``--env-file``) instead of the config or the
+    shell — OS-agnostic and immune to the Windows "setx isn't visible to a running process" gotcha."""
+    env: dict[str, str] = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key:
+            env[key] = val
+    return env
+
+
+def _windows_persisted_env() -> dict[str, str]:
+    """Persisted user/machine environment from the Windows registry — what ``setx`` writes.
+
+    A running process (and its children) keep the env block they were started with, so a variable
+    ``setx``'d after launch is invisible via ``os.environ``. Reading the registry recovers it without
+    restarting. Best-effort; empty on non-Windows or on any error."""
+    out: dict[str, str] = {}
+    try:
+        import winreg
+    except ImportError:
+        return out
+    keys = (
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    )
+    for hive, sub in keys:
+        try:
+            with winreg.OpenKey(hive, sub) as handle:
+                i = 0
+                while True:
+                    try:
+                        name, val, _ = winreg.EnumValue(handle, i)
+                    except OSError:
+                        break
+                    out.setdefault(str(name), str(val))  # HKCU (first) wins over HKLM
+                    i += 1
+        except OSError:
+            continue
+    return out
+
+
+def _resolve_env(env_file: str = "") -> dict[str, str]:
+    """The environment used for ``${VAR}`` expansion: registry (base, Windows) < process env < env-file."""
+    import os
+
+    merged: dict[str, str] = {}
+    merged.update(_windows_persisted_env())  # recovers setx'd vars an already-running host can't see
+    merged.update(os.environ)  # the live process env wins over the persisted registry base
+    if env_file:
+        merged.update(_read_env_file(env_file))  # an explicit --env-file wins over everything
+    return merged
+
+
+def _expand_env_refs(value: object, missing: set[str] | None = None, env: dict[str, str] | None = None) -> object:
+    """Replace ``${VAR}`` / ``${VAR:-default}`` references in string leaves with values from ``env``
+    (defaults to the process environment), so secrets (passwords, API keys) live in env vars/files
+    instead of a committed config file.
 
     Expansion is done on the parsed structure (not the raw YAML text), so a secret's contents can
     never alter the document's shape. By default an unset variable with no default is a clear error
@@ -267,12 +329,14 @@ def _expand_env_refs(value: object, missing: set[str] | None = None) -> object:
     caller uses this to drop just the affected identity/auth (with a warning) instead of aborting."""
     import os
 
+    lookup = env if env is not None else dict(os.environ)
+
     if isinstance(value, str):
 
         def _sub(match: re.Match[str]) -> str:
             name, default = match.group(1), match.group(2)
-            if name in os.environ:
-                return os.environ[name]
+            if name in lookup:
+                return lookup[name]
             if default is not None:
                 return default
             if missing is not None:
@@ -280,19 +344,22 @@ def _expand_env_refs(value: object, missing: set[str] | None = None) -> object:
                 return ""
             raise ValueError(
                 f"la variable de entorno '{name}' que usa el config no está definida "
-                f"(o dale un valor por defecto con ${{{name}:-valor}})"
+                f"(o dale un valor por defecto con ${{{name}:-valor}}, o pásala con --env-file)"
             )
 
         return _ENV_REF_RE.sub(_sub, value)
     if isinstance(value, dict):
-        return {key: _expand_env_refs(item, missing) for key, item in value.items()}
+        return {key: _expand_env_refs(item, missing, env) for key, item in value.items()}
     if isinstance(value, list):
-        return [_expand_env_refs(item, missing) for item in value]
+        return [_expand_env_refs(item, missing, env) for item in value]
     return value
 
 
-def _load_scan_file(path: str) -> tuple[ScanFile, list[str]]:
+def _load_scan_file(path: str, env_file: str = "") -> tuple[ScanFile, list[str]]:
     """Load a scan config, expanding ``${VAR}`` refs. Returns (config, warnings).
+
+    ``${VAR}`` values are resolved from (Windows registry base) < process env < ``--env-file``, so a
+    credential ``setx``'d after the host started, or kept in an env-file, is picked up without a restart.
 
     Graceful degradation: an unset env var inside an *identity* or the discovery *auth* drops just that
     identity/auth (with a warning) instead of aborting the whole scan or silently anonymizing it — so a
@@ -305,16 +372,17 @@ def _load_scan_file(path: str) -> tuple[ScanFile, list[str]]:
     if not isinstance(data, dict):
         raise ValueError("el archivo de config debe ser un mapeo (objeto) en su raíz")
 
+    env = _resolve_env(env_file)
     identities = data.pop("identities", None)
     top_auth = data.pop("auth", None)
-    data = _expand_env_refs(data)  # strict for the rest (target/scope/rps…): a typo must error
+    data = _expand_env_refs(data, env=env)  # strict for the rest (target/scope/rps…): a typo must error
     warnings: list[str] = []
 
     if isinstance(identities, list):
         kept: list[object] = []
         for ident in identities:
             miss: set[str] = set()
-            expanded = _expand_env_refs(ident, miss)
+            expanded = _expand_env_refs(ident, miss, env)
             name = ident.get("name", "?") if isinstance(ident, dict) else "?"
             if miss:
                 warnings.append(
@@ -327,7 +395,7 @@ def _load_scan_file(path: str) -> tuple[ScanFile, list[str]]:
 
     if top_auth is not None:
         miss = set()
-        expanded_auth = _expand_env_refs(top_auth, miss)
+        expanded_auth = _expand_env_refs(top_auth, miss, env)
         if miss:
             warnings.append(
                 "auth de descubrimiento omitida (el descubrimiento irá anónimo): "
@@ -2800,6 +2868,12 @@ def scan(
     config_file: str = typer.Option(
         "", "--config", help="Archivo YAML/JSON con la configuración del escaneo (los flags explícitos ganan)."
     ),
+    env_file: str = typer.Option(
+        "",
+        "--env-file",
+        help="Fichero KEY=VALUE con secretos para expandir ${VAR} del config (evita el chat/shell; en "
+        "Windows también se leen las variables persistidas por setx aunque el proceso ya estuviera abierto).",
+    ),
     i_have_authorization: bool = typer.Option(
         False,
         "--i-have-authorization",
@@ -3187,7 +3261,7 @@ def scan(
     scan_file = ScanFile()
     if config_file:
         try:
-            scan_file, _cfg_warnings = _load_scan_file(config_file)
+            scan_file, _cfg_warnings = _load_scan_file(config_file, env_file)
         except (OSError, ValueError, ValidationError) as exc:
             console.print(f"[bold red]--config inválido:[/bold red] {exc}")
             raise typer.Exit(code=1) from exc
