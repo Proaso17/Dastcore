@@ -113,6 +113,51 @@ def test_scan_file_env_var_default_used_when_unset(monkeypatch) -> None:
     assert _expand_env_refs({"k": "${DAST_MISSING:-fallback}"}) == {"k": "fallback"}
 
 
+def test_load_scan_file_drops_identity_with_unset_env_var(monkeypatch, tmp_path) -> None:
+    from dastcore.cli import _load_scan_file
+
+    monkeypatch.delenv("DAST_PW_A", raising=False)
+    monkeypatch.setenv("DAST_PW_B", "secretB")
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "target: https://x.test/\n"
+        "allow_domains: [x.test]\n"
+        "identities:\n"
+        "  - name: a\n    role: user\n    auth: {type: bearer, bearer_token: '${DAST_PW_A}'}\n"
+        "  - name: b\n    role: user\n    auth: {type: bearer, bearer_token: '${DAST_PW_B}'}\n",
+        encoding="utf-8",
+    )
+    sf, warnings = _load_scan_file(str(cfg))
+    assert [i.name for i in sf.identities] == ["b"]  # 'a' dropped, 'b' kept (no abort)
+    assert any("'a'" in w and "DAST_PW_A" in w for w in warnings)
+
+
+def test_load_scan_file_drops_discovery_auth_with_unset_env_var(monkeypatch, tmp_path) -> None:
+    from dastcore.cli import _load_scan_file
+
+    monkeypatch.delenv("DAST_TOK", raising=False)
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "target: https://x.test/\nallow_domains: [x.test]\nauth: {type: bearer, bearer_token: '${DAST_TOK}'}\n",
+        encoding="utf-8",
+    )
+    sf, warnings = _load_scan_file(str(cfg))  # loads instead of aborting
+    assert any("descubrimiento" in w and "DAST_TOK" in w for w in warnings)
+    assert sf.auth is None or sf.auth.type in ("none", None)  # discovery auth dropped, not applied blank
+
+
+def test_load_scan_file_unset_var_in_non_auth_field_still_errors(monkeypatch, tmp_path) -> None:
+    import pytest
+
+    from dastcore.cli import _load_scan_file
+
+    monkeypatch.delenv("DAST_MISSING", raising=False)
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("target: 'https://${DAST_MISSING}.test/'\nallow_domains: [x.test]\n", encoding="utf-8")
+    with pytest.raises(ValueError):  # a typo in target must still be a hard error
+        _load_scan_file(str(cfg))
+
+
 def test_scan_file_unset_env_var_without_default_errors(monkeypatch) -> None:
     import pytest
 

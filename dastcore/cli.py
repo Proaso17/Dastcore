@@ -256,13 +256,15 @@ _DEEP_PROFILE_TOGGLES = ("discover", "discover_ports", "discover_vhosts", "prove
 _ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
-def _expand_env_refs(value: object) -> object:
+def _expand_env_refs(value: object, missing: set[str] | None = None) -> object:
     """Replace ``${VAR}`` / ``${VAR:-default}`` references in string leaves with the environment's
     value, so secrets (passwords, API keys) live in env vars instead of a committed config file.
 
     Expansion is done on the parsed structure (not the raw YAML text), so a secret's contents can
-    never alter the document's shape. An unset variable with no default is a clear error rather than
-    a silent empty string, so a typo can't quietly turn into an anonymous scan."""
+    never alter the document's shape. By default an unset variable with no default is a clear error
+    rather than a silent empty string, so a typo can't quietly turn into an anonymous scan. In
+    *lenient* mode (``missing`` set given) it instead records the unset names and yields ``""`` — the
+    caller uses this to drop just the affected identity/auth (with a warning) instead of aborting."""
     import os
 
     if isinstance(value, str):
@@ -273,6 +275,9 @@ def _expand_env_refs(value: object) -> object:
                 return os.environ[name]
             if default is not None:
                 return default
+            if missing is not None:
+                missing.add(name)
+                return ""
             raise ValueError(
                 f"la variable de entorno '{name}' que usa el config no está definida "
                 f"(o dale un valor por defecto con ${{{name}:-valor}})"
@@ -280,21 +285,58 @@ def _expand_env_refs(value: object) -> object:
 
         return _ENV_REF_RE.sub(_sub, value)
     if isinstance(value, dict):
-        return {key: _expand_env_refs(item) for key, item in value.items()}
+        return {key: _expand_env_refs(item, missing) for key, item in value.items()}
     if isinstance(value, list):
-        return [_expand_env_refs(item) for item in value]
+        return [_expand_env_refs(item, missing) for item in value]
     return value
 
 
-def _load_scan_file(path: str) -> ScanFile:
+def _load_scan_file(path: str) -> tuple[ScanFile, list[str]]:
+    """Load a scan config, expanding ``${VAR}`` refs. Returns (config, warnings).
+
+    Graceful degradation: an unset env var inside an *identity* or the discovery *auth* drops just that
+    identity/auth (with a warning) instead of aborting the whole scan or silently anonymizing it — so a
+    missing credential still lets the rest of the scan run. Unset vars in other fields (target/scope…)
+    remain a hard error, since a typo there shouldn't pass silently."""
     import yaml
 
     raw = Path(path).read_text(encoding="utf-8")
     data = yaml.safe_load(raw)  # YAML is a superset of JSON, so this handles both
     if not isinstance(data, dict):
         raise ValueError("el archivo de config debe ser un mapeo (objeto) en su raíz")
-    data = _expand_env_refs(data)  # ${VAR} / ${VAR:-default} → env, so passwords stay out of the file
-    return ScanFile.model_validate(data)
+
+    identities = data.pop("identities", None)
+    top_auth = data.pop("auth", None)
+    data = _expand_env_refs(data)  # strict for the rest (target/scope/rps…): a typo must error
+    warnings: list[str] = []
+
+    if isinstance(identities, list):
+        kept: list[object] = []
+        for ident in identities:
+            miss: set[str] = set()
+            expanded = _expand_env_refs(ident, miss)
+            name = ident.get("name", "?") if isinstance(ident, dict) else "?"
+            if miss:
+                warnings.append(
+                    f"identidad '{name}' omitida: variable(s) de entorno sin definir: {', '.join(sorted(miss))}"
+                )
+            else:
+                kept.append(expanded)
+        if kept:
+            data["identities"] = kept
+
+    if top_auth is not None:
+        miss = set()
+        expanded_auth = _expand_env_refs(top_auth, miss)
+        if miss:
+            warnings.append(
+                "auth de descubrimiento omitida (el descubrimiento irá anónimo): "
+                f"variable(s) de entorno sin definir: {', '.join(sorted(miss))}"
+            )
+        else:
+            data["auth"] = expanded_auth
+
+    return ScanFile.model_validate(data), warnings
 
 
 def _is_default_source(ctx: typer.Context, name: str) -> bool:
@@ -3145,10 +3187,12 @@ def scan(
     scan_file = ScanFile()
     if config_file:
         try:
-            scan_file = _load_scan_file(config_file)
+            scan_file, _cfg_warnings = _load_scan_file(config_file)
         except (OSError, ValueError, ValidationError) as exc:
             console.print(f"[bold red]--config inválido:[/bold red] {exc}")
             raise typer.Exit(code=1) from exc
+        for _w in _cfg_warnings:
+            console.print(f"[yellow]aviso config:[/yellow] {_w}")
 
     profile = _pick(ctx, "profile", profile, scan_file.profile).lower()
     if profile and profile not in _PROFILES:
