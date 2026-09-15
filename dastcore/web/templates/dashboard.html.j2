@@ -231,6 +231,23 @@
               {% endif %}
 
               <hr style="border:none;border-top:1px solid var(--border, #2a2f3a);margin:14px 0">
+              <p class="hint" style="margin:0 0 8px"><strong>Herramientas opcionales</strong>: instálalas una vez
+                y el panel las usará automáticamente en cada escaneo (barrido SQLi con sqlmap, crawler headless para SPAs).</p>
+              {% for d in (deps or []) %}
+              <p class="hint" style="margin:0 0 8px">
+                {% if d.key in (deps_installing or []) %}
+                <span class="spin"></span> Instalando <strong>{{ d.label }}</strong>… recarga esta página en unos minutos.
+                {% elif d.installed %}
+                ✓ <strong>{{ d.label }}</strong> instalado. <span style="opacity:.7">{{ d.description }}</span>
+                <button type="submit" form="depInstall-{{ d.key }}" class="ghost" style="padding:2px 10px;font-size:12px">Actualizar</button>
+                {% else %}
+                <strong>{{ d.label }}</strong> — {{ d.description }}
+                <button type="submit" form="depInstall-{{ d.key }}" style="padding:2px 10px;font-size:12px">Instalar</button>
+                {% endif %}
+              </p>
+              {% endfor %}
+
+              <hr style="border:none;border-top:1px solid var(--border, #2a2f3a);margin:14px 0">
               <p class="hint" style="margin:0 0 8px"><strong>Diccionario propio</strong>: descarga uno desde una URL
                 (o pega su contenido) y quedará en el desplegable de arriba para usarlo en cualquier escaneo.</p>
               {% if wordlist_ok %}<p class="hint" style="color:#3fb950;margin:0 0 8px">✓ {{ wordlist_ok }}</p>{% endif %}
@@ -354,6 +371,9 @@
          fields above belong to these via their form="…" attribute, so they never break the wizard form. -->
     <form id="seclistsInstallForm" method="post" action="/seclists/install" hidden></form>
     <form id="wordlistAddForm" method="post" action="/wordlists/add" hidden></form>
+    {% for d in (deps or []) %}
+    <form id="depInstall-{{ d.key }}" method="post" action="/deps/install" hidden><input type="hidden" name="dep" value="{{ d.key }}"></form>
+    {% endfor %}
     <script>
       (function () {
         var form = document.getElementById('scanForm');

@@ -28,6 +28,7 @@ from dastcore.bugbounty.queue import ReviewQueue
 from dastcore.bugbounty.report import PLATFORMS, render_bounty_report
 from dastcore.core.models import Finding
 from dastcore.httpsec import add_csrf_protection, add_error_pages, add_security_headers
+from dastcore.integrations.deps import dependency_status, install_dependency, is_known_dependency
 from dastcore.obslog import add_request_logging
 from dastcore.owasp import summarize as owasp_summarize
 from dastcore.report import render_html, render_json, render_sarif
@@ -278,6 +279,7 @@ def create_app(db_path: str | Path = "dastcore.db", review_db: str | Path | None
     from dastcore.discovery import seclists
 
     _seclists_state = {"installing": False}
+    _deps_installing: set[str] = set()
 
     def _seclists_ctx() -> dict[str, object]:
         # Dropdowns show SecLists presets *and* any custom lists the user has added.
@@ -286,6 +288,9 @@ def create_app(db_path: str | Path = "dastcore.db", review_db: str | Path | None
             "seclists_subdomains": seclists.wordlist_options("subdomains"),
             "seclists_installed": seclists.is_installed(),
             "seclists_installing": _seclists_state["installing"],
+            # Optional external tools (sqlmap, Playwright browser) with a one-click installer.
+            "deps": dependency_status(),
+            "deps_installing": sorted(_deps_installing),
         }
 
     @app.get("/", response_class=HTMLResponse)
@@ -304,6 +309,21 @@ def create_app(db_path: str | Path = "dastcore.db", review_db: str | Path | None
                     await seclists.download_presets()
                 finally:
                     _seclists_state["installing"] = False
+
+            asyncio.create_task(_run_install())
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/deps/install")
+    async def install_dep(dep: str = Form(...)) -> Response:
+        # Only allowlisted dependency keys are accepted (never an arbitrary command).
+        if is_known_dependency(dep) and dep not in _deps_installing:
+            _deps_installing.add(dep)
+
+            async def _run_install() -> None:
+                try:
+                    await install_dependency(dep)
+                finally:
+                    _deps_installing.discard(dep)
 
             asyncio.create_task(_run_install())
         return RedirectResponse("/", status_code=303)
