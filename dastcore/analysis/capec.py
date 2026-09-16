@@ -25,7 +25,7 @@ CAPEC ids, names, likelihoods, severities and CWE mappings here are taken from t
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from dastcore.analysis.planner import TargetProfile
@@ -237,6 +237,20 @@ def applicable_patterns(profile: TargetProfile) -> list[AttackPattern]:
     """The CAPEC patterns whose prerequisites the recon profile satisfies — the attacks that actually apply
     to THIS target, in catalogue order (most-cited injection/access-control first)."""
     return [ap for ap in _CATALOG if ap.applies(profile)]
+
+
+def patterns_for_families(
+    patterns: Iterable[AttackPattern], families: Iterable[str]
+) -> list[AttackPattern]:
+    """The subset of ``patterns`` whose family is in ``families`` — used to attach the applicable attack
+    patterns to a functional area or a per-host plan (so each zone/host cites how it is attacked)."""
+    wanted = set(families)
+    return [ap for ap in patterns if ap.family in wanted]
+
+
+def label_patterns(patterns: Iterable[AttackPattern]) -> tuple[str, ...]:
+    """Short ``"CAPEC-66 SQL Injection"`` labels for display on an area/host plan (deduped, order kept)."""
+    return tuple(dict.fromkeys(f"{ap.capec_id} {ap.name}" for ap in patterns))
 
 
 def capec_family_votes(profile: TargetProfile) -> list[tuple[str, float, str]]:

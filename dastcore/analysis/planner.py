@@ -67,6 +67,7 @@ class HostPlan:
     role: str                   # "admin" | "api" | "auth" | "staging" | "devops" | "web"
     families: tuple[str, ...]   # role-tailored families, blended with the target's global priorities
     why: str
+    capec: tuple[str, ...] = () # applicable CAPEC attack patterns for this host's families (see capec.py)
 
 
 @dataclass
@@ -80,6 +81,7 @@ class AreaPlan:
     signals: tuple[str, ...]        # the evidence that revealed the area (flags/paths/params)
     recon_paths: tuple[str, ...]    # high-signal paths to probe for this area
     why: str                        # how a pentester works the area (the techniques)
+    capec: tuple[str, ...] = ()     # applicable CAPEC attack patterns for this area's families (see capec.py)
 
 
 @dataclass
@@ -273,15 +275,22 @@ def _classify_host(host: str) -> tuple[str, tuple[str, ...], str]:
     return _WEB_ROLE
 
 
-def plan_hosts(hosts: tuple[str, ...], global_families: tuple[str, ...] = ()) -> list[HostPlan]:
+def plan_hosts(
+    hosts: tuple[str, ...], global_families: tuple[str, ...] = (),
+    patterns: tuple[AttackPattern, ...] = (),
+) -> list[HostPlan]:
     """A per-host sub-plan (juicy hosts first): each host's role-tailored families, blended with the
-    target's global priorities so stack/framework evidence still applies everywhere."""
+    target's global priorities so stack/framework evidence still applies everywhere. When ``patterns`` (the
+    target's applicable CAPEC patterns) is given, each host also cites the ones that hit its families."""
+    from dastcore.analysis.capec import label_patterns, patterns_for_families
+
     plans: list[HostPlan] = []
     for host in order_hosts(tuple(hosts)):
         bare = _host_of(host)
         role, families, why = _classify_host(bare)
         blended = tuple(dict.fromkeys([*families, *global_families]))[:6]
-        plans.append(HostPlan(host=bare, role=role, families=blended, why=why))
+        capec = label_patterns(patterns_for_families(patterns, blended)) if patterns else ()
+        plans.append(HostPlan(host=bare, role=role, families=blended, why=why, capec=capec))
     return plans
 
 
@@ -399,6 +408,15 @@ def plan_areas(profile: TargetProfile) -> list[AreaPlan]:
         areas.append(AreaPlan(
             "Contenido / marketing", ("xss", "open_redirect"), ("sin un área funcional marcada",), (),
             "XSS reflejado y open redirect en los parámetros de navegación/enlaces del sitio"))
+
+    # Cite the applicable CAPEC attack patterns per zone: for each area, the patterns whose prerequisites
+    # this target satisfies AND whose family the area focuses on — so each zone shows how it is attacked.
+    from dastcore.analysis.capec import applicable_patterns, label_patterns, patterns_for_families
+
+    aps = applicable_patterns(profile)
+    if aps:
+        for area in areas:
+            area.capec = label_patterns(patterns_for_families(aps, area.families))
 
     return areas
 
@@ -701,7 +719,7 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
     # the admin panel, the API and the marketing site each warrant a different strategy.
     distinct_hosts = {_host_of(h) for h in profile.hosts}
     if len(distinct_hosts) > 1 or any(_JUICY_HOST.search(h) for h in distinct_hosts):
-        plan.host_plans = plan_hosts(profile.hosts, plan.priority_families)
+        plan.host_plans = plan_hosts(profile.hosts, plan.priority_families, tuple(plan.attack_patterns))
     # Functional-area map (pentester decomposition): the app broken into zones, each with its focus.
     plan.areas = plan_areas(profile)
     # The reconnaissance half of the plan: how to discover this target's surface, not just how to attack it.
@@ -772,10 +790,14 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
         lines.append("Plan por host (rol → familias):")
         for hp in plan.host_plans[:8]:
             lines.append(f"  · {hp.host} [{hp.role}]: {', '.join(hp.families)} — {hp.why}")
+            if hp.capec:
+                lines.append(f"      CAPEC: {', '.join(hp.capec)}")
     if plan.areas:
         lines.append("Áreas (mapa del pentester → foco por zona):")
         for area in plan.areas:
             lines.append(f"  ▸ {area.name}: {', '.join(area.families)} — {area.why}")
+            if area.capec:
+                lines.append(f"      CAPEC: {', '.join(area.capec)}")
     if plan.attack_patterns:
         lines.append("Patrones de ataque aplicables (CAPEC → cómo trabajarlos):")
         for ap in plan.attack_patterns:

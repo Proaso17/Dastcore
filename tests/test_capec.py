@@ -13,7 +13,13 @@ from dastcore.analysis.capec import (
     applicable_patterns,
     capec_family_votes,
 )
-from dastcore.analysis.planner import TargetProfile, plan_scan, render_plan
+from dastcore.analysis.planner import (
+    TargetProfile,
+    plan_areas,
+    plan_hosts,
+    plan_scan,
+    render_plan,
+)
 
 _CAPEC_ID = re.compile(r"^CAPEC-\d+$")
 _CWE_ID = re.compile(r"^CWE-\d+$")
@@ -98,3 +104,39 @@ def test_capec_reinforces_an_observed_family_ranking() -> None:
     plan = plan_scan(TargetProfile(param_names=frozenset({"redirect_url"})))
     assert "ssrf" in plan.family_scores
     assert any("CAPEC-664" in line for line in plan.reasoning)
+
+
+def test_areas_cite_their_applicable_capec_patterns() -> None:
+    profile = TargetProfile(
+        has_login=True, api_kind="rest", param_names=frozenset({"id"}),
+        paths=frozenset({"/admin/users", "/orders/1"}),
+    )
+    areas = {a.name: a for a in plan_areas(profile)}
+    auth = next(a for n, a in areas.items() if "Autenticación" in n)
+    assert any("CAPEC-49" in c or "CAPEC-593" in c for c in auth.capec)  # brute force / session on the auth zone
+    assert any("CAPEC-1" in c or "CAPEC-66" in c for c in areas["API"].capec)  # ACL / SQLi on the API zone
+
+
+def test_host_plans_cite_capec_per_role() -> None:
+    from dastcore.analysis.capec import applicable_patterns
+
+    profile = TargetProfile(
+        has_login=True, api_kind="rest", param_names=frozenset({"id"}), backend="supabase",
+        hosts=("admin.acme.com", "api.acme.com"),
+    )
+    patterns = tuple(applicable_patterns(profile))
+    by_host = {hp.host: hp for hp in plan_hosts(profile.hosts, ("sqli",), patterns)}
+    assert any("CAPEC-" in c for c in by_host["admin.acme.com"].capec)  # admin (authz/weak-creds) cites patterns
+    assert any("CAPEC-77" in c or "CAPEC-1" in c for c in by_host["api.acme.com"].capec)  # api authz patterns
+
+
+def test_render_shows_capec_per_zone() -> None:
+    profile = TargetProfile(has_login=True, api_kind="rest", hosts=("admin.acme.com", "api.acme.com"))
+    text = render_plan(profile, plan_scan(profile))
+    assert "CAPEC:" in text  # the per-area / per-host CAPEC citations are rendered
+
+
+def test_plan_hosts_without_patterns_has_no_capec() -> None:
+    # Back-compat: called without the patterns arg (as the existing planner tests do), hosts carry no CAPEC.
+    plans = plan_hosts(("admin.acme.com", "www.acme.com"), ("sqli",))
+    assert all(hp.capec == () for hp in plans)
