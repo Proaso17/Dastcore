@@ -75,12 +75,28 @@ class DiscoveryBudgetExceededError(BudgetExceededError):
     used — a near-empty result that looked 'clean' but never ran the audit."""
 
 
+class RateLimitTrippedError(BudgetExceededError):
+    """Raised to stop a scan early once the target is clearly rate-limiting (or hard-blocking) it: a sustained
+    run of refusals — reset by any non-refusal response — means every further request is wasted. A subclass
+    of :class:`BudgetExceededError` so the scan treats it as a soft-stop (report what we have) rather than a
+    crash, and the CLI surfaces the rate-limit/WAF advisory. Prevents firing hundreds of doomed requests after
+    a per-IP limit kicks in (#13)."""
+
+
 # Path prefixes served by the hosting platform/CDN itself, which return 403/404 by default and are NOT the
 # application refusing the scan — excluded from the block ratio so a Vercel/Next.js site isn't mislabelled
 # as "behind an aggressive WAF" just for its framework-internal routes.
 _PLATFORM_INTERNAL_PREFIXES: tuple[str, ...] = (
     "/_next/", "/_nuxt/", "/_vercel/", "/cdn-cgi/", "/__nextjs", "/_astro/", "/.netlify/",
 )
+
+# Rate-limit circuit breaker (#13): after this many CONSECUTIVE refusals (403/429/503 on app paths; reset by
+# any non-refusal response) start pausing to let a time-window limit recover, and after the trip count stop
+# the scan (RateLimitTrippedError) instead of firing more doomed requests. A per-IP volume cap rarely
+# recovers mid-scan, so the trip is the decisive win; the back-off salvages a genuinely transient limit.
+_RATE_LIMIT_BACKOFF_AT: int = 6
+_RATE_LIMIT_TRIP_AT: int = 18
+_RATE_LIMIT_BACKOFF_CAP_S: float = 8.0
 
 
 def _parse_retry_after(value: str | None) -> float | None:
@@ -167,6 +183,8 @@ class HttpClient:
         self._rate_limited_count = 0    # 429/503 specifically (explicit slow-down signals)
         self._successes = 0             # 2xx/3xx app responses
         self._successes_before_first_block = -1  # how many succeeded before the first refusal (onset)
+        self._consecutive_blocks = 0    # current run of back-to-back refusals (reset by any other response)
+        self._rate_limit_tripped = False  # circuit breaker: sustained refusals ⇒ stop the scan (#13)
         self._deadline: float | None = None
         # Budget reservation: while discovery runs, tighten the effective time/request budget by this
         # fraction so crawling/dirbusting can't consume it all and starve the active scan (Burp reserves
@@ -255,6 +273,11 @@ class HttpClient:
         target served the scan fine and only began refusing under sustained volume — a rate-limit onset."""
         return self._successes_before_first_block
 
+    @property
+    def rate_limit_tripped(self) -> bool:
+        """True once the circuit breaker fired (a sustained run of refusals) and the scan stopped early."""
+        return self._rate_limit_tripped
+
     def waf_block_ratio(self) -> float:
         """Fraction of (app) responses that came back as a refusal (403/429/503). Platform-internal paths
         are excluded. 0.0 if nothing was sent. High ratio ⇒ the scan isn't seeing the real app."""
@@ -264,10 +287,14 @@ class HttpClient:
         """Why most requests were refused — for an honest advisory rather than always blaming a WAF:
         ``"none"`` below the significance threshold; ``"rate-limit"`` when 429/503 dominate or the target
         served a run of requests and only *then* began refusing (self-inflicted volume — slow down, it is
-        not a security control); ``"waf"`` when refusals looked access/content-driven from the start."""
-        if self._response_count < 10 or self.waf_block_ratio() < 0.5:
+        not a security control); ``"waf"`` when refusals looked access/content-driven from the start.
+
+        When the circuit breaker tripped (#13) the significance gate is bypassed — a sustained run of
+        refusals is interference by definition, even if the overall ratio is still under the threshold
+        because we stopped early."""
+        if not self._rate_limit_tripped and (self._response_count < 10 or self.waf_block_ratio() < 0.5):
             return "none"
-        if self._rate_limited_count * 2 >= self._blocked_count:
+        if self._blocked_count > 0 and self._rate_limited_count * 2 >= self._blocked_count:
             return "rate-limit"  # explicit 429/503 are at least half the refusals
         if self._successes_before_first_block >= 10:
             return "rate-limit"  # served fine for a while, then began refusing ⇒ volume/rate limit
@@ -369,6 +396,17 @@ class HttpClient:
         # Enforce the scan budget before spending a request (raises BudgetExceededError).
         self._account_for_budget()
 
+        # Rate-limit circuit breaker (#13): once a sustained run of refusals has tripped it, stop spending
+        # requests entirely — the scan soft-stops and reports what it has instead of firing hundreds more
+        # doomed requests. Before the trip, a growing run of refusals earns a short pause (capped) to let a
+        # genuinely transient (time-window) rate limit recover; a per-IP volume cap won't, and then we trip.
+        if self._rate_limit_tripped:
+            raise RateLimitTrippedError("Target is rate-limiting/blocking the scan (sustained refusals); stopping.")
+        if self._consecutive_blocks >= _RATE_LIMIT_BACKOFF_AT:
+            await asyncio.sleep(
+                min((self._consecutive_blocks - _RATE_LIMIT_BACKOFF_AT + 1) * 2.0, _RATE_LIMIT_BACKOFF_CAP_S)
+            )
+
         # Cookies live on the client's jar (httpx persists Set-Cookie there and resends it),
         # so any explicit per-request cookies are merged into the jar rather than passed
         # per-request — which httpx deprecates due to ambiguous per-domain semantics.
@@ -437,8 +475,13 @@ class HttpClient:
                         self._blocked_count += 1
                         if response.status_code in (429, 503):
                             self._rate_limited_count += 1
-                    elif 200 <= response.status_code < 400:
-                        self._successes += 1
+                        self._consecutive_blocks += 1
+                        if self._consecutive_blocks >= _RATE_LIMIT_TRIP_AT:
+                            self._rate_limit_tripped = True  # breaker: stop the scan on the next request (#13)
+                    else:
+                        if 200 <= response.status_code < 400:
+                            self._successes += 1
+                        self._consecutive_blocks = 0  # any non-refusal response ends the run (incl. 404)
                 reported_url = url if send_url != url else str(response.url)
                 return HttpResponse(
                     status_code=response.status_code,

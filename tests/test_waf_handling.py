@@ -101,6 +101,76 @@ def test_block_reason_none_below_threshold() -> None:
     assert c.block_reason() == "none"
 
 
+async def test_circuit_breaker_stops_scan_after_sustained_refusals(blocking_server: str, monkeypatch) -> None:
+    """#13: a sustained run of refusals trips the breaker, and every further request then soft-stops
+    (RateLimitTrippedError) instead of firing more doomed requests."""
+    import dastcore.core.http_client as hc
+
+    monkeypatch.setattr(hc, "_RATE_LIMIT_BACKOFF_CAP_S", 0.0)  # no slow back-off pauses in the test
+    monkeypatch.setattr(hc, "_RATE_LIMIT_TRIP_AT", 5)
+    async with HttpClient(ScopeConfig(allow_domains=["127.0.0.1"])) as client:
+        raised = 0
+        for i in range(30):
+            try:
+                await client.get(f"{blocking_server}/p{i}")  # always 403
+            except hc.RateLimitTrippedError:
+                raised += 1
+        assert client.rate_limit_tripped is True
+        assert raised >= 1  # once tripped, further requests are refused locally (scan stops)
+        assert client.blocked_count <= 6  # stopped ~5, did NOT fire all 30
+
+
+async def test_breaker_does_not_trip_when_successes_interleave(monkeypatch) -> None:
+    """No false trip: a scan getting mixed 200/403 (normal authz testing) never trips — the run resets on
+    every non-refusal, so only a sustained wall of refusals (rate-limit/full-block) trips."""
+    import socket
+    import threading
+
+    from flask import Flask, Response
+    from werkzeug.serving import make_server
+
+    import dastcore.core.http_client as hc
+
+    app = Flask(__name__)
+    state = {"n": 0}
+
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def alternate(path: str) -> Response:
+        state["n"] += 1
+        return Response("x", status=403 if state["n"] % 2 == 0 else 200)  # 200,403,200,403,…
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = make_server("127.0.0.1", port, app, threaded=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(hc, "_RATE_LIMIT_TRIP_AT", 5)
+    try:
+        async with HttpClient(ScopeConfig(allow_domains=["127.0.0.1"])) as client:
+            for i in range(30):
+                await client.get(f"http://127.0.0.1:{port}/p{i}")
+            assert client.rate_limit_tripped is False  # interleaved successes kept resetting the run
+    finally:
+        server.shutdown()
+
+
+def test_block_reason_ignores_ratio_gate_when_breaker_tripped() -> None:
+    """#13: when the breaker stopped the scan early the overall ratio may still be < 50%, but a sustained
+    refusal run IS interference — block_reason must not return 'none'."""
+    c = HttpClient(ScopeConfig(allow_domains=["x"]))
+    c._response_count, c._blocked_count, c._rate_limited_count = 42, 18, 0  # 43% < gate
+    c._successes_before_first_block, c._rate_limit_tripped = 24, True
+    assert c.block_reason() == "rate-limit"
+
+
+def test_interference_finding_notes_the_early_stop() -> None:
+    from dastcore.cli import _scan_interference_finding
+
+    f = _scan_interference_finding("https://x/", "rate-limit", 0.43, 18, 42, 0, 24, True)
+    assert "circuit breaker" in f.evidence[0].data.lower() or "detuvo pronto" in f.evidence[0].data.lower()
+
+
 async def test_platform_internal_paths_excluded_from_block_ratio(blocking_server: str) -> None:
     """A Vercel/Next.js site's framework-internal paths 403 by default — they must not count as the app
     blocking the scan (the over-count that mislabelled getnyma.com as behind an aggressive WAF)."""

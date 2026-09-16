@@ -64,7 +64,12 @@ from dastcore.config import (
     ScanFile,
     ScopeConfig,
 )
-from dastcore.core.http_client import BudgetExceededError, DiscoveryBudgetExceededError, HttpClient
+from dastcore.core.http_client import (
+    BudgetExceededError,
+    DiscoveryBudgetExceededError,
+    HttpClient,
+    RateLimitTrippedError,
+)
 from dastcore.core.models import Evidence, Finding, HttpRequest, HttpResponse, InjectionPoint
 from dastcore.core.session import SessionManager, auth_endpoint_urls
 from dastcore.detectors.access_bypass import run_access_bypass_checks
@@ -1563,13 +1568,18 @@ def _authz_coverage_gap_finding(target: str, n_tables: int, n_user_identities: i
 
 def _scan_interference_finding(
     target: str, reason: str, ratio: float, blocked: int, total: int,
-    rate_limited: int, successes_before_block: int,
+    rate_limited: int, successes_before_block: int, tripped: bool = False,
 ) -> Finding:
     """Advisory (not a vuln): most requests were refused, so the scan didn't see the real app. Tells the
     TRUE story instead of always blaming a WAF — rate-limiting we triggered by volume (slow down) vs. an
     actual WAF/access barrier (bypass). Fixed dogfooding getnyma.com, whose 'aggressive WAF' verdict was
-    really Vercel's per-IP rate limit + framework-internal 403s (#12)."""
+    really Vercel's per-IP rate limit + framework-internal 403s (#12). ``tripped`` = the circuit breaker
+    stopped the scan early on a sustained run of refusals instead of firing more doomed requests (#13)."""
     request = HttpRequest(method="GET", url=target)
+    stopped_note = (
+        " El escaneo se detuvo pronto automáticamente (circuit breaker) para no malgastar peticiones."
+        if tripped else ""
+    )
     if reason == "rate-limit":
         onset = (
             f" El objetivo sirvió {successes_before_block} petición(es) OK y solo entonces empezó a rechazar"
@@ -1578,7 +1588,7 @@ def _scan_interference_finding(
         detail = (
             f"{blocked}/{total} respuestas ({ratio * 100:.0f}%) fueron rechazos por RATE-LIMIT del objetivo "
             f"({rate_limited}×429/503).{onset} — es un límite por volumen/IP (lo disparó el propio escaneo), NO "
-            "un WAF de seguridad. Los hallazgos son parciales: el escáner dejó de ver la app tras el límite."
+            f"un WAF de seguridad. Los hallazgos son parciales: el escáner dejó de ver la app tras el límite.{stopped_note}"
         )
         name = "El objetivo limitó el ritmo del escaneo (rate-limit; resultados parciales)"
         remediation = (
@@ -1591,7 +1601,7 @@ def _scan_interference_finding(
     else:
         detail = (
             f"{blocked}/{total} respuestas ({ratio * 100:.0f}%) fueron bloqueos de un WAF/CDN. El escaneo "
-            "automático no está viendo la aplicación real, así que sus hallazgos NO son fiables."
+            f"automático no está viendo la aplicación real, así que sus hallazgos NO son fiables.{stopped_note}"
         )
         name = "Un WAF/CDN está bloqueando el escaneo (resultados no fiables)"
         remediation = (
@@ -2689,26 +2699,14 @@ async def _run_scan(
                 timeout=None,
             )
 
-            # Scan-interference advisory: if most requests were refused, the scan didn't see the real app —
-            # say so loudly instead of letting the empty/partial result look like "all clear". But tell the
-            # TRUE story: rate-limiting we triggered (slow down) vs. an actual WAF (bypass) — not always "WAF".
-            waf_ratio = client.waf_block_ratio()
-            block_reason = client.block_reason()
-            if block_reason != "none":
-                label = "rate-limit del objetivo" if block_reason == "rate-limit" else "WAF/CDN"
-                progress.status(
-                    f"⚠ {waf_ratio * 100:.0f}% de las peticiones fueron rechazadas ({label}) — resultados parciales."
-                )
-                extra_findings.append(
-                    _scan_interference_finding(
-                        target, block_reason, waf_ratio, client.blocked_count, client.response_count,
-                        client.rate_limited_count, client.successes_before_first_block,
-                    )
-                )
-
             if prove_impact:
                 progress.status("Probando impacto de los hallazgos confirmados…")
                 await phase("prove-impact", _prove_impact_isolated(client, active_passive + extra_findings))
+    except RateLimitTrippedError:
+        # #13 circuit breaker: the target is rate-limiting/blocking us (sustained refusals). Stop early —
+        # firing more requests is wasted — and report what we have; the interference advisory (below) says why.
+        budget_hit = True
+        progress.status("El objetivo está limitando el ritmo/bloqueando — se detuvo pronto y se reporta lo obtenido…")
     except BudgetExceededError:
         # A --max-requests / --time-budget cap is a soft stop: keep what we found, don't crash.
         budget_hit = True
@@ -2740,6 +2738,19 @@ async def _run_scan(
                 failed_phases.append("authz")
 
         coverage_findings: list[Finding] = []
+        # Scan-interference advisory: if most requests were refused, the scan didn't see the real app — say
+        # so instead of letting a partial/empty result look "all clear". Emitted HERE (post-scan) so it fires
+        # whether the active scan completed or was soft-stopped by the rate-limit breaker (#13). Tells the
+        # TRUE story: rate-limiting we triggered (slow down) vs. an actual WAF (bypass) — not always "WAF".
+        _block_reason = client.block_reason()
+        if _block_reason != "none":
+            coverage_findings.append(
+                _scan_interference_finding(
+                    target, _block_reason, client.waf_block_ratio(), client.blocked_count,
+                    client.response_count, client.rate_limited_count,
+                    client.successes_before_first_block, client.rate_limit_tripped,
+                )
+            )
         if failed_phases:  # tell the report the coverage was partial (and which checks were skipped)
             coverage_findings.append(_coverage_finding(target, failed_phases))
         if session is not None and session.total_relogins >= _SESSION_INSTABILITY_RELOGINS:
