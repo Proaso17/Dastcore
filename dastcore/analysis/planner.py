@@ -16,7 +16,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:  # avoid a runtime import cycle (capec imports TargetProfile from this module)
+    from dastcore.analysis.capec import AttackPattern
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,7 @@ class ScanPlan:
     host_plans: list[HostPlan] = field(default_factory=list)       # per-host strategy when the surface spans roles
     areas: list[AreaPlan] = field(default_factory=list)            # functional-area map (pentester decomposition)
     recon: ReconPlan = field(default_factory=ReconPlan)            # the reconnaissance strategy (see plan_recon)
+    attack_patterns: list[AttackPattern] = field(default_factory=list)  # applicable CAPEC patterns (see capec.py)
 
 
 # Language → the vuln families it most exposes (a pentester's priors). Order within a tuple is the prior
@@ -674,6 +679,17 @@ def plan_scan(profile: TargetProfile) -> ScanPlan:
         add("Genérico", ("sqli", "xss", "lfi", "open_redirect"),
             "Sin señales fuertes de stack/CMS: cobertura base (SQLi, XSS, LFI, open redirect) sobre toda la superficie")
 
+    # CAPEC attack-pattern layer: the brain reasons from MITRE's attack catalogue. Contribute likelihood-
+    # weighted, CAPEC-cited votes from the patterns whose PREREQUISITES this target actually satisfies (an
+    # observed param/path/API/login/backend — never a bare stack prior, so it reinforces evidence without
+    # perturbing the stack-prior rankings). Applied after the generic fallback so that only fires on a
+    # truly featureless target. Purely a prioritisation/reasoning aid — detection oracles are unchanged.
+    from dastcore.analysis.capec import applicable_patterns, capec_family_votes
+
+    for fam, weight, reason in capec_family_votes(profile):
+        bump(fam, weight, reason)
+    plan.attack_patterns = applicable_patterns(profile)
+
     # Rank by confidence; stable on ties (dict insertion order = first vote).
     plan.priority_families = tuple(sorted(scores, key=lambda f: -scores[f]))
     plan.family_scores = scores
@@ -760,6 +776,10 @@ def render_plan(profile: TargetProfile, plan: ScanPlan) -> str:
         lines.append("Áreas (mapa del pentester → foco por zona):")
         for area in plan.areas:
             lines.append(f"  ▸ {area.name}: {', '.join(area.families)} — {area.why}")
+    if plan.attack_patterns:
+        lines.append("Patrones de ataque aplicables (CAPEC → cómo trabajarlos):")
+        for ap in plan.attack_patterns:
+            lines.append(f"  ⚔ {ap.capec_id} {ap.name} [{ap.family}]: {ap.why}")
     recon = plan.recon
     techniques = [
         name for flag, name in (
