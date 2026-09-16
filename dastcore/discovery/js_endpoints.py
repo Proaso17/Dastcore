@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from selectolax.parser import HTMLParser
@@ -90,6 +91,48 @@ def _body_keys(blob: str | None) -> tuple[str, ...]:
     drop = {"post", "put", "patch", "delete", "get", "method", "headers", "body", "true", "false", "null",
             "function", "return", "const", "let", "var", "await", "async"}
     return tuple(dict.fromkeys(k for k in keys if k.lower() not in drop))[:12]
+
+
+def inline_script_text(html: str) -> str:
+    """The concatenated text of every INLINE ``<script>`` (no ``src``) in a page. Server-rendered apps,
+    framework state blobs (Next.js ``__NEXT_DATA__``, Angular/Vue bootstrap) and hand-written JS embed their
+    endpoints and fetch/XHR calls here — invisible to a miner that only fetches external bundles. App-agnostic."""
+    parts: list[str] = []
+    for node in HTMLParser(html).css("script"):
+        if node.attributes.get("src"):
+            continue  # external — fetched separately
+        text = node.text(deep=True)
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def requests_from_js(origin: str, js_text: str, in_scope: Callable[[str], bool]) -> list[HttpRequest]:
+    """Every scannable request referenced in a blob of JS/JSON: GET endpoints + write-method API calls
+    (DELETE excluded — never auto-issued, it is destructive). Scope-gated. Shared by the external-bundle
+    miner and the crawler's per-page inline-script mining so both cover the same surface, app-agnostically."""
+    out: dict[str, HttpRequest] = {}
+    for endpoint in extract_endpoints(js_text):
+        absolute = urljoin(origin, endpoint)
+        if not in_scope(absolute):
+            continue
+        req = url_to_request(absolute)
+        if req is not None:
+            out.setdefault(req.signature(), req)
+    for method, endpoint, keys in extract_write_calls(js_text):
+        if method == "DELETE":
+            continue  # destructive with no analog to the POST forms the scanner already submits
+        absolute = urljoin(origin, endpoint)
+        if not in_scope(absolute):
+            continue
+        parts = urlsplit(absolute)
+        base = absolute.split("?", 1)[0].split("#", 1)[0]
+        req = HttpRequest(
+            method=method, url=base, params=dict(parse_qsl(parts.query)),  # type: ignore[arg-type]
+            json_body=dict.fromkeys(keys, "test") if keys else None,
+        )
+        out.setdefault(req.signature(), req)
+    return list(out.values())
 
 
 def extract_write_calls(js_text: str) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -200,20 +243,6 @@ class JsEndpointDiscoverer:
                 urls.append(urljoin(origin, src))
         return list(dict.fromkeys(urls))[: self._max_scripts]
 
-    def _write_request(
-        self, origin: str, method: str, endpoint: str, keys: tuple[str, ...]
-    ) -> HttpRequest | None:
-        """Build a scope-gated, method-aware request from a mined write call, with the best-effort body
-        param names as JSON injection points (placeholder values the scanner then mutates)."""
-        absolute = urljoin(origin, endpoint)
-        if not self._client.is_in_scope(absolute):
-            return None
-        parts = urlsplit(absolute)
-        base = absolute.split("?", 1)[0].split("#", 1)[0]
-        params = dict(parse_qsl(parts.query))
-        json_body = dict.fromkeys(keys, "test") if keys else None
-        return HttpRequest(method=method, url=base, params=params, json_body=json_body)  # type: ignore[arg-type]
-
     async def discover(self, base_url: str) -> list[HttpRequest]:
         origin = base_url if base_url.endswith("/") else base_url + "/"
         if not self._client.is_in_scope(origin):
@@ -222,38 +251,25 @@ class JsEndpointDiscoverer:
         if html is None:
             return []
 
+        in_scope = self._client.is_in_scope
+        requests: dict[str, HttpRequest] = {}
+
+        def add_all(js_text: str) -> None:
+            for req in requests_from_js(origin, js_text, in_scope):
+                requests.setdefault(req.signature(), req)
+
+        # Inline <script> blocks first: server-rendered apps embed their endpoints/fetch calls in the page
+        # itself (not an external bundle), so mining only external scripts misses them entirely.
+        add_all(inline_script_text(html))
         script_urls = self._script_urls(html, origin)
-        endpoints: set[str] = set()
-        write_calls: list[tuple[str, str, tuple[str, ...]]] = []
         for script_url in script_urls:
-            if not self._client.is_in_scope(script_url):
+            if len(requests) >= self._max_endpoints:
+                break
+            if not in_scope(script_url):
                 continue
             js = await self._get(script_url)
             if js:
-                endpoints |= extract_endpoints(js)
-                write_calls.extend(extract_write_calls(js))  # POST/PUT/PATCH/DELETE API surface
-            if len(endpoints) >= self._max_endpoints:
-                break
-
-        requests: dict[str, HttpRequest] = {}
-        for endpoint in endpoints:
-            absolute = urljoin(origin, endpoint)
-            if not self._client.is_in_scope(absolute):
-                continue
-            req = url_to_request(absolute)
-            if req is not None:
-                requests.setdefault(req.signature(), req)
-        # Write-method calls become method-aware requests (with best-effort JSON body params as injection
-        # points) so the SQLi/mass-assignment/authz/BFLA detectors reach the server-side API surface.
-        # DELETE is deliberately NOT auto-issued: it is destructive with no analog to the POST forms the
-        # scanner already submits, so scanning a mined DELETE could wipe target data. (extract_write_calls
-        # still reports DELETE for visibility; it is just never turned into a scannable request here.)
-        for method, endpoint, keys in write_calls:
-            if method == "DELETE":
-                continue
-            req = self._write_request(origin, method, endpoint, keys)
-            if req is not None:
-                requests.setdefault(req.signature(), req)
+                add_all(js)
         if self._harvest_maps:  # mine each bundle's sourcemap for the original, unminified source
             for req in await harvest_sourcemaps(
                 self._client, origin, script_urls, max_scripts=self._max_scripts, timeout=self._timeout

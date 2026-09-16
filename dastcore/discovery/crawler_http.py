@@ -20,6 +20,7 @@ from selectolax.parser import HTMLParser, Node
 
 from dastcore.core.http_client import BudgetExceededError, HttpClient, OutOfScopeError
 from dastcore.core.models import HttpRequest
+from dastcore.discovery.js_endpoints import inline_script_text, requests_from_js
 from dastcore.validation.baseline import normalize_body
 
 _SITEMAP_LOC = re.compile(r"<loc>\s*(.*?)\s*</loc>", re.IGNORECASE | re.DOTALL)
@@ -114,6 +115,13 @@ class HttpCrawler:
                 form_request = self._form_request(url, form)
                 if form_request is not None:
                     self._record(form_request, discovered, seen_signatures)
+
+            # Inline <script> endpoints/API calls: server-rendered pages embed fetch/XHR endpoints in the
+            # page itself (not just external bundles or <a>/<form>), so mine each page's inline scripts.
+            inline = inline_script_text(response.text)
+            if inline:
+                for req in requests_from_js(url, inline, self._http.is_in_scope):
+                    self._record(req, discovered, seen_signatures)
 
         return discovered
 

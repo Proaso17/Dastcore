@@ -85,6 +85,33 @@ async def test_crawler_respects_max_pages(vuln_app_url: str) -> None:
     assert not any(url.endswith("/file") for url in urls)
 
 
+async def test_crawler_mines_inline_script_endpoints() -> None:
+    """General (any app): server-rendered pages embed endpoints/fetch calls in INLINE <script> blocks, not
+    just <a>/<form>/external bundles. The crawler must mine each page's inline scripts — a GET endpoint and
+    a write-method API call here — so the injection surface isn't missed on inline-script apps."""
+    from dastcore.core.models import HttpResponse
+
+    class _InlineClient:
+        def is_in_scope(self, url: str) -> bool:
+            return True
+
+        async def get(self, url: str) -> HttpResponse:
+            body = (
+                '<html><body><h1>home</h1>'
+                '<script>const api = "/api/v1/items?cat=1";'
+                'fetch("/api/orders", { method: "POST", body: JSON.stringify({productId: 1}) });</script>'
+                "</body></html>"
+            )
+            return HttpResponse(
+                method="GET", status_code=200, headers={"content-type": "text/html"}, text=body, url=url
+            )
+
+    discovered = await HttpCrawler(_InlineClient(), use_robots=False, max_pages=1).crawl("http://t.test/")  # type: ignore[arg-type]
+    got = {(r.method, r.url) for r in discovered}
+    assert any(m == "GET" and u.endswith("/api/v1/items") for m, u in got)   # inline GET endpoint mined
+    assert any(m == "POST" and u.endswith("/api/orders") for m, u in got)    # inline write-call mined
+
+
 async def test_crawler_skips_pages_that_error_and_keeps_going() -> None:
     """A transient network error on one page must not abort the crawl (multi-host resilience)."""
     import httpx as _httpx
