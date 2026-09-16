@@ -267,6 +267,60 @@ KNOWN_FAMILIES: frozenset[str] = frozenset(
 )
 
 
+# Coverage is judged at the FAMILY level, not by strict per-pattern CWE. A CAPEC pattern's MITRE CWE is
+# often not the exact CWE dastcore emits for that family (e.g. dastcore reports LFI as CWE-98 while
+# CAPEC-126 lists CWE-22), so matching CWEs would falsely under-report real coverage. Every family in the
+# catalogue is one dastcore ACTIVELY tests — that is how each pattern was mapped — so catalogue patterns are
+# covered; the honest signal in the maturity map is the reference GAPS below (attacks dastcore can't test).
+#
+# Families whose coverage is real but SHALLOW (passive/heuristic), shown as "partial" rather than "full".
+_PARTIAL_FAMILIES: frozenset[str] = frozenset({"clickjacking", "csrf"})
+
+# Reference gaps: high-value web CAPEC patterns dastcore does NOT cover, so the maturity map is honest about
+# its blind spots (a DAST can't see business logic / social engineering / network position; DoS is opt-in).
+_REFERENCE_GAPS: tuple[tuple[str, str, str, str], ...] = (
+    ("CAPEC-26", "Leveraging Race Conditions", "logic",
+     "condiciones de carrera / TOCTOU: requieren envío concurrente + verificación de estado; no cubierto"),
+    ("CAPEC-212", "Functionality Misuse", "business-logic",
+     "abuso de lógica de negocio: depende del significado de la app; no es genéricamente detectable en DAST"),
+    ("CAPEC-98", "Phishing", "social",
+     "ingeniería social: fuera del alcance de un DAST"),
+    ("CAPEC-125", "Flooding (DoS)", "dos",
+     "denegación de servicio / agotamiento de recursos: intrusivo; solo bajo --dos explícito, no por defecto"),
+    ("CAPEC-94", "Adversary in the Middle (AiTM)", "mitm",
+     "requiere posición de red; fuera del alcance de un DAST de aplicación"),
+    ("CAPEC-148", "Content Spoofing", "content",
+     "content/UI spoofing: parcial; se detecta el reflejo pero no el engaño visual completo"),
+)
+
+
+@dataclass(frozen=True)
+class CoverageEntry:
+    """One row of the CAPEC maturity map: a pattern and how well dastcore covers it."""
+
+    capec_id: str
+    name: str
+    area: str      # dastcore family (for catalogue rows) or a gap-area label (for reference gaps)
+    status: str    # "full" (active detector) | "partial" (passive/heuristic) | "none" (gap)
+    detail: str    # the CWEs the pattern targets, or why it's a gap
+
+
+def coverage_report() -> dict[str, object]:
+    """The CAPEC maturity map: for every catalogue pattern the coverage dastcore has for its family
+    (full / partial), plus the reference gaps it deliberately or inherently does not test (none). Coverage
+    is family-level (see the note on ``_PARTIAL_FAMILIES``); the target CWEs are shown for reference."""
+    rows: list[CoverageEntry] = []
+    for ap in _CATALOG:
+        status = "partial" if ap.family in _PARTIAL_FAMILIES else "full"
+        depth = "pasiva/heurística" if status == "partial" else "detector activo"
+        rows.append(CoverageEntry(ap.capec_id, ap.name, ap.family, status,
+                                  f"{depth} · CWE objetivo {', '.join(ap.cwes)}"))
+    gaps = [CoverageEntry(cid, name, area, "none", reason) for cid, name, area, reason in _REFERENCE_GAPS]
+    all_rows = rows + gaps
+    counts = {s: sum(1 for e in all_rows if e.status == s) for s in ("full", "partial", "none")}
+    return {"rows": all_rows, "catalogue": rows, "gaps": gaps, "counts": counts, "total": len(all_rows)}
+
+
 def applicable_patterns(profile: TargetProfile) -> list[AttackPattern]:
     """The CAPEC patterns whose prerequisites the recon profile satisfies — the attacks that actually apply
     to THIS target, in catalogue order (most-cited injection/access-control first)."""

@@ -589,6 +589,37 @@ def version_cmd() -> None:
     console.print(f"dastcore [bold]{__version__}[/bold]")
 
 
+@app.command("capec")
+def capec_cmd() -> None:
+    """Mapa de madurez CAPEC: qué patrones de ataque (MITRE CAPEC) cubre dastcore vía sus detectores (por
+    CWE) y cuáles no — cobertura activa (full), pasiva/heurística (partial) o hueco (none)."""
+    from rich.table import Table
+
+    from dastcore.analysis.capec import coverage_report
+
+    _print_banner()
+    rep = coverage_report()
+    counts = rep["counts"]  # type: ignore[index]
+    icon = {"full": "[green]●[/green]", "partial": "[yellow]◐[/yellow]", "none": "[red]○[/red]"}
+    table = Table(title="Cobertura CAPEC (mapa de madurez de ataque)", show_lines=False)
+    table.add_column("", justify="center")
+    table.add_column("CAPEC", style="bold")
+    table.add_column("Patrón de ataque")
+    table.add_column("Familia/Área")
+    table.add_column("Cobertura")
+    for entry in rep["rows"]:  # type: ignore[union-attr]
+        table.add_row(icon.get(entry.status, "?"), entry.capec_id, entry.name, entry.area, entry.detail)
+    console.print(table)
+    console.print(
+        f"[green]● full {counts['full']}[/green]   [yellow]◐ partial {counts['partial']}[/yellow]   "
+        f"[red]○ hueco {counts['none']}[/red]   ·  {rep['total']} patrones"
+    )
+    console.print(
+        "[dim]full = detector activo con oráculo · partial = pasivo/heurístico · hueco = no observable en "
+        "DAST (lógica de negocio, ingeniería social, posición de red) o intrusivo/opt-in (DoS).[/dim]"
+    )
+
+
 async def _run_demo_scan(base_url: str) -> list[Finding]:
     scope = ScopeConfig(allow_domains=["127.0.0.1"])
     findings: list[Finding] = []

@@ -114,6 +114,45 @@ def test_plan_scan_integrates_capec_without_disturbing_stack_priors() -> None:
     assert "CAPEC" in text  # the plan renders the applicable attack patterns + how to work them
 
 
+def test_coverage_report_covers_every_catalogue_pattern() -> None:
+    """The maturity map: every real catalogue pattern must be detectable (full or partial) — never a gap.
+    Catches DETECTED_CWES drifting out of sync with the detectors (e.g. a missing CWE the code emits)."""
+    from dastcore.analysis.capec import coverage_report
+
+    rep = coverage_report()
+    catalogue = rep["catalogue"]
+    assert all(e.status in ("full", "partial") for e in catalogue), \
+        [e.capec_id for e in catalogue if e.status == "none"]
+    assert rep["counts"]["full"] >= 20
+
+
+def test_coverage_report_lists_honest_gaps() -> None:
+    from dastcore.analysis.capec import coverage_report
+
+    gaps = coverage_report()["gaps"]
+    assert gaps and all(e.status == "none" and e.detail for e in gaps)
+    ids = {e.capec_id for e in gaps}
+    assert {"CAPEC-26", "CAPEC-212", "CAPEC-98"} <= ids  # race, business logic, social — DAST blind spots
+
+
+def test_coverage_counts_sum_to_total() -> None:
+    from dastcore.analysis.capec import coverage_report
+
+    rep = coverage_report()
+    c = rep["counts"]
+    assert c["full"] + c["partial"] + c["none"] == rep["total"] == len(rep["rows"])
+
+
+def test_partial_and_full_status_are_honest() -> None:
+    from dastcore.analysis.capec import coverage_report
+
+    by_id = {e.capec_id: e for e in coverage_report()["catalogue"]}
+    assert by_id["CAPEC-62"].status == "partial"   # CSRF: heuristic
+    assert by_id["CAPEC-103"].status == "partial"  # Clickjacking: passive header check
+    assert by_id["CAPEC-33"].status == "full"      # HTTP Request Smuggling: active detector (CWE-444)
+    assert by_id["CAPEC-664"].status == "full"     # SSRF: active (CWE-918)
+
+
 def test_capec_reinforces_an_observed_family_ranking() -> None:
     # An observed url param should rank SSRF; CAPEC-664 reinforces it (present in scores + reasoning).
     plan = plan_scan(TargetProfile(param_names=frozenset({"redirect_url"})))
