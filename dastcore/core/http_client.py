@@ -75,6 +75,14 @@ class DiscoveryBudgetExceededError(BudgetExceededError):
     used — a near-empty result that looked 'clean' but never ran the audit."""
 
 
+# Path prefixes served by the hosting platform/CDN itself, which return 403/404 by default and are NOT the
+# application refusing the scan — excluded from the block ratio so a Vercel/Next.js site isn't mislabelled
+# as "behind an aggressive WAF" just for its framework-internal routes.
+_PLATFORM_INTERNAL_PREFIXES: tuple[str, ...] = (
+    "/_next/", "/_nuxt/", "/_vercel/", "/cdn-cgi/", "/__nextjs", "/_astro/", "/.netlify/",
+)
+
+
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header (delta-seconds form) into seconds."""
     if not value:
@@ -150,10 +158,15 @@ class HttpClient:
         # went out — so the operator can *verify* the configured RPS ceiling held (RoE compliance).
         self._sent_count = 0
         self._first_send_at: float | None = None
-        # WAF-block telemetry: how many responses came back as a block (403/429/503). A high ratio means
-        # the target's WAF is refusing the scan, so its findings are unreliable — the CLI surfaces that.
-        self._response_count = 0
-        self._blocked_count = 0
+        # Scan-interference telemetry: distinguish an actual WAF/access barrier from self-inflicted
+        # rate-limiting (volume) and from platform-internal paths that 403 by default — so the advisory
+        # tells the true story instead of crying "aggressive WAF" at Vercel's per-IP rate limit. A high
+        # block ratio means the scan isn't seeing the real app; block_reason() says why.
+        self._response_count = 0        # app responses counted (platform-internal paths excluded)
+        self._blocked_count = 0         # 403/429/503 on app paths
+        self._rate_limited_count = 0    # 429/503 specifically (explicit slow-down signals)
+        self._successes = 0             # 2xx/3xx app responses
+        self._successes_before_first_block = -1  # how many succeeded before the first refusal (onset)
         self._deadline: float | None = None
         # Budget reservation: while discovery runs, tighten the effective time/request budget by this
         # fraction so crawling/dirbusting can't consume it all and starve the active scan (Burp reserves
@@ -232,9 +245,33 @@ class HttpClient:
     def response_count(self) -> int:
         return self._response_count
 
+    @property
+    def rate_limited_count(self) -> int:
+        return self._rate_limited_count
+
+    @property
+    def successes_before_first_block(self) -> int:
+        """How many requests succeeded before the first refusal (-1 if no refusal). A large number means the
+        target served the scan fine and only began refusing under sustained volume — a rate-limit onset."""
+        return self._successes_before_first_block
+
     def waf_block_ratio(self) -> float:
-        """Fraction of responses that came back as a WAF block (403/429/503). 0.0 if nothing was sent."""
+        """Fraction of (app) responses that came back as a refusal (403/429/503). Platform-internal paths
+        are excluded. 0.0 if nothing was sent. High ratio ⇒ the scan isn't seeing the real app."""
         return self._blocked_count / self._response_count if self._response_count else 0.0
+
+    def block_reason(self) -> str:
+        """Why most requests were refused — for an honest advisory rather than always blaming a WAF:
+        ``"none"`` below the significance threshold; ``"rate-limit"`` when 429/503 dominate or the target
+        served a run of requests and only *then* began refusing (self-inflicted volume — slow down, it is
+        not a security control); ``"waf"`` when refusals looked access/content-driven from the start."""
+        if self._response_count < 10 or self.waf_block_ratio() < 0.5:
+            return "none"
+        if self._rate_limited_count * 2 >= self._blocked_count:
+            return "rate-limit"  # explicit 429/503 are at least half the refusals
+        if self._successes_before_first_block >= 10:
+            return "rate-limit"  # served fine for a while, then began refusing ⇒ volume/rate limit
+        return "waf"
 
     def effective_rps(self) -> float:
         """Measured request rate over the whole run: actual network attempts (retries included) per
@@ -388,9 +425,20 @@ class HttpClient:
                 logger.debug("%s %s -> %s (%.0f ms)", method, url, response.status_code, elapsed_ms)
                 # On a host override, report the real (vhost) URL, not the IP we connected to, so the
                 # scanner keeps the vhost's identity for dedup/evidence.
-                self._response_count += 1
-                if response.status_code in (403, 429, 503):  # WAF block / rate limit / challenge
-                    self._blocked_count += 1
+                # Scan-interference accounting (excludes platform-internal paths, which 403 by default and
+                # aren't the app blocking us). Splits explicit rate-limit (429/503) from a possible WAF (403)
+                # and records how many requests succeeded before the first refusal, so block_reason() can tell
+                # self-inflicted rate-limiting apart from an actual access barrier.
+                if not any(urlsplit(url).path.startswith(p) for p in _PLATFORM_INTERNAL_PREFIXES):
+                    self._response_count += 1
+                    if response.status_code in (403, 429, 503):  # a refusal (WAF, rate limit, or challenge)
+                        if self._successes_before_first_block < 0:
+                            self._successes_before_first_block = self._successes
+                        self._blocked_count += 1
+                        if response.status_code in (429, 503):
+                            self._rate_limited_count += 1
+                    elif 200 <= response.status_code < 400:
+                        self._successes += 1
                 reported_url = url if send_url != url else str(response.url)
                 return HttpResponse(
                     status_code=response.status_code,

@@ -1561,30 +1561,59 @@ def _authz_coverage_gap_finding(target: str, n_tables: int, n_user_identities: i
     )
 
 
-def _waf_blocking_finding(target: str, ratio: float, blocked: int, total: int) -> Finding:
-    """An advisory (not a vuln) that the target's WAF blocked most requests, so results are unreliable."""
+def _scan_interference_finding(
+    target: str, reason: str, ratio: float, blocked: int, total: int,
+    rate_limited: int, successes_before_block: int,
+) -> Finding:
+    """Advisory (not a vuln): most requests were refused, so the scan didn't see the real app. Tells the
+    TRUE story instead of always blaming a WAF — rate-limiting we triggered by volume (slow down) vs. an
+    actual WAF/access barrier (bypass). Fixed dogfooding getnyma.com, whose 'aggressive WAF' verdict was
+    really Vercel's per-IP rate limit + framework-internal 403s (#12)."""
     request = HttpRequest(method="GET", url=target)
-    detail = (
-        f"{blocked}/{total} respuestas ({ratio * 100:.0f}%) fueron bloqueos del WAF/CDN (403/429/503). "
-        "El escaneo automático no está viendo la aplicación real, así que sus hallazgos NO son fiables."
-    )
-    return Finding(
-        id="waf-blocking-scan",
-        rule_id="waf-blocking",
-        name="El WAF/CDN está bloqueando el escaneo (resultados no fiables)",
-        severity="info",
-        cwe="CWE-200",
-        owasp="WSTG-INFO-01",
-        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
-        evidence=[Evidence(type="response_match", data=detail, confidence="high")],
-        request=request,
-        response=HttpResponse(status_code=0, url=target, text=detail),
-        remediation=(
+    if reason == "rate-limit":
+        onset = (
+            f" El objetivo sirvió {successes_before_block} petición(es) OK y solo entonces empezó a rechazar"
+            if successes_before_block >= 10 else ""
+        )
+        detail = (
+            f"{blocked}/{total} respuestas ({ratio * 100:.0f}%) fueron rechazos por RATE-LIMIT del objetivo "
+            f"({rate_limited}×429/503).{onset} — es un límite por volumen/IP (lo disparó el propio escaneo), NO "
+            "un WAF de seguridad. Los hallazgos son parciales: el escáner dejó de ver la app tras el límite."
+        )
+        name = "El objetivo limitó el ritmo del escaneo (rate-limit; resultados parciales)"
+        remediation = (
+            "Baja el ritmo: --rps 1 y --concurrency 1, y/o reduce la superficie (--max-pages, sin dirbust). "
+            "Mejor aún: allowlistea tu IP en el firewall/rate-limit del hosting (p. ej. Vercel Firewall) o "
+            "escanea desde una IP permitida. NO es un WAF de contenido: los payloads no se filtran."
+        )
+        rule_id = "scan-rate-limited"
+        fid = "scan-rate-limited"
+    else:
+        detail = (
+            f"{blocked}/{total} respuestas ({ratio * 100:.0f}%) fueron bloqueos de un WAF/CDN. El escaneo "
+            "automático no está viendo la aplicación real, así que sus hallazgos NO son fiables."
+        )
+        name = "Un WAF/CDN está bloqueando el escaneo (resultados no fiables)"
+        remediation = (
             "El WAF (p. ej. Cloudflare) rechaza las peticiones automáticas. Para escanear la app real: usa "
             "--engine both (headless sigiloso), y sobre todo pasa la cookie de tu navegador que superó el "
             "challenge con --auth-cookie \"cf_clearance=...\" + --user-agent \"<tu UA exacto>\", lanzándolo "
             "desde tu misma IP. Si no, prueba con una sesión autenticada real o testing manual."
-        ),
+        )
+        rule_id = "waf-blocking"
+        fid = "waf-blocking-scan"
+    return Finding(
+        id=fid,
+        rule_id=rule_id,
+        name=name,
+        severity="info",
+        cwe="CWE-200",
+        owasp="WSTG-INFO-01",
+        injection_point=InjectionPoint(location="header", name="-", base_value="", request_template=request),
+        evidence=[Evidence(type="response_match", data=detail[:600], confidence="high")],
+        request=request,
+        response=HttpResponse(status_code=0, url=target, text=detail[:600]),
+        remediation=remediation,
     )
 
 
@@ -2660,15 +2689,21 @@ async def _run_scan(
                 timeout=None,
             )
 
-            # WAF-block advisory: if the target's WAF/CDN rejected most requests, the scan didn't see the
-            # real app — say so loudly instead of letting the empty/partial result look like "all clear".
+            # Scan-interference advisory: if most requests were refused, the scan didn't see the real app —
+            # say so loudly instead of letting the empty/partial result look like "all clear". But tell the
+            # TRUE story: rate-limiting we triggered (slow down) vs. an actual WAF (bypass) — not always "WAF".
             waf_ratio = client.waf_block_ratio()
-            if waf_ratio >= 0.5 and client.response_count >= 10:
+            block_reason = client.block_reason()
+            if block_reason != "none":
+                label = "rate-limit del objetivo" if block_reason == "rate-limit" else "WAF/CDN"
                 progress.status(
-                    f"⚠ El WAF bloqueó el {waf_ratio * 100:.0f}% de las peticiones — resultados no fiables."
+                    f"⚠ {waf_ratio * 100:.0f}% de las peticiones fueron rechazadas ({label}) — resultados parciales."
                 )
                 extra_findings.append(
-                    _waf_blocking_finding(target, waf_ratio, client.blocked_count, client.response_count)
+                    _scan_interference_finding(
+                        target, block_reason, waf_ratio, client.blocked_count, client.response_count,
+                        client.rate_limited_count, client.successes_before_first_block,
+                    )
                 )
 
             if prove_impact:

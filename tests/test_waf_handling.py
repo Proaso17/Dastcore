@@ -10,7 +10,7 @@ from collections.abc import Iterator
 import pytest
 from werkzeug.serving import make_server
 
-from dastcore.cli import _waf_blocking_finding
+from dastcore.cli import _scan_interference_finding
 from dastcore.config import ScopeConfig
 from dastcore.core.http_client import HttpClient
 
@@ -60,9 +60,55 @@ async def test_waf_block_ratio_counts_403s(blocking_server: str) -> None:
 
 
 def test_waf_blocking_advisory_is_info_with_bypass_guidance() -> None:
-    f = _waf_blocking_finding("https://bank.test/", 0.9, 45, 50)
+    f = _scan_interference_finding("https://bank.test/", "waf", 0.9, 45, 50, 0, 0)
     assert f.rule_id == "waf-blocking" and f.severity == "info"
     assert "cf_clearance" in f.remediation and "90%" in f.evidence[0].data
+
+
+def test_rate_limit_advisory_is_distinct_from_waf() -> None:
+    """#12: self-inflicted rate-limiting (Vercel's per-IP limit) must NOT be reported as a WAF. It gets its
+    own rule_id + a 'slow down / allowlist your IP' remediation, and names the served-then-refused onset."""
+    f = _scan_interference_finding("https://app.example.com/", "rate-limit", 0.93, 3052, 3282, 40, 56)
+    assert f.rule_id == "scan-rate-limited" and f.severity == "info"
+    body = f.evidence[0].data.lower()
+    assert "rate-limit" in body and "56" in f.evidence[0].data  # onset: served 56 ok, then refused
+    assert "--rps" in f.remediation and "cf_clearance" not in f.remediation  # slow down, not a WAF bypass
+
+
+def test_block_reason_rate_limit_when_429s_dominate() -> None:
+    c = HttpClient(ScopeConfig(allow_domains=["x"]))
+    c._response_count, c._blocked_count, c._rate_limited_count, c._successes_before_first_block = 100, 60, 60, 0
+    assert c.block_reason() == "rate-limit"
+
+
+def test_block_reason_rate_limit_on_late_onset() -> None:
+    c = HttpClient(ScopeConfig(allow_domains=["x"]))
+    # getnyma's real shape: served 56 requests fine, then 403s under sustained volume (Vercel per-IP
+    # limit, all 403 not 429) — 3052/3282 refused. Not a WAF: the onset after real successes gives it away.
+    c._response_count, c._blocked_count, c._rate_limited_count, c._successes_before_first_block = 3282, 3052, 0, 56
+    assert c.block_reason() == "rate-limit"
+
+
+def test_block_reason_waf_when_refused_from_the_start() -> None:
+    c = HttpClient(ScopeConfig(allow_domains=["x"]))
+    c._response_count, c._blocked_count, c._rate_limited_count, c._successes_before_first_block = 100, 90, 0, 1
+    assert c.block_reason() == "waf"
+
+
+def test_block_reason_none_below_threshold() -> None:
+    c = HttpClient(ScopeConfig(allow_domains=["x"]))
+    c._response_count, c._blocked_count, c._rate_limited_count, c._successes_before_first_block = 100, 20, 0, 0
+    assert c.block_reason() == "none"
+
+
+async def test_platform_internal_paths_excluded_from_block_ratio(blocking_server: str) -> None:
+    """A Vercel/Next.js site's framework-internal paths 403 by default — they must not count as the app
+    blocking the scan (the over-count that mislabelled getnyma.com as behind an aggressive WAF)."""
+    async with HttpClient(ScopeConfig(allow_domains=["127.0.0.1"])) as client:
+        await client.get(f"{blocking_server}/_next/static/chunk.js")  # platform-internal → excluded
+        await client.get(f"{blocking_server}/_vercel/insights/view")  # platform-internal → excluded
+        await client.get(f"{blocking_server}/real-app-path")          # app 403 → counted
+    assert client.response_count == 1 and client.blocked_count == 1
 
 
 def test_scanfile_accepts_proxy_and_user_agent() -> None:

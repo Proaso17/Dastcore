@@ -44,6 +44,7 @@ _INELIGIBLE_RULES: frozenset[str] = frozenset({
     "asn-footprint",
     "scan-coverage",
     "waf-blocking",
+    "scan-rate-limited",
 })
 
 # Whole families that are ineligible: TLS/SSL configuration, and open redirects (without extra impact).

@@ -121,7 +121,7 @@ _KEYWORD_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # category via their generic CWE-200). WAF/tech-fingerprint stay: they say something about the target.
 _ADVISORY_RULE_IDS: frozenset[str] = frozenset(
     {"scan-coverage", "spa-detected", "spa-awareness", "spa-endpoints", "edge-posture", "sqlmap-unavailable",
-     "authz-coverage-gap", "discovery-budget"}
+     "authz-coverage-gap", "discovery-budget", "scan-rate-limited"}
 )
 
 
