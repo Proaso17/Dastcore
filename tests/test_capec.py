@@ -71,7 +71,22 @@ def test_path_traversal_and_ssrf_and_idor_prerequisites() -> None:
 
 def test_login_panel_unlocks_the_auth_patterns() -> None:
     ids = {ap.capec_id for ap in applicable_patterns(TargetProfile(has_login=True))}
-    assert {"CAPEC-49", "CAPEC-115", "CAPEC-593", "CAPEC-62"} <= ids  # brute force, auth bypass, session, CSRF
+    # brute force, auth bypass, session, CSRF, clickjacking
+    assert {"CAPEC-49", "CAPEC-115", "CAPEC-593", "CAPEC-62", "CAPEC-103"} <= ids
+
+
+def test_expanded_catalogue_patterns_apply_on_their_prerequisites() -> None:
+    # CAPEC-650 web-shell upload: an upload flag, an avatar param, or an /upload path
+    assert "CAPEC-650" in {ap.capec_id for ap in applicable_patterns(TargetProfile(has_file_upload=True))}
+    assert "CAPEC-650" in {ap.capec_id for ap in applicable_patterns(TargetProfile(param_names=frozenset({"avatar"})))}
+    assert "CAPEC-650" in {ap.capec_id for ap in applicable_patterns(TargetProfile(paths=frozenset({"/upload/x"})))}
+    # CAPEC-141 cache poisoning + CAPEC-33 request smuggling: an edge cache/proxy (WAF/CDN) in front
+    edge = {ap.capec_id for ap in applicable_patterns(TargetProfile(waf=True))}
+    assert {"CAPEC-141", "CAPEC-33"} <= edge
+    # CAPEC-460 HPP: any observed parameter
+    assert "CAPEC-460" in {ap.capec_id for ap in applicable_patterns(TargetProfile(param_names=frozenset({"page"})))}
+    # …but none of these fire on a bare stack prior (the design rule)
+    assert applicable_patterns(TargetProfile(languages=frozenset({"php"}))) == []
 
 
 def test_votes_are_capped_and_cite_the_capec_ids() -> None:

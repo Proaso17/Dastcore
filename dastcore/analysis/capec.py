@@ -75,9 +75,11 @@ _PX_URL = re.compile(r"(?:^|[_\-.])(url|uri|redirect|redir|next|return|dest|dest
 _PX_XML = re.compile(r"(?:^|[_\-.])(xml|import|feed|soap|wsdl|rss|sitemap|data)", re.I)
 _PX_TEXT = re.compile(r"(?:^|[_\-.])(name|comment|message|msg|subject|title|bio|desc|body|content|text|search|q)(?:$|[_\-.])", re.I)
 _PX_CRLF = re.compile(r"(?:^|[_\-.])(url|redirect|location|header|lang|locale|ref|referer|next)", re.I)
+_PX_UPLOAD = re.compile(r"(?:^|[_\-.])(upload|attachment|avatar|photo|image|document|media)", re.I)
 
 _PT_ADMIN = re.compile(r"/(admin|administrator|dashboard|manage|management|console|backoffice|wp-admin)(/|$)", re.I)
 _PT_OBJECT = re.compile(r"/(users?|accounts?|profiles?|orders?|objects?|items?|documents?|invoices?)(/|$)", re.I)
+_PT_UPLOAD = re.compile(r"/(upload|uploads|media|files?|attachments?|import)(/|$)", re.I)
 
 
 def _has_query_surface(p: TargetProfile) -> bool:
@@ -157,6 +159,12 @@ _CATALOG: tuple[AttackPattern, ...] = (
         "envenenar caché.",
         _param(_PX_CRLF),
     ),
+    AttackPattern(
+        "CAPEC-460", "HTTP Parameter Pollution (HPP)", "hpp", ("CWE-88", "CWE-235"), "medium", "medium",
+        "Envía parámetros duplicados; según qué capa gane (primero/último/concatena) puede saltar validación "
+        "o reglas del WAF y alterar la lógica de la app.",
+        lambda p: bool(p.param_names) or p.api_kind == "rest",
+    ),
     # Subvert Access Control (CAPEC-225)
     AttackPattern(
         "CAPEC-1", "Accessing Functionality Not Properly Constrained by ACLs", "authz",
@@ -224,12 +232,38 @@ _CATALOG: tuple[AttackPattern, ...] = (
         _any(lambda p: bool(p.languages & {"java", "dotnet", "ruby"}),
              lambda p: bool(p.frameworks & {"rails", "spring", "aspnet"})),
     ),
+    # Abuse Existing Functionality / manipulate resources — file upload, caching, proxy chain, UI redress
+    AttackPattern(
+        "CAPEC-650", "Upload a Web Shell to a Web Server", "upload", ("CWE-434", "CWE-553"), "medium", "high",
+        "Sube un fichero ejecutable (extensión/MIME/doble extensión/null byte) a una ruta accesible para "
+        "lograr ejecución; encadena con path traversal en el nombre.",
+        _any(lambda p: p.has_file_upload, _param(_PX_UPLOAD), _path(_PT_UPLOAD)),
+    ),
+    AttackPattern(
+        "CAPEC-141", "Cache Poisoning", "cache-poisoning", ("CWE-345", "CWE-349"), "high", "high",
+        "Envenena la caché con entradas no incluidas en la clave (cabeceras unkeyed) o por desincronización, "
+        "para que otros usuarios reciban tu respuesta manipulada.",
+        lambda p: p.waf or p.endpoint_count >= 10,
+    ),
+    AttackPattern(
+        "CAPEC-33", "HTTP Request Smuggling", "smuggling", ("CWE-444",), "medium", "high",
+        "Aprovecha que el proxy/CDN y el backend interpretan distinto Content-Length/Transfer-Encoding para "
+        "colar una petición oculta y envenenar la cola o la caché.",
+        lambda p: p.waf,
+    ),
+    AttackPattern(
+        "CAPEC-103", "Clickjacking", "clickjacking", ("CWE-1021",), "medium", "high",
+        "Superpone la UI sensible en un iframe transparente para robar clics; comprueba falta de "
+        "X-Frame-Options / CSP frame-ancestors en las acciones autenticadas.",
+        lambda p: p.has_login,
+    ),
 )
 
 # The dastcore vuln families a pattern is allowed to drive (keeps the catalogue aligned with the scanner).
 KNOWN_FAMILIES: frozenset[str] = frozenset(
     {"sqli", "xss", "cmdi", "lfi", "code-injection", "xxe", "nosqli", "ldap", "xpath", "crlf",
-     "authz", "weak-creds", "session", "csrf", "ssrf", "deserialization"}
+     "authz", "weak-creds", "session", "csrf", "ssrf", "deserialization",
+     "hpp", "upload", "cache-poisoning", "smuggling", "clickjacking"}
 )
 
 
