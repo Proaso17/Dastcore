@@ -12,79 +12,1348 @@
 # level", not a confirmed exploit.
 
 advisories:
-  # --- Apache HTTP Server ---
-  - product: apache
-    cve: CVE-2021-41773
-    title: "Apache HTTP Server path traversal (and RCE with mod_cgi)"
-    affected: "==2.4.49"
-    fixed: "2.4.50"
-    severity: high
-    cwe: CWE-22
-    cvss: "7.5"
+- product: apache
+  cve: CVE-2021-41773
+  title: Apache HTTP Server path traversal (and RCE with mod_cgi)
+  affected: ==2.4.49
+  fixed: 2.4.50
+  severity: high
+  cwe: CWE-22
+  cvss: '7.5'
+- product: apache
+  cve: CVE-2021-42013
+  title: Apache HTTP Server path traversal / RCE (incomplete fix of CVE-2021-41773)
+  affected: '>=2.4.49,<2.4.51'
+  fixed: 2.4.51
+  severity: critical
+  cwe: CWE-22
+  cvss: '9.8'
+- product: apache
+  cve: CVE-2025-55753
+  title: An integer overflow in the case of failed ACME certificate renewal leads, after a number of failures
+    (~30 days in defaul
+  affected: '>=2.4.30,<2.4.66'
+  fixed: 2.4.66
+  severity: high
+  cwe: CWE-190
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2025-58098
+  title: Apache HTTP Server 2.4.65 and earlier with Server Side Includes (SSI) enabled and mod_cgid (but
+    not mod_cgi) passes the
+  affected: <2.4.66
+  fixed: 2.4.66
+  severity: high
+  cwe: CWE-201
+  cvss: '8.3'
+  source: nvd
+- product: apache
+  cve: CVE-2025-59775
+  title: "Server-Side Request Forgery (SSRF) vulnerability \n\n in Apache HTTP Server on Windows \n\n\
+    with AllowEncodedSlashes On and M"
+  affected: '>=2.4.0,<2.4.66'
+  fixed: 2.4.66
+  severity: high
+  cwe: CWE-918
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-46729
+  title: 'NULL Pointer Dereference vulnerability in Apache HTTP Servers mod_heartmonitor over unicast
+    listener.
 
-  - product: apache
-    cve: CVE-2021-42013
-    title: "Apache HTTP Server path traversal / RCE (incomplete fix of CVE-2021-41773)"
-    affected: ">=2.4.49,<2.4.51"
-    fixed: "2.4.51"
-    severity: critical
-    cwe: CWE-22
-    cvss: "9.8"
 
-  # --- nginx ---
-  - product: nginx
-    cve: CVE-2021-23017
-    title: "nginx resolver off-by-one heap write"
-    affected: ">=0.6.18,<1.21.0"
-    fixed: "1.21.0"
-    severity: high
-    cwe: CWE-787
-    cvss: "7.7"
 
-  # --- OpenSSL (often exposed in the Server header) ---
-  - product: openssl
-    cve: CVE-2014-0160
-    title: "OpenSSL Heartbleed information disclosure"
-    affected: ">=1.0.1,<1.0.1g"
-    fixed: "1.0.1g"
-    severity: high
-    cwe: CWE-125
-    cvss: "7.5"
 
-  # --- jQuery (client-side, from script assets) ---
-  - product: jquery
-    cve: CVE-2020-11022
-    title: "jQuery cross-site scripting via untrusted HTML passed to DOM manipulation"
-    affected: ">=1.2.0,<3.5.0"
-    fixed: "3.5.0"
-    severity: medium
-    cwe: CWE-79
-    cvss: "6.1"
+    This issue affe'
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-47360
+  title: Exposure of Sensitive Information to an Unauthorized Actor vulnerability in Apache HTTP Server's
+    mod_session_cookie modu
+  affected: '>=2.4.60,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-200
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-48005
+  title: Missing authentication checks in mod_auth_digest in Apache Software Foundation Apache HTTP Server
+    before 2.4.69 on all p
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-306
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-56153
+  title: 'Out-of-bounds Write vulnerability in Apache HTTP Server''s mod_charset_lite.
 
-  - product: jquery
-    cve: CVE-2019-11358
-    title: "jQuery prototype pollution via jQuery.extend"
-    affected: "<3.4.0"
-    fixed: "3.4.0"
-    severity: medium
-    cwe: CWE-1321
-    cvss: "6.1"
 
-  # --- Bootstrap (client-side, two affected branches) ---
-  - product: bootstrap
-    cve: CVE-2019-8331
-    title: "Bootstrap cross-site scripting in tooltip/popover data-template (3.x)"
-    affected: "<3.4.1"
-    fixed: "3.4.1"
-    severity: medium
-    cwe: CWE-79
-    cvss: "6.1"
 
-  - product: bootstrap
-    cve: CVE-2019-8331
-    title: "Bootstrap cross-site scripting in tooltip/popover data-template (4.x)"
-    affected: ">=4.0.0,<4.3.1"
-    fixed: "4.3.1"
-    severity: medium
-    cwe: CWE-79
-    cvss: "6.1"
+
+    This issue affects Apache HTTP Server: fr'
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-787
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-56154
+  title: 'Use After Free vulnerability in Apache HTTP Server''s mod_rewrite when using lookahead (%{LA-U:HTTP:...})
+
+
+
+
+    This issue a'
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: critical
+  cwe: CWE-416
+  cvss: '9.8'
+  source: nvd
+- product: apache
+  cve: CVE-2026-56449
+  title: 'Out-of-bounds Write vulnerability in Apache HTTP Server''s mod_proxy_html with crafted HTTP
+    response bodies.
+
+
+
+
+    This issu'
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-787
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-57941
+  title: 'Use After Free vulnerability in Apache HTTP Server''s mod_http2 via shared session->bbtmp re-entrancy
+
+
+
+
+    This issue affec'
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: critical
+  cwe: CWE-416
+  cvss: '9.8'
+  source: nvd
+- product: apache
+  cve: CVE-2026-59685
+  title: Out-of-bounds Write vulnerability in Apache HTTP Server on Windows while processing paths with
+    8.3 names that may grow w
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-787
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-59797
+  title: Improper Privilege Management vulnerability in Apache HTTP Server's mod_ssl via SSLRequire and
+    file-related expressions.
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: critical
+  cwe: CWE-269
+  cvss: '9.8'
+  source: nvd
+- product: apache
+  cve: CVE-2026-63045
+  title: Improper validation of FTP PASV reply address in mod_proxy_ftp in Apache Software Foundation
+    Apache HTTP Server through
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-284
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-63292
+  title: Stack-based buffer overflow in mod_vhost_alias in Apache Software Foundation Apache HTTP Server
+    through 2.4.68 on all pl
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-121
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-63686
+  title: A NULL pointer dereference in mod_xml2enc in Apache Software Foundation Apache HTTP Server before
+    2.4.69 on all platform
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-63718
+  title: Inconsistent Interpretation of HTTP Requests ('HTTP Request/Response Smuggling') response smuggling
+    vulnerability in Apa
+  affected: '>=2.4.30,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-444
+  cvss: '7.5'
+  source: nvd
+- product: apache
+  cve: CVE-2026-73636
+  title: Authentication bypass by capture-replay in mod_auth_digest in Apache Software Foundation Apache
+    HTTP Server 2.4.x on all
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-294
+  cvss: '8.1'
+  source: nvd
+- product: apache
+  cve: CVE-2026-73637
+  title: Use after free in mod_auth_digest in Apache Software Foundation Apache HTTP Server before 2.4.69
+    on all platforms allows
+  affected: '>=2.4.0,<2.4.69'
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-416
+  cvss: '7.3'
+  source: nvd
+- product: apache
+  cve: CVE-2026-93546
+  title: Integer overflow in mod_dav_fs in Apache HTTP Server through 2.4.68 allows an authenticated WebDAV
+    client with write acc
+  affected: <2.4.69
+  fixed: 2.4.69
+  severity: high
+  cwe: CWE-190
+  cvss: '8.8'
+  source: nvd
+- product: bootstrap
+  cve: CVE-2019-8331
+  title: Bootstrap cross-site scripting in tooltip/popover data-template (3.x)
+  affected: <3.4.1
+  fixed: 3.4.1
+  severity: medium
+  cwe: CWE-79
+  cvss: '6.1'
+- product: bootstrap
+  cve: CVE-2019-8331
+  title: Bootstrap cross-site scripting in tooltip/popover data-template (4.x)
+  affected: '>=4.0.0,<4.3.1'
+  fixed: 4.3.1
+  severity: medium
+  cwe: CWE-79
+  cvss: '6.1'
+- product: jquery
+  cve: CVE-2019-11358
+  title: jQuery prototype pollution via jQuery.extend
+  affected: <3.4.0
+  fixed: 3.4.0
+  severity: medium
+  cwe: CWE-1321
+  cvss: '6.1'
+- product: jquery
+  cve: CVE-2020-11022
+  title: jQuery cross-site scripting via untrusted HTML passed to DOM manipulation
+  affected: '>=1.2.0,<3.5.0'
+  fixed: 3.5.0
+  severity: medium
+  cwe: CWE-79
+  cvss: '6.1'
+- product: nginx
+  cve: CVE-2021-23017
+  title: nginx resolver off-by-one heap write
+  affected: '>=0.6.18,<1.21.0'
+  fixed: 1.21.0
+  severity: high
+  cwe: CWE-787
+  cvss: '7.7'
+- product: openssl
+  cve: CVE-2014-0160
+  title: OpenSSL Heartbleed information disclosure
+  affected: '>=1.0.1,<1.0.1g'
+  fixed: 1.0.1g
+  severity: high
+  cwe: CWE-125
+  cvss: '7.5'
+- product: openssl
+  cve: CVE-2018-0732
+  title: During key agreement in a TLS handshake using a DH(E) based ciphersuite a malicious server can
+    send a very large prime v
+  affected: '>=1.0.2,<=1.0.2o'
+  fixed: the latest release
+  severity: high
+  cwe: CWE-320
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2018-0732
+  title: During key agreement in a TLS handshake using a DH(E) based ciphersuite a malicious server can
+    send a very large prime v
+  affected: '>=1.1.0,<=1.1.0h'
+  fixed: the latest release
+  severity: high
+  cwe: CWE-320
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2020-1967
+  title: Server or client applications that call the SSL_check_chain() function during or after a TLS
+    1.3 handshake may crash due
+  affected: '>=1.1.1d,<=1.1.1f'
+  fixed: the latest release
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2021-3450
+  title: The X509_V_FLAG_X509_STRICT flag enables additional security checks of the certificates present
+    in a certificate chain.
+  affected: '>=1.1.1h,<1.1.1k'
+  fixed: 1.1.1k
+  severity: high
+  cwe: CWE-295
+  cvss: '7.4'
+  source: nvd
+- product: openssl
+  cve: CVE-2021-3711
+  title: In order to decrypt SM2 encrypted data an application is expected to call the API function EVP_PKEY_decrypt().
+    Typically
+  affected: '>=1.1.1,<1.1.1l'
+  fixed: 1.1.1l
+  severity: critical
+  cwe: CWE-120
+  cvss: '9.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-0778
+  title: The BN_mod_sqrt() function, which computes a modular square root, contains a bug that can cause
+    it to loop forever for n
+  affected: '>=1.0.2,<1.0.2zd'
+  fixed: 1.0.2zd
+  severity: high
+  cwe: CWE-835
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-0778
+  title: The BN_mod_sqrt() function, which computes a modular square root, contains a bug that can cause
+    it to loop forever for n
+  affected: '>=1.1.0,<1.1.1n'
+  fixed: 1.1.1n
+  severity: high
+  cwe: CWE-835
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-0778
+  title: The BN_mod_sqrt() function, which computes a modular square root, contains a bug that can cause
+    it to loop forever for n
+  affected: '>=3.0.0,<3.0.2'
+  fixed: 3.0.2
+  severity: high
+  cwe: CWE-835
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-1292
+  title: The c_rehash script does not properly sanitise shell metacharacters to prevent command injection.
+    This script is distrib
+  affected: '>=1.0.2,<1.0.2ze'
+  fixed: 1.0.2ze
+  severity: high
+  cwe: CWE-78
+  cvss: '7.3'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-1292
+  title: The c_rehash script does not properly sanitise shell metacharacters to prevent command injection.
+    This script is distrib
+  affected: '>=1.1.1,<1.1.1o'
+  fixed: 1.1.1o
+  severity: high
+  cwe: CWE-78
+  cvss: '7.3'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-1292
+  title: The c_rehash script does not properly sanitise shell metacharacters to prevent command injection.
+    This script is distrib
+  affected: '>=3.0.0,<3.0.3'
+  fixed: 3.0.3
+  severity: high
+  cwe: CWE-78
+  cvss: '7.3'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-1473
+  title: The OPENSSL_LH_flush() function, which empties a hash table, contains a bug that breaks reuse
+    of the memory occuppied by
+  affected: '>=3.0.0,<3.0.3'
+  fixed: 3.0.3
+  severity: high
+  cwe: CWE-459
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-2068
+  title: In addition to the c_rehash shell command injection identified in CVE-2022-1292, further circumstances
+    where the c_rehas
+  affected: '>=1.0.2,<1.0.2zf'
+  fixed: 1.0.2zf
+  severity: high
+  cwe: CWE-78
+  cvss: '7.3'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-2068
+  title: In addition to the c_rehash shell command injection identified in CVE-2022-1292, further circumstances
+    where the c_rehas
+  affected: '>=1.1.1,<1.1.1p'
+  fixed: 1.1.1p
+  severity: high
+  cwe: CWE-78
+  cvss: '7.3'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-2068
+  title: In addition to the c_rehash shell command injection identified in CVE-2022-1292, further circumstances
+    where the c_rehas
+  affected: '>=3.0.0,<3.0.4'
+  fixed: 3.0.4
+  severity: high
+  cwe: CWE-78
+  cvss: '7.3'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-2274
+  title: The OpenSSL 3.0.4 release introduced a serious bug in the RSA implementation for X86_64 CPUs
+    supporting the AVX512IFMA i
+  affected: ==3.0.4
+  fixed: the latest release
+  severity: critical
+  cwe: CWE-787
+  cvss: '9.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-4450
+  title: 'The function PEM_read_bio_ex() reads a PEM file from a BIO and parses and
+
+    decodes the "name" (e.g. "CERTIFICATE"), any h'
+  affected: '>=1.1.1,<1.1.1t'
+  fixed: 1.1.1t
+  severity: high
+  cwe: CWE-415
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2022-4450
+  title: 'The function PEM_read_bio_ex() reads a PEM file from a BIO and parses and
+
+    decodes the "name" (e.g. "CERTIFICATE"), any h'
+  affected: '>=3.0.0,<3.0.8'
+  fixed: 3.0.8
+  severity: high
+  cwe: CWE-415
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0215
+  title: 'The public API function BIO_new_NDEF is a helper function used for streaming
+
+    ASN.1 data via a BIO. It is primarily used'
+  affected: '>=1.0.2,<1.0.2zg'
+  fixed: 1.0.2zg
+  severity: high
+  cwe: CWE-416
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0215
+  title: 'The public API function BIO_new_NDEF is a helper function used for streaming
+
+    ASN.1 data via a BIO. It is primarily used'
+  affected: '>=1.1.1,<1.1.1t'
+  fixed: 1.1.1t
+  severity: high
+  cwe: CWE-416
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0215
+  title: 'The public API function BIO_new_NDEF is a helper function used for streaming
+
+    ASN.1 data via a BIO. It is primarily used'
+  affected: '>=3.0.0,<3.0.8'
+  fixed: 3.0.8
+  severity: high
+  cwe: CWE-416
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0286
+  title: 'There is a type confusion vulnerability relating to X.400 address processing
+
+    inside an X.509 GeneralName. X.400 addresse'
+  affected: '>=1.0.2,<1.0.2zg'
+  fixed: 1.0.2zg
+  severity: high
+  cwe: CWE-843
+  cvss: '7.4'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0286
+  title: 'There is a type confusion vulnerability relating to X.400 address processing
+
+    inside an X.509 GeneralName. X.400 addresse'
+  affected: '>=1.1.1,<1.1.1t'
+  fixed: 1.1.1t
+  severity: high
+  cwe: CWE-843
+  cvss: '7.4'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0286
+  title: 'There is a type confusion vulnerability relating to X.400 address processing
+
+    inside an X.509 GeneralName. X.400 addresse'
+  affected: '>=3.0.0,<3.0.8'
+  fixed: 3.0.8
+  severity: high
+  cwe: CWE-843
+  cvss: '7.4'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0464
+  title: 'A security vulnerability has been identified in all supported versions
+
+
+    of OpenSSL related to the verification of X.509'
+  affected: '>=1.0.2,<1.0.2zh'
+  fixed: 1.0.2zh
+  severity: high
+  cwe: CWE-295
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0464
+  title: 'A security vulnerability has been identified in all supported versions
+
+
+    of OpenSSL related to the verification of X.509'
+  affected: '>=1.1.1,<1.1.1u'
+  fixed: 1.1.1u
+  severity: high
+  cwe: CWE-295
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0464
+  title: 'A security vulnerability has been identified in all supported versions
+
+
+    of OpenSSL related to the verification of X.509'
+  affected: '>=3.0.0,<3.0.9'
+  fixed: 3.0.9
+  severity: high
+  cwe: CWE-295
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-0464
+  title: 'A security vulnerability has been identified in all supported versions
+
+
+    of OpenSSL related to the verification of X.509'
+  affected: '>=3.1.0,<3.1.1'
+  fixed: 3.1.1
+  severity: high
+  cwe: CWE-295
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-4807
+  title: 'Issue summary: The POLY1305 MAC (message authentication code) implementation
+
+    contains a bug that might corrupt the inter'
+  affected: '>=1.1.1,<1.1.1w'
+  fixed: 1.1.1w
+  severity: high
+  cwe: CWE-440
+  cvss: '7.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-4807
+  title: 'Issue summary: The POLY1305 MAC (message authentication code) implementation
+
+    contains a bug that might corrupt the inter'
+  affected: '>=3.0.0,<3.0.11'
+  fixed: 3.0.11
+  severity: high
+  cwe: CWE-440
+  cvss: '7.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2023-4807
+  title: 'Issue summary: The POLY1305 MAC (message authentication code) implementation
+
+    contains a bug that might corrupt the inter'
+  affected: '>=3.1.0,<3.1.3'
+  fixed: 3.1.3
+  severity: high
+  cwe: CWE-440
+  cvss: '7.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2025-15467
+  title: 'Issue summary: Parsing CMS AuthEnvelopedData or EnvelopedData message with
+
+    maliciously crafted AEAD parameters can trigg'
+  affected: '>=3.0.0,<3.0.19'
+  fixed: 3.0.19
+  severity: high
+  cwe: CWE-787
+  cvss: '8.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2025-15467
+  title: 'Issue summary: Parsing CMS AuthEnvelopedData or EnvelopedData message with
+
+    maliciously crafted AEAD parameters can trigg'
+  affected: '>=3.1.0,<3.3.6'
+  fixed: 3.3.6
+  severity: high
+  cwe: CWE-787
+  cvss: '8.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2025-15467
+  title: 'Issue summary: Parsing CMS AuthEnvelopedData or EnvelopedData message with
+
+    maliciously crafted AEAD parameters can trigg'
+  affected: '>=3.4.0,<3.4.4'
+  fixed: 3.4.4
+  severity: high
+  cwe: CWE-787
+  cvss: '8.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2025-15467
+  title: 'Issue summary: Parsing CMS AuthEnvelopedData or EnvelopedData message with
+
+    maliciously crafted AEAD parameters can trigg'
+  affected: '>=3.5.0,<3.5.5'
+  fixed: 3.5.5
+  severity: high
+  cwe: CWE-787
+  cvss: '8.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2025-15467
+  title: 'Issue summary: Parsing CMS AuthEnvelopedData or EnvelopedData message with
+
+    maliciously crafted AEAD parameters can trigg'
+  affected: '>=3.6.0,<3.6.1'
+  fixed: 3.6.1
+  severity: high
+  cwe: CWE-787
+  cvss: '8.8'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-18798
+  title: 'Issue summary: QUIC server may double free QRX (QUIC record layer RX) object
+
+    when channel creation fails for initial pac'
+  affected: '>=3.5.0,<3.5.8'
+  fixed: 3.5.8
+  severity: high
+  cwe: CWE-415
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-18798
+  title: 'Issue summary: QUIC server may double free QRX (QUIC record layer RX) object
+
+    when channel creation fails for initial pac'
+  affected: '>=3.6.0,<3.6.4'
+  fixed: 3.6.4
+  severity: high
+  cwe: CWE-415
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-18798
+  title: 'Issue summary: QUIC server may double free QRX (QUIC record layer RX) object
+
+    when channel creation fails for initial pac'
+  affected: '>=4.0.0,<4.0.2'
+  fixed: 4.0.2
+  severity: high
+  cwe: CWE-415
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-54873
+  title: 'Issue summary: QUIC process may keep memory for QUIC packet
+
+    buffer for much longer period than necessary.
+
+
+    Impact summar'
+  affected: '>=3.4.0,<3.4.8'
+  fixed: 3.4.8
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-54873
+  title: 'Issue summary: QUIC process may keep memory for QUIC packet
+
+    buffer for much longer period than necessary.
+
+
+    Impact summar'
+  affected: '>=3.5.0,<3.5.9'
+  fixed: 3.5.9
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-54873
+  title: 'Issue summary: QUIC process may keep memory for QUIC packet
+
+    buffer for much longer period than necessary.
+
+
+    Impact summar'
+  affected: '>=3.6.0,<3.6.5'
+  fixed: 3.6.5
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-54873
+  title: 'Issue summary: QUIC process may keep memory for QUIC packet
+
+    buffer for much longer period than necessary.
+
+
+    Impact summar'
+  affected: '>=4.0.0,<4.0.3'
+  fixed: 4.0.3
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-72897
+  title: 'Issue summary: A TLS server that calls SSL_set_SSL_CTX() to switch a
+
+    connection to a different SSL_CTX part way through'
+  affected: '>=3.4.0,<3.4.8'
+  fixed: 3.4.8
+  severity: high
+  cwe: CWE-787
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-72897
+  title: 'Issue summary: A TLS server that calls SSL_set_SSL_CTX() to switch a
+
+    connection to a different SSL_CTX part way through'
+  affected: '>=3.5.0,<3.5.9'
+  fixed: 3.5.9
+  severity: high
+  cwe: CWE-787
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-72897
+  title: 'Issue summary: A TLS server that calls SSL_set_SSL_CTX() to switch a
+
+    connection to a different SSL_CTX part way through'
+  affected: '>=3.6.0,<3.6.5'
+  fixed: 3.6.5
+  severity: high
+  cwe: CWE-787
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-72897
+  title: 'Issue summary: A TLS server that calls SSL_set_SSL_CTX() to switch a
+
+    connection to a different SSL_CTX part way through'
+  affected: '>=4.0.0,<4.0.3'
+  fixed: 4.0.3
+  severity: high
+  cwe: CWE-787
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84782
+  title: 'Issue summary: The DTLS retransmission logic does not correctly handle
+
+    a handshake message write that is suspended part-'
+  affected: '>=1.0.2,<1.0.2zs'
+  fixed: 1.0.2zs
+  severity: high
+  cwe: CWE-125
+  cvss: '8.2'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84782
+  title: 'Issue summary: The DTLS retransmission logic does not correctly handle
+
+    a handshake message write that is suspended part-'
+  affected: '>=1.1.1,<1.1.1zj'
+  fixed: 1.1.1zj
+  severity: high
+  cwe: CWE-125
+  cvss: '8.2'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84782
+  title: 'Issue summary: The DTLS retransmission logic does not correctly handle
+
+    a handshake message write that is suspended part-'
+  affected: '>=3.0.0,<3.0.23'
+  fixed: 3.0.23
+  severity: high
+  cwe: CWE-125
+  cvss: '8.2'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84782
+  title: 'Issue summary: The DTLS retransmission logic does not correctly handle
+
+    a handshake message write that is suspended part-'
+  affected: '>=3.4.0,<3.4.8'
+  fixed: 3.4.8
+  severity: high
+  cwe: CWE-125
+  cvss: '8.2'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84782
+  title: 'Issue summary: The DTLS retransmission logic does not correctly handle
+
+    a handshake message write that is suspended part-'
+  affected: '>=3.5.0,<3.5.9'
+  fixed: 3.5.9
+  severity: high
+  cwe: CWE-125
+  cvss: '8.2'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84782
+  title: 'Issue summary: The DTLS retransmission logic does not correctly handle
+
+    a handshake message write that is suspended part-'
+  affected: '>=3.6.0,<3.6.5'
+  fixed: 3.6.5
+  severity: high
+  cwe: CWE-125
+  cvss: '8.2'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84782
+  title: 'Issue summary: The DTLS retransmission logic does not correctly handle
+
+    a handshake message write that is suspended part-'
+  affected: '>=4.0.0,<4.0.3'
+  fixed: 4.0.3
+  severity: high
+  cwe: CWE-125
+  cvss: '8.2'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84783
+  title: 'Issue summary: The first concurrent use of the same X.509 certificate by
+
+    several threads may cause its cached extension'
+  affected: '>=4.0.0,<4.0.3'
+  fixed: 4.0.3
+  severity: high
+  cwe: CWE-416
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84784
+  title: 'Issue summary: A malicious remote peer may flood the local QUIC
+
+    stack with NEW_CONNECTION_ID frames by avoiding a limit'
+  affected: '>=3.4.0,<3.4.8'
+  fixed: 3.4.8
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84784
+  title: 'Issue summary: A malicious remote peer may flood the local QUIC
+
+    stack with NEW_CONNECTION_ID frames by avoiding a limit'
+  affected: '>=3.5.0,<3.5.9'
+  fixed: 3.5.9
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84784
+  title: 'Issue summary: A malicious remote peer may flood the local QUIC
+
+    stack with NEW_CONNECTION_ID frames by avoiding a limit'
+  affected: '>=3.6.0,<3.6.5'
+  fixed: 3.6.5
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: openssl
+  cve: CVE-2026-84784
+  title: 'Issue summary: A malicious remote peer may flood the local QUIC
+
+    stack with NEW_CONNECTION_ID frames by avoiding a limit'
+  affected: '>=4.0.0,<4.0.3'
+  fixed: 4.0.3
+  severity: high
+  cwe: CWE-770
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2000-0967
+  title: PHP 3 and 4 do not properly cleanse user-injected format strings, which allows remote attackers
+    to execute arbitrary com
+  affected: ==3.0
+  fixed: the latest release
+  severity: high
+  cwe: CWE-1035
+  cvss: '10.0'
+  source: nvd
+- product: php
+  cve: CVE-2000-0967
+  title: PHP 3 and 4 do not properly cleanse user-injected format strings, which allows remote attackers
+    to execute arbitrary com
+  affected: ==4.0
+  fixed: the latest release
+  severity: high
+  cwe: CWE-1035
+  cvss: '10.0'
+  source: nvd
+- product: php
+  cve: CVE-2022-37454
+  title: The Keccak XKCP SHA-3 reference implementation before fdc6fef has an integer overflow and resultant
+    buffer overflow that
+  affected: '>=7.2.0,<7.4.33'
+  fixed: 7.4.33
+  severity: critical
+  cwe: CWE-190
+  cvss: '9.8'
+  source: nvd
+- product: php
+  cve: CVE-2022-37454
+  title: The Keccak XKCP SHA-3 reference implementation before fdc6fef has an integer overflow and resultant
+    buffer overflow that
+  affected: '>=8.0.0,<8.0.25'
+  fixed: 8.0.25
+  severity: critical
+  cwe: CWE-190
+  cvss: '9.8'
+  source: nvd
+- product: php
+  cve: CVE-2022-37454
+  title: The Keccak XKCP SHA-3 reference implementation before fdc6fef has an integer overflow and resultant
+    buffer overflow that
+  affected: '>=8.1.0,<8.1.12'
+  fixed: 8.1.12
+  severity: critical
+  cwe: CWE-190
+  cvss: '9.8'
+  source: nvd
+- product: php
+  cve: CVE-2025-14177
+  title: In PHP versions:8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1,
+  affected: ==8.5.0
+  fixed: the latest release
+  severity: high
+  cwe: CWE-125
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14177
+  title: In PHP versions:8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1,
+  affected: '>=8.1.0,<8.1.34'
+  fixed: 8.1.34
+  severity: high
+  cwe: CWE-125
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14177
+  title: In PHP versions:8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1,
+  affected: '>=8.2.0,<8.2.30'
+  fixed: 8.2.30
+  severity: high
+  cwe: CWE-125
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14177
+  title: In PHP versions:8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1,
+  affected: '>=8.3.0,<8.3.29'
+  fixed: 8.3.29
+  severity: high
+  cwe: CWE-125
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14177
+  title: In PHP versions:8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1,
+  affected: '>=8.4.0,<8.4.16'
+  fixed: 8.4.16
+  severity: high
+  cwe: CWE-125
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14180
+  title: In PHP versions 8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1 w
+  affected: '>=8.1.0,<8.1.34'
+  fixed: 8.1.34
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14180
+  title: In PHP versions 8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1 w
+  affected: '>=8.2.0,<8.2.30'
+  fixed: 8.2.30
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14180
+  title: In PHP versions 8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1 w
+  affected: '>=8.3.0,<8.3.29'
+  fixed: 8.3.29
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14180
+  title: In PHP versions 8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1 w
+  affected: '>=8.4.0,<8.4.16'
+  fixed: 8.4.16
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: php
+  cve: CVE-2025-14180
+  title: In PHP versions 8.1.* before 8.1.34, 8.2.* before 8.2.30, 8.3.* before 8.3.29, 8.4.* before 8.4.16,
+    8.5.* before 8.5.1 w
+  affected: '>=8.5.0,<8.5.1'
+  fixed: 8.5.1
+  severity: high
+  cwe: CWE-476
+  cvss: '7.5'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-63030
+  title: WordPress 6.9.x before 6.9.5 and 7.0.x before 7.0.2 is affected by a REST API batch endpoint
+    route confusion issue which
+  affected: '>=6.9,<6.9.5'
+  fixed: 6.9.5
+  severity: critical
+  cwe: CWE-436
+  cvss: '9.8'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-63030
+  title: WordPress 6.9.x before 6.9.5 and 7.0.x before 7.0.2 is affected by a REST API batch endpoint
+    route confusion issue which
+  affected: '>=7.0,<7.0.2'
+  fixed: 7.0.2
+  severity: critical
+  cwe: CWE-436
+  cvss: '9.8'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: <4.7.37
+  fixed: 4.7.37
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=4.8,<4.8.32'
+  fixed: 4.8.32
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=4.9,<4.9.33'
+  fixed: 4.9.33
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.0,<5.0.29'
+  fixed: 5.0.29
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.1,<5.1.26'
+  fixed: 5.1.26
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.2,<5.2.28'
+  fixed: 5.2.28
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.3,<5.3.25'
+  fixed: 5.3.25
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.4,<5.4.23'
+  fixed: 5.4.23
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.5,<5.5.22'
+  fixed: 5.5.22
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.6,<5.6.21'
+  fixed: 5.6.21
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.7,<5.7.19'
+  fixed: 5.7.19
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.8,<5.8.17'
+  fixed: 5.8.17
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=5.9,<5.9.18'
+  fixed: 5.9.18
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.0,<6.0.16'
+  fixed: 6.0.16
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.1,<6.1.14'
+  fixed: 6.1.14
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.2,<6.2.13'
+  fixed: 6.2.13
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.3,<6.3.12'
+  fixed: 6.3.12
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.4,<6.4.12'
+  fixed: 6.4.12
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.5,<6.5.12'
+  fixed: 6.5.12
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.6,<6.6.9'
+  fixed: 6.6.9
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.7,<6.7.9'
+  fixed: 6.7.9
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.8,<6.8.10'
+  fixed: 6.8.10
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=6.9,<6.9.9'
+  fixed: 6.9.9
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=7.0,<7.0.6'
+  fixed: 7.0.6
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
+- product: wordpress
+  cve: CVE-2026-87902
+  title: An unauthenticated attacker can make `get_page_template()` page-template resolution include a
+    chosen readable local `.ph
+  affected: '>=7.1,<7.1.2'
+  fixed: 7.1.2
+  severity: high
+  cwe: CWE-98
+  cvss: '8.1'
+  source: nvd
