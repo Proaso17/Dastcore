@@ -4,7 +4,7 @@
 # needs just the `web` extra (FastAPI/uvicorn/Jinja) — no Playwright/Chromium or
 # cryptography. That keeps this image small and its attack surface minimal.
 # Runners (which DO scan) use the full `Dockerfile` image instead.
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
